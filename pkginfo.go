@@ -336,9 +336,9 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	return b.String()
 }
 
-// normalizeUseQuery turns a pasted packages.gentoo.org / GitHub-overlay tree URL
-// into a "category/package" atom; otherwise returns the input unchanged.
-func normalizeUseQuery(q string) string {
+// normalizeQuery turns a pasted packages.gentoo.org / GitHub-overlay tree URL
+// into a "category/package" atom; otherwise returns the input unchanged. Shared by /pkg and /use.
+func normalizeQuery(q string) string {
 	q = strings.TrimSpace(q)
 	q = strings.SplitN(q, "?", 2)[0]
 	q = strings.SplitN(q, "#", 2)[0]
@@ -368,10 +368,10 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/use <包名>,例如 /use vim 或 /use app-editors/vim")
+		v.notify(c, bot, msg.Chat.ID, "用法:/use <包名>,例如 /use vim、/use app-editors/vim,或粘贴 packages.gentoo.org 链接")
 		return nil
 	}
-	q = normalizeUseQuery(q)
+	q = normalizeQuery(q)
 	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	pkgC.refresh(hc)

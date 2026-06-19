@@ -15,7 +15,7 @@
 - **管理命令**(回复目标消息,仅管理员):`/sb` 删消息 + 踢出(可再申请)、`/ban` 删消息 + 永久封禁。
 - **控制 / 信息**:`/start` `/stop`(开关验证)、`/ping`、`/stats`(今日通过 / 拒绝数)、`/help`。
 - **包搜索**:`/pkg <名字>` 搜索官方树([packages.gentoo.org](https://packages.gentoo.org))与配置的 overlay(默认 `gentoo-zh` + `guru`),并显示版本——官方树包显示 **amd64 稳定版**,无稳定版则显示最新 `~` 测试版;overlay 包一律标 `~`。也支持完整 atom 查询(如 `/pkg sys-kernel/gentoo-kernel`)。
-- **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述)+ 信息——官方树取自其 JSON,overlay 取自 ebuild / `metadata.xml`。
+- **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述,每个都链到其 useflags 页)+ 信息。支持**包名**、**`分类/包名`** 或直接粘贴 **packages.gentoo.org(或 overlay 的 GitHub)链接**。数据取自官方树 JSON,或 overlay 的 ebuild / `metadata.xml`。
 - **Bugzilla**:`/bug <编号>` 查询 [Gentoo Bugzilla](https://bugs.gentoo.org) 工单(标题 + 状态),取不到则给链接。
 - **新闻**:`/news [关键词]` 列出 / 搜索 [Gentoo 新闻条目](https://www.gentoo.org/support/news-items/)。
 - **重启不丢**:进行中的验证会持久化到磁盘,重启后恢复(systemd 下,见 unit 里的 `StateDirectory=`)。

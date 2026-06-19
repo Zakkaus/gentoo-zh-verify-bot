@@ -340,27 +340,56 @@ func searchMainTree(ctx context.Context, name string) []string {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	low := strings.ToLower(name)
 	seen := map[string]bool{}
-	var exact, sub []string
+	low := strings.ToLower(name)
+	type scored struct {
+		atom  string
+		score int
+	}
+	var items []scored
+	// Re-rank the server's results: a package literally named the query, or whose
+	// CATEGORY contains it (sys-kernel/* for "kernel", dev-python/* for "python"), is
+	// more relevant than an incidental substring match (dev-ml/core_kernel). We do NOT
+	// drop non-matches — Gentoo strips version suffixes (fcitx5 → app-i18n/fcitx), so
+	// the server's fuzzy hits stay (score 0) in page order.
 	for _, m := range pkgHrefRe.FindAllStringSubmatch(string(body), -1) {
 		atom := m[1]
 		if seen[atom] || !isPkgPath(atom) {
 			continue
 		}
 		seen[atom] = true
-		p := strings.ToLower(pn(atom))
-		if p == low {
-			exact = append(exact, atom)
-		} else if strings.Contains(p, low) {
-			sub = append(sub, atom)
-		}
+		items = append(items, scored{atom, pkgRelevance(atom, low)})
 	}
-	hits := append(exact, sub...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].score > items[j].score })
+	hits := make([]string, 0, len(items))
+	for _, it := range items {
+		hits = append(hits, it.atom)
+	}
 	if len(hits) > maxHitsPerSource {
 		hits = hits[:maxHitsPerSource]
 	}
 	return hits
+}
+
+// pkgRelevance scores how well an atom matches a bare query, to rank search results.
+func pkgRelevance(atom, q string) int {
+	cat := ""
+	if i := strings.IndexByte(atom, '/'); i > 0 {
+		cat = strings.ToLower(atom[:i])
+	}
+	p := strings.ToLower(pn(atom))
+	switch {
+	case p == q:
+		return 100
+	case strings.Contains(cat, q):
+		return 50
+	case strings.HasPrefix(p, q):
+		return 30
+	case strings.Contains(p, q):
+		return 10
+	default:
+		return 0
+	}
 }
 
 func commandArg(text string) string {
@@ -382,9 +411,10 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/pkg <包名>,例如 /pkg yay")
+		v.notify(c, bot, msg.Chat.ID, "用法:/pkg <包名>,例如 /pkg yay,或粘贴链接 /pkg https://packages.gentoo.org/packages/app-editors/vim")
 		return nil
 	}
+	q = normalizeQuery(q)
 
 	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()

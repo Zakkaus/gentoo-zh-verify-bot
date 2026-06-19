@@ -15,7 +15,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban.
 - **Control / info:** `/start` `/stop` (toggle verification), `/ping`, `/stats` (today's approved/declined), `/help`.
 - **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise.
-- **USE flags:** `/use <package>` shows one package's USE flags (with descriptions) + info — from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
+- **USE flags:** `/use <package>` shows one package's USE flags (with descriptions, each linked to its useflags page) + info. Accepts a bare name, a `cat/pkg` atom, or a pasted `packages.gentoo.org` (or overlay GitHub) URL. Data from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
 - **Bugzilla:** `/bug <id>` looks up a [Gentoo Bugzilla](https://bugs.gentoo.org) bug (title + status), else just links it.
 - **News:** `/news [keyword]` lists or searches [Gentoo news items](https://www.gentoo.org/support/news-items/).
 - **Restart-safe:** in-progress verifications are persisted to disk and resumed after a restart (no orphaned challenges).
