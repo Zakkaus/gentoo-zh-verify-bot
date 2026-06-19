@@ -299,10 +299,14 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
+	label := ""
+	if srcLabel != "" { // only overlay packages get a source label; official tree is implied
+		label = "(" + esc(srcLabel) + ")"
+	}
 	if pkgURL != "" {
-		fmt.Fprintf(&b, "🧩 <a href=\"%s\"><b>%s</b></a>(%s)", esc(pkgURL), esc(info.atom), esc(srcLabel))
+		fmt.Fprintf(&b, "🧩 <a href=\"%s\"><b>%s</b></a>%s", esc(pkgURL), esc(info.atom), label)
 	} else {
-		fmt.Fprintf(&b, "🧩 <b>%s</b>(%s)", esc(info.atom), esc(srcLabel))
+		fmt.Fprintf(&b, "🧩 <b>%s</b>%s", esc(info.atom), label)
 	}
 	if info.description != "" {
 		fmt.Fprintf(&b, "\n%s", esc(info.description))
@@ -422,7 +426,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	out := ""
 	if s.official {
 		if info, ok := officialInfo(hc, atom); ok {
-			out = renderUse(info, "官方树 gentoo", "https://packages.gentoo.org/packages/"+atom, false, s.ovs)
+			out = renderUse(info, "", "https://packages.gentoo.org/packages/"+atom, false, s.ovs)
 		}
 	}
 	if out == "" && len(s.ovs) > 0 {
