@@ -1,0 +1,27 @@
+[Unit]
+Description=Gentoo zh Telegram join-verification bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gentoo-zh-verify-bot --config /etc/gentoo-zh-verify-bot/config.json
+EnvironmentFile=/etc/gentoo-zh-verify-bot/bot.env
+# persistent state dir (/var/lib/gentoo-zh-verify-bot) so in-progress verifications survive restarts
+StateDirectory=gentoo-zh-verify-bot
+Restart=on-failure
+RestartSec=5
+
+# hardening
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

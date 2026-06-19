@@ -1,0 +1,26 @@
+{
+  "group_ids": [-1001234567890],
+  "required_channel_id": 0,
+  "channel_display": "@YourChannel",
+  "channel_invite_url": "",
+  "timeout_seconds": 240,
+  "notify_ttl_seconds": 60,
+  "admin_log_chat_id": 0,
+  "stats_timezone": "Asia/Shanghai",
+  "news_url": "https://www.gentoo.org/support/news-items/",
+  "overlays": [
+    {"name": "gentoo-zh", "repo": "microcai/gentoo-zh", "branch": "master"},
+    {"name": "guru", "repo": "gentoo/guru", "branch": "master"}
+  ],
+  "questions": [
+    {"q": "Gentoo 中文社区的 overlay 叫什么名字?", "options": ["gentoo-zh", "guru", "pacman", "gentoo-us"], "answer": 0},
+    {"q": "Gentoo 官方的包管理器是哪个?", "options": ["Portage", "apt", "pacman", "dnf"], "answer": 0},
+    {"q": "在 Gentoo 上安装软件最常用的命令是?", "options": ["emerge", "apt install", "yum install", "brew install"], "answer": 0},
+    {"q": "Gentoo 是一个什么类型的发行版?", "options": ["源码编译型", "纯二进制不可编译", "只能用于手机", "闭源商业系统"], "answer": 0},
+    {"q": "Gentoo 默认可用的 init 系统之一是?", "options": ["OpenRC", "launchd", "Windows 服务", "系统注册表"], "answer": 0},
+    {"q": "Gentoo 官方的用户维护 overlay(GURU)是用来放什么的?", "options": ["用户贡献的软件包", "病毒样本", "游戏存档", "桌面壁纸"], "answer": 0},
+    {"q": "配置 Gentoo 全局编译选项(USE / CFLAGS)的文件是?", "options": ["/etc/portage/make.conf", "/etc/apt/sources.list", "/etc/pacman.conf", "/etc/yum.conf"], "answer": 0},
+    {"q": "更新整个系统(@world)常用的命令是?", "options": ["emerge -uDN @world", "apt full-upgrade", "pacman -Syu", "dnf upgrade"], "answer": 0},
+    {"q": "Gentoo 的 logo / 标志通常是什么颜色?", "options": ["紫色", "红色", "绿色", "橙色"], "answer": 0}
+  ]
+}

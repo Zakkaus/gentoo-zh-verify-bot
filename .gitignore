@@ -1,0 +1,15 @@
+# secrets / local runtime config — NEVER commit these
+*.env
+bot.env
+config.json
+
+# build artifacts
+/gentoo-zh-verify-bot
+/gzvbot-bin
+*.test
+/dist/
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
