@@ -58,15 +58,21 @@ func configurePkg(cfg *Config) {
 const pkgCacheTTL = 6 * time.Hour
 const verCacheTTL = 6 * time.Hour
 const maxHitsPerSource = 8
+const pkgRetryFloor = 3 * time.Minute // throttle refresh retries after a failure (avoids GitHub rate-limit storms)
 
 var httpClient = &http.Client{Timeout: 25 * time.Second}
 
+// githubToken (optional, from the GITHUB_TOKEN env var) lifts the GitHub API rate
+// limit from 60/h to 5000/h. Reading public repos needs a token with NO scopes.
+var githubToken string
+
 // pkgCache holds, per overlay, a map of "category/package" atom -> latest version string.
 type pkgCache struct {
-	mu         sync.Mutex
-	pkgs       map[string]map[string]string
-	fetched    time.Time
-	refreshing bool
+	mu          sync.Mutex
+	pkgs        map[string]map[string]string
+	fetched     time.Time
+	lastAttempt time.Time
+	refreshing  bool
 }
 
 var pkgC = &pkgCache{pkgs: map[string]map[string]string{}}
@@ -133,6 +139,9 @@ func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if githubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+githubToken)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -173,11 +182,15 @@ func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 func (pc *pkgCache) refresh(ctx context.Context) {
 	pc.mu.Lock()
 	fresh := len(pc.pkgs) > 0 && time.Since(pc.fetched) < pkgCacheTTL
-	if fresh || pc.refreshing { // collapse concurrent cold-start refreshes
+	// throttle retries after a failure: don't re-attempt within pkgRetryFloor, so a
+	// failing overlay can't make every /pkg re-hit the GitHub API (rate-limit storm)
+	throttled := time.Since(pc.lastAttempt) < pkgRetryFloor
+	if fresh || pc.refreshing || throttled {
 		pc.mu.Unlock()
 		return
 	}
 	pc.refreshing = true
+	pc.lastAttempt = time.Now()
 	pc.mu.Unlock()
 	defer func() { pc.mu.Lock(); pc.refreshing = false; pc.mu.Unlock() }()
 

@@ -37,6 +37,9 @@ token 走环境变量(**切勿提交进仓库**):
 ```sh
 # /etc/gentoo-zh-verify-bot/bot.env   (chmod 600)
 BOT_TOKEN=123456:ABC-DEF...
+# 可选:一个 GitHub token(无需任何权限/scope)把 /pkg 抓 overlay 的 API 限额
+# 从 60/h 提到约 5000/h,这样可以安全地多配几个 overlay。
+GITHUB_TOKEN=ghp_xxx
 ```
 
 其余配置写在 `config.json`(复制 `config.example.json` 修改):

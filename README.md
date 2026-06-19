@@ -35,6 +35,9 @@ Token comes from the environment (never commit it):
 ```sh
 # /etc/gentoo-zh-verify-bot/bot.env   (chmod 600)
 BOT_TOKEN=123456:ABC-DEF...
+# optional: a GitHub token (NO scopes needed) lifts the /pkg overlay API rate
+# limit from 60/h to ~5000/h, so you can configure more overlays safely.
+GITHUB_TOKEN=ghp_xxx
 ```
 
 Everything else lives in `config.json` (copy `config.example.json`):

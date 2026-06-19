@@ -27,6 +27,10 @@ func main() {
 	}
 	configurePkg(cfg)
 	configureNews(cfg)
+	githubToken = os.Getenv("GITHUB_TOKEN") // optional: lifts GitHub API rate limit for /pkg
+	if githubToken != "" {
+		log.Printf("GITHUB_TOKEN set — GitHub API rate limit raised (~5000/h)")
+	}
 
 	bot, err := telego.NewBot(token)
 	if err != nil {
