@@ -25,6 +25,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot) {
 		{Command: "stop", Description: "[管理] 关闭入群验证"},
 		{Command: "sb", Description: "[管理] 回复消息:删消息并踢出(可再申请)"},
 		{Command: "ban", Description: "[管理] 回复消息:删消息并永久封禁"},
+		{Command: "rich", Description: "[管理] 开关富文本输出(/pkg /use)"},
 	}, member...)
 
 	if err := bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{

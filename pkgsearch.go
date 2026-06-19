@@ -449,7 +449,7 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 
 	plain := renderPkg(q, mainRes, vm, ovRes, false)
 	rich := ""
-	if v.cfg.RichMessages {
+	if v.isRichEnabled() {
 		rich = renderPkg(q, mainRes, vm, ovRes, true)
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, rich, plain)

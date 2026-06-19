@@ -56,6 +56,16 @@ func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
 	})
 }
 
+// onRich (admin) toggles rich-message output for /pkg and /use at runtime.
+func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
+	return v.adminCmd(ctx, update, func() string {
+		if v.toggleRich() {
+			return "🎨 富文本输出已开启(/pkg、/use 用富消息;旧版/第三方客户端可能渲染不佳)。"
+		}
+		return "📄 富文本输出已关闭,/pkg、/use 改用纯文本。"
+	})
+}
+
 // onHelp lists commands (admins also see the moderation/admin commands).
 func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -80,6 +90,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		help += "\n\n👮 管理员:\n" +
 			"/start — 开启入群验证\n" +
 			"/stop — 关闭入群验证\n" +
+			"/rich — 开关富文本输出(/pkg /use)\n" +
 			"/sb — 回复某消息:删消息并踢出(可再申请)\n" +
 			"/ban — 回复某消息:删消息并永久封禁"
 	}

@@ -54,6 +54,7 @@ type Verifier struct {
 	mu          sync.Mutex
 	pend        map[pkey]*pending
 	enabled     bool
+	rich        bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
 	statDate    string
 	approved    int
 	declined    int
@@ -70,11 +71,19 @@ func loadStatsLoc(name string) *time.Location {
 
 func NewVerifier(cfg *Config) *Verifier {
 	return &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
-		pend: make(map[pkey]*pending), enabled: true}
+		pend: make(map[pkey]*pending), enabled: true, rich: cfg.RichMessages}
 }
 
 func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }
 func (v *Verifier) setEnabled(b bool) { v.mu.Lock(); v.enabled = b; v.mu.Unlock() }
+
+func (v *Verifier) isRichEnabled() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.rich }
+func (v *Verifier) toggleRich() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.rich = !v.rich
+	return v.rich
+}
 
 func (v *Verifier) now() time.Time { return time.Now().In(v.loc) }
 
@@ -172,6 +181,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onUse, th.CommandEqual("use"))
 	bh.Handle(v.onBug, th.CommandEqual("bug"))
 	bh.Handle(v.onNews, th.CommandEqual("news"))
+	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 

@@ -353,7 +353,7 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 // server rejects it (e.g. Bot API < 10.1). Client-side render failures can't be
 // detected here — that's the accepted trade-off, kept off the verification path.
 func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, richHTML, plainHTML string) {
-	if v.cfg.RichMessages && richHTML != "" {
+	if v.isRichEnabled() && richHTML != "" {
 		params := (&telego.SendRichMessageParams{}).
 			WithChatID(tu.ID(chatID)).
 			WithRichMessage(*(&telego.InputRichMessage{}).WithHTML(richHTML))
@@ -569,7 +569,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		if info, ok := officialInfo(hc, atom); ok {
 			url := "https://packages.gentoo.org/packages/" + atom
 			out = renderUse(info, "", url, false, s.ovs)
-			if v.cfg.RichMessages {
+			if v.isRichEnabled() {
 				outRich = renderUseRich(info, "", url, false, s.ovs)
 			}
 		}
@@ -585,7 +585,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
 			url := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + atom
 			out = renderUse(info, "overlay:"+ovName, url, true, s.ovs[1:])
-			if v.cfg.RichMessages {
+			if v.isRichEnabled() {
 				outRich = renderUseRich(info, "overlay:"+ovName, url, true, s.ovs[1:])
 			}
 		}
