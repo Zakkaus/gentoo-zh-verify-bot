@@ -113,7 +113,7 @@ func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 	if q == "" {
 		b.WriteString("📰 Gentoo 最新新闻:")
 	} else {
-		fmt.Fprintf(&b, "📰 Gentoo 新闻搜索 \"%s\":", html.EscapeString(arg))
+		fmt.Fprintf(&b, "📰 Gentoo 新闻搜索「%s」:", html.EscapeString(arg))
 	}
 	n := 0
 	for _, it := range items {

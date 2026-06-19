@@ -202,7 +202,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	// button lives in the DM step, so users aren't sent away from the verify flow.
 	channelHint := ""
 	if v.cfg.RequiredChannelID != 0 {
-		channelHint = fmt.Sprintf("\n⚠️ 验证时还需先关注频道 %s。", html.EscapeString(v.cfg.ChannelDisplay))
+		channelHint = fmt.Sprintf("\n⚠️ 完成验证前还需先关注频道 %s。", html.EscapeString(v.cfg.ChannelDisplay))
 	}
 	linkText := ""
 	if link != "" {
@@ -226,20 +226,28 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		WithReplyMarkup(tu.InlineKeyboard(rows...)).
 		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})); err != nil {
 		log.Printf("join %d in %d: post challenge failed: %v", uid, gid, err)
+		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 群 %d 未能发出用户 %d 的入群验证消息:%v;请手动处理该申请", gid, uid, err))
 	} else if sent != nil {
 		msgID = sent.MessageID
 	}
 
 	key := pkey{gid, uid}
 	v.mu.Lock()
-	if old, ok := v.pend[key]; ok && old.timer != nil {
-		old.timer.Stop()
+	oldMsgID := 0
+	if old, ok := v.pend[key]; ok {
+		if old.timer != nil {
+			old.timer.Stop()
+		}
+		oldMsgID = old.groupMsgID
 	}
 	p := &pending{groupMsgID: msgID, qText: text, qOpts: opts, correctIdx: correctIdx,
 		deadline: time.Now().Add(time.Duration(v.cfg.TimeoutSeconds) * time.Second)}
 	p.timer = time.AfterFunc(time.Until(p.deadline), func() { v.decline(context.Background(), bot, gid, uid, "timeout") })
 	v.pend[key] = p
 	v.mu.Unlock()
+	if oldMsgID != 0 && oldMsgID != msgID {
+		v.deleteChallenge(c, bot, gid, oldMsgID) // drop the stale challenge from a previous request
+	}
 	v.save()
 	log.Printf("join %d (@%s) in group %d: pending, in-group verify link posted", uid, jr.From.Username, gid)
 	return nil
@@ -261,7 +269,7 @@ func (v *Verifier) hasPending(uid int64) bool {
 // first (with a "I've followed, continue" button); otherwise send the quiz.
 func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64) {
 	if !v.hasPending(uid) {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), "你当前没有待处理的入群申请。请先在群里点击「申请加入」。"))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), "你当前没有待处理的入群申请。请先在群里发起加入申请,再点群内的「✅ 点此完成验证」按钮。"))
 		return
 	}
 	if v.cfg.RequiredChannelID != 0 && !v.isChannelMember(c, bot, uid) {
@@ -320,7 +328,7 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 	c := ctx.Context()
 	uid, _ := strconv.ParseInt(strings.TrimPrefix(cq.Data, recheckPrefix), 10, 64)
 	if cq.From.ID != uid {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证申请,无法操作。").WithShowAlert())
 		return nil
 	}
 	if !v.hasPending(uid) {
@@ -357,7 +365,7 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	if cq.From.ID != owner {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证申请,无法操作。").WithShowAlert())
 		return nil
 	}
 

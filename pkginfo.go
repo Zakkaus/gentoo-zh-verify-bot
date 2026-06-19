@@ -454,13 +454,22 @@ func normalizeQuery(q string) string {
 	if i := strings.Index(q, "packages.gentoo.org/packages/"); i >= 0 {
 		rest := strings.TrimRight(q[i+len("packages.gentoo.org/packages/"):], "/")
 		if parts := strings.SplitN(rest, "/", 3); len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
-			return parts[0] + "/" + parts[1]
+			atom := parts[0] + "/" + strings.TrimSuffix(parts[1], ".json")
+			if isPkgPath(strings.ToLower(atom)) {
+				return atom
+			}
 		}
 	}
 	if strings.Contains(q, "github.com/") {
-		if i := strings.Index(q, "/tree/"); i >= 0 {
-			if segs := strings.Split(strings.TrimRight(q[i+len("/tree/"):], "/"), "/"); len(segs) >= 3 {
-				return segs[len(segs)-2] + "/" + segs[len(segs)-1]
+		for _, marker := range []string{"/tree/", "/blob/"} {
+			if i := strings.Index(q, marker); i >= 0 {
+				// layout after the marker is <branch>/<category>/<package>[/...]
+				if segs := strings.Split(strings.TrimRight(q[i+len(marker):], "/"), "/"); len(segs) >= 3 {
+					atom := segs[1] + "/" + segs[2]
+					if isPkgPath(strings.ToLower(atom)) {
+						return atom
+					}
+				}
 			}
 		}
 	}

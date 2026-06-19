@@ -18,7 +18,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot) {
 		{Command: "bug", Description: "查询 Gentoo Bugzilla 编号"},
 		{Command: "news", Description: "查看 / 搜索 Gentoo 新闻"},
 		{Command: "ping", Description: "查看机器人状态 / 运行时长"},
-		{Command: "stats", Description: "今日同意 / 拒绝人数"},
+		{Command: "stats", Description: "今日通过 / 拒绝人数"},
 	}
 	admin := append([]telego.BotCommand{
 		{Command: "start", Description: "[管理] 开启入群验证"},

@@ -298,16 +298,24 @@ func pkgVersion(ctx context.Context, atom string) (string, string) {
 	if err := json.NewDecoder(resp.Body).Decode(&pj); err != nil || len(pj.Versions) == 0 {
 		return "", ""
 	}
-	latest := pj.Versions[0].Version // packages.gentoo.org lists newest first
-	stable := ""
-	for _, vv := range pj.Versions { // first (newest) version stable on amd64
-		for _, kw := range vv.Keywords {
-			if kw == "amd64" {
-				stable = vv.Version
-				break
+	// newest non-live version for "latest", newest amd64-stable for "stable" (matches officialInfo)
+	latest, stable := "", ""
+	for _, vv := range pj.Versions {
+		if strings.HasPrefix(vv.Version, "9999") { // skip live ebuilds
+			continue
+		}
+		if latest == "" {
+			latest = vv.Version
+		}
+		if stable == "" {
+			for _, kw := range vv.Keywords {
+				if kw == "amd64" {
+					stable = vv.Version
+					break
+				}
 			}
 		}
-		if stable != "" {
+		if latest != "" && stable != "" {
 			break
 		}
 	}
@@ -410,7 +418,7 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/pkg <包名>,例如 /pkg yay,或粘贴链接 /pkg https://packages.gentoo.org/packages/app-editors/vim")
+		v.notify(c, bot, msg.Chat.ID, "用法:/pkg <包名>,例如 /pkg vim,或粘贴链接 /pkg https://packages.gentoo.org/packages/app-editors/vim")
 		return nil
 	}
 	q = normalizeQuery(q)

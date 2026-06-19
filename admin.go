@@ -51,7 +51,7 @@ func (v *Verifier) onStop(ctx *th.Context, update telego.Update) error {
 func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
 		date, ap, de := v.stats()
-		return fmt.Sprintf("📊 今日(%s)\n✅ 同意:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
+		return fmt.Sprintf("📊 今日(%s)\n✅ 通过:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
 			date, ap, de, v.stateText(), uptimeStr(v.startTime))
 	})
 }
