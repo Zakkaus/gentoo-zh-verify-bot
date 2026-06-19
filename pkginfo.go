@@ -348,6 +348,103 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	return b.String()
 }
 
+// sendRichOrHTML sends via Bot API 10.1 sendRichMessage when enabled (richer, for
+// upgraded clients), and falls back to a plain HTML message if rich is off or the
+// server rejects it (e.g. Bot API < 10.1). Client-side render failures can't be
+// detected here — that's the accepted trade-off, kept off the verification path.
+func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, richHTML, plainHTML string) {
+	if v.cfg.RichMessages && richHTML != "" {
+		params := (&telego.SendRichMessageParams{}).
+			WithChatID(tu.ID(chatID)).
+			WithRichMessage(*(&telego.InputRichMessage{}).WithHTML(richHTML))
+		if _, err := bot.SendRichMessage(c, params); err == nil {
+			return
+		}
+	}
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(chatID), plainHTML).
+		WithParseMode(telego.ModeHTML).
+		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+}
+
+// renderUseRich builds the Bot API 10.1 rich-message /use — no truncation, full flag
+// descriptions, and the (long) global USE list inside a collapsible <details> block.
+func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
+	esc := html.EscapeString
+	var b strings.Builder
+	label := ""
+	if srcLabel != "" {
+		label = " (" + esc(srcLabel) + ")"
+	}
+	if pkgURL != "" {
+		fmt.Fprintf(&b, "<b>🧩 <a href=\"%s\">%s</a></b>%s", esc(pkgURL), esc(info.atom), label)
+	} else {
+		fmt.Fprintf(&b, "<b>🧩 %s</b>%s", esc(info.atom), label)
+	}
+	if info.description != "" {
+		fmt.Fprintf(&b, "\n%s", esc(info.description))
+	}
+	if info.homepage != "" {
+		fmt.Fprintf(&b, "\n🏠 <a href=\"%s\">%s</a>", esc(info.homepage), esc(info.homepage))
+	}
+	switch {
+	case info.stable != "" && info.latest != "" && info.latest != info.stable:
+		fmt.Fprintf(&b, "\n版本:%s  ~%s", esc(info.stable), esc(info.latest))
+	case info.stable != "":
+		fmt.Fprintf(&b, "\n版本:%s", esc(info.stable))
+	case info.latest != "":
+		fmt.Fprintf(&b, "\n版本:~%s", esc(info.latest))
+	}
+	writeFlagsRich(&b, "本地 USE", info.local, false)
+	writeFlagsRich(&b, "全局 USE", info.global, true)
+	if len(info.local) == 0 && len(info.global) == 0 {
+		b.WriteString("\n(该包无 USE 标志)")
+	}
+	if len(alsoIn) > 0 {
+		refs := make([]string, 0, len(alsoIn))
+		for _, ovName := range alsoIn {
+			ref := esc(ovName)
+			for _, o := range overlays {
+				if o.name == ovName {
+					u := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + info.atom
+					ref = fmt.Sprintf("<a href=\"%s\">%s</a>", esc(u), esc(ovName))
+					break
+				}
+			}
+			refs = append(refs, ref)
+		}
+		fmt.Fprintf(&b, "\noverlay 也有此包:%s", strings.Join(refs, ", "))
+	}
+	if overlay {
+		b.WriteString("\noverlay · USE 取自最新 ebuild,可能不全;+ 为默认开启")
+	}
+	return b.String()
+}
+
+// writeFlagsRich renders a USE-flag section for rich messages as a <ul> with full
+// descriptions; a long section (global) is wrapped in a collapsible <details>.
+func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse bool) {
+	if len(flags) == 0 {
+		return
+	}
+	if collapse {
+		fmt.Fprintf(b, "\n<details><summary><b>%s</b>(%d)</summary>", title, len(flags))
+	} else {
+		fmt.Fprintf(b, "\n<b>%s</b>(%d)", title, len(flags))
+	}
+	b.WriteString("<ul>")
+	for _, f := range flags {
+		if f.desc != "" {
+			fmt.Fprintf(b, "<li>%s — %s</li>", useLink(f), html.EscapeString(f.desc))
+		} else {
+			fmt.Fprintf(b, "<li>%s</li>", useLink(f))
+		}
+	}
+	b.WriteString("</ul>")
+	if collapse {
+		b.WriteString("</details>")
+	}
+}
+
 // normalizeQuery turns a pasted packages.gentoo.org / GitHub-overlay tree URL
 // into a "category/package" atom; otherwise returns the input unchanged. Shared by /pkg and /use.
 func normalizeQuery(q string) string {
@@ -458,10 +555,14 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		atom, s = a, ss
 	}
 
-	out := ""
+	out, outRich := "", ""
 	if s.official {
 		if info, ok := officialInfo(hc, atom); ok {
-			out = renderUse(info, "", "https://packages.gentoo.org/packages/"+atom, false, s.ovs)
+			url := "https://packages.gentoo.org/packages/" + atom
+			out = renderUse(info, "", url, false, s.ovs)
+			if v.cfg.RichMessages {
+				outRich = renderUseRich(info, "", url, false, s.ovs)
+			}
 		}
 	}
 	if out == "" && len(s.ovs) > 0 {
@@ -473,15 +574,17 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 			}
 		}
 		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
-			out = renderUse(info, "overlay:"+ovName, "https://github.com/"+o.repo+"/tree/"+o.branch+"/"+atom, true, s.ovs[1:])
+			url := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + atom
+			out = renderUse(info, "overlay:"+ovName, url, true, s.ovs[1:])
+			if v.cfg.RichMessages {
+				outRich = renderUseRich(info, "overlay:"+ovName, url, true, s.ovs[1:])
+			}
 		}
 	}
 	if out == "" {
 		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("暂时取不到 %s 的信息,稍后再试。", atom))
 		return nil
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), out).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+	v.sendRichOrHTML(c, bot, msg.Chat.ID, outRich, out)
 	return nil
 }

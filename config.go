@@ -45,8 +45,11 @@ type Config struct {
 	// NewsURL: the Gentoo news-items index for /news (defaults to gentoo.org when empty).
 	NewsURL string `json:"news_url"`
 	// StatsTimezone: IANA tz for the daily /stats reset boundary (defaults to UTC+8 when empty/invalid).
-	StatsTimezone string     `json:"stats_timezone"`
-	Questions     []Question `json:"questions"`
+	StatsTimezone string `json:"stats_timezone"`
+	// RichMessages: use Bot API 10.1 rich messages for the text-heavy /use output (more
+	// info; unsupported on old/third-party clients; falls back to HTML on server reject).
+	RichMessages bool       `json:"rich_messages"`
+	Questions    []Question `json:"questions"`
 }
 
 func LoadConfig(path string) (*Config, error) {
