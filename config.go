@@ -26,6 +26,7 @@ type OverlayCfg struct {
 // and posts new items to ChatID. A nil Feed or zero ChatID disables the feature.
 type FeedConfig struct {
 	ChatID          int64  `json:"chat_id"`          // channel/group to post to (bot must be admin there)
+	Lang            string `json:"lang"`             // bug field labels: "zh" (default) or "en"
 	IntervalSeconds int    `json:"interval_seconds"` // poll interval; default 300, min 60
 	Bugs            *bool  `json:"bugs"`             // post new Bugzilla bugs (default true)
 	News            *bool  `json:"news"`             // post new news items (default true)
@@ -76,9 +77,11 @@ type Config struct {
 	RichMessages bool `json:"rich_messages"`
 	// UserAgent (optional): overrides the outbound HTTP User-Agent for /pkg /use /news /bug.
 	UserAgent string `json:"user_agent"`
-	// Feed (optional): auto-post new Gentoo bugs + news to a chat (see FeedConfig).
-	Feed      *FeedConfig `json:"feed"`
-	Questions []Question  `json:"questions"`
+	// Feeds (optional): one or more auto-feed destinations (see FeedConfig), each with its own
+	// chat, language and filters. The singular "feed" is also accepted and merged into Feeds.
+	Feeds     []FeedConfig `json:"feeds"`
+	Feed      *FeedConfig  `json:"feed"`
+	Questions []Question   `json:"questions"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -118,6 +121,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.NotifyTTLSeconds == 0 {
 		c.NotifyTTLSeconds = 60
+	}
+	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
+		c.Feeds = append(c.Feeds, *c.Feed)
 	}
 	return &c, nil
 }

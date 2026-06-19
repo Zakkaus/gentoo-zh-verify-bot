@@ -135,41 +135,55 @@ func flattenAtoms(s string) string {
 	return out
 }
 
-// formatBug renders a Bugzilla bug for the feed. Optional fields (keywords, packages,
-// assignee) only appear when present, so simple bugs stay short and keywording bugs stay rich.
-func formatBug(b recentBug) string {
+// formatBug renders a Bugzilla bug for the feed. lang "en" uses English field labels,
+// otherwise (default) Chinese. Optional fields appear only when present, so simple bugs
+// stay short and keywording bugs stay rich.
+func formatBug(b recentBug, lang string) string {
+	en := strings.EqualFold(lang, "en")
+	sep := "："
+	if en {
+		sep = ": "
+	}
+	pick := func(zh, eng string) string {
+		if en {
+			return eng
+		}
+		return zh
+	}
 	esc := html.EscapeString
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "🐞 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a>\n%s", b.ID, b.ID, esc(b.Summary))
+	line := func(label, val string) {
+		if val != "" {
+			fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", label, sep, esc(val))
+		}
+	}
 
 	status := b.Status
 	if b.Resolution != "" {
 		status += " / " + b.Resolution
 	}
-	fmt.Fprintf(&sb, "\n<b>状态</b>:%s", esc(status))
+	line(pick("状态", "Status"), status)
 
-	comp := esc(b.Product)
+	comp := b.Product
 	if b.Component != "" {
-		comp += " › " + esc(b.Component)
+		comp += " › " + b.Component
 	}
-	fmt.Fprintf(&sb, "\n<b>组件</b>:%s", comp)
-
-	if imp := strings.Trim(b.Priority+" · "+b.Severity, " ·"); imp != "" {
-		fmt.Fprintf(&sb, "\n<b>重要度</b>:%s", esc(imp))
-	}
+	line(pick("组件", "Component"), comp)
+	line(pick("重要度", "Importance"), strings.Trim(b.Priority+" · "+b.Severity, " ·"))
 	if len(b.Keywords) > 0 {
-		fmt.Fprintf(&sb, "\n<b>关键词</b>:%s", esc(strings.Join(b.Keywords, ", ")))
+		line(pick("关键词", "Keywords"), strings.Join(b.Keywords, ", "))
 	}
 	if atoms := flattenAtoms(b.Atoms); atoms != "" {
-		fmt.Fprintf(&sb, "\n<b>包</b>:%s", esc(atoms))
+		line(pick("包", "Packages"), atoms)
 	}
 
 	var who []string
 	if a := b.AssignedTo.display(); a != "" {
-		who = append(who, "负责 "+a)
+		who = append(who, pick("负责 ", "Assigned ")+a)
 	}
 	if c := b.Creator.display(); c != "" {
-		who = append(who, "报告 "+c)
+		who = append(who, pick("报告 ", "Reporter ")+c)
 	}
 	if d := dateOnly(b.CreationTime); d != "" {
 		who = append(who, d)
@@ -206,7 +220,7 @@ func pollFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath st
 				}
 			}
 			for i := len(nb) - 1; i >= 0; i-- {
-				postFeed(ctx, bot, fc.ChatID, formatBug(nb[i]), fc.silentBugs())
+				postFeed(ctx, bot, fc.ChatID, formatBug(nb[i], fc.Lang), fc.silentBugs())
 			}
 		}
 		st.LastBugID = bugs[0].ID
