@@ -18,6 +18,7 @@
 - **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述,每个都链到其 useflags 页)+ 信息。支持**包名**、**`分类/包名`** 或直接粘贴 **packages.gentoo.org(或 overlay 的 GitHub)链接**。数据取自官方树 JSON,或 overlay 的 ebuild / `metadata.xml`。
 - **Bugzilla**:`/bug <编号>` 查询 [Gentoo Bugzilla](https://bugs.gentoo.org) 工单(标题 + 状态),取不到则给链接。
 - **新闻**:`/news [关键词]` 列出 / 搜索 [Gentoo 新闻条目](https://www.gentoo.org/support/news-items/)。
+- **自动播报(可选)**:设置 `feed_chat_id` 后,机器人每隔 `feed_interval_seconds`(默认 300 秒)轮询 Gentoo Bugzilla + 新闻,把**新增的** bug / 新闻发到该频道(机器人需是该频道管理员且有发帖权)。去重 + 重启不丢;首次运行只记录基线,不补发历史。
 - **重启不丢**:进行中的验证会持久化到磁盘,重启后恢复(systemd 下,见 unit 里的 `StateDirectory=`)。
 - **富文本输出(可选,默认关)**:`/pkg`、`/use` 可用 Bot API 10.1 富消息渲染(标题、列表、可折叠分组),由配置 `rich_messages` 或管理员 `/rich` 命令开关,失败自动回落纯 HTML。默认关闭(旧 / 第三方客户端不渲染富消息);入群验证、`/bug`、`/news` 始终用纯 HTML。
 - 机器人自己发的群消息在 TTL 后自动删除以保持整洁;命令显示在 Telegram 的 `/` 菜单中(管理命令仅管理员可见)。
@@ -61,6 +62,8 @@ GITHUB_TOKEN=ghp_xxx
 | `stats_timezone` | `/stats` 每日清零所用 IANA 时区(默认 UTC+8) |
 | `rich_messages` | `/pkg`、`/use` 用 Bot API 10.1 富消息(默认 `false`;也可群内 `/rich` 开关) |
 | `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
+| `feed_chat_id` | 可选:自动播报新 bug + 新闻的频道/群(`0` 关闭;机器人须为该频道管理员) |
+| `feed_interval_seconds` | 自动播报轮询间隔(默认 300,最小 60) |
 | `questions` | 题库;每次随机抽一题,选项顺序打乱 |
 
 ### 4. 构建运行
