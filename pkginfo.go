@@ -344,6 +344,8 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	}
 	if overlay {
 		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i>")
+	} else {
+		b.WriteString("\n\n<i>+ 为默认开启;~ 为测试版</i>")
 	}
 	return b.String()
 }
@@ -422,6 +424,8 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 	}
 	if overlay {
 		b.WriteString("<footer><i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i></footer>")
+	} else {
+		b.WriteString("<footer><i>+ 为默认开启;~ 为测试版</i></footer>")
 	}
 	return b.String()
 }
