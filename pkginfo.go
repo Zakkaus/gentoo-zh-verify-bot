@@ -376,28 +376,28 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 		label = " (" + esc(srcLabel) + ")"
 	}
 	if pkgURL != "" {
-		fmt.Fprintf(&b, "<b>🧩 <a href=\"%s\">%s</a></b>%s", esc(pkgURL), esc(info.atom), label)
+		fmt.Fprintf(&b, "<p><b>🧩 <a href=\"%s\">%s</a></b>%s</p>", esc(pkgURL), esc(info.atom), label)
 	} else {
-		fmt.Fprintf(&b, "<b>🧩 %s</b>%s", esc(info.atom), label)
+		fmt.Fprintf(&b, "<p><b>🧩 %s</b>%s</p>", esc(info.atom), label)
 	}
 	if info.description != "" {
-		fmt.Fprintf(&b, "\n%s", esc(info.description))
+		fmt.Fprintf(&b, "<p>%s</p>", esc(info.description))
 	}
 	if info.homepage != "" {
-		fmt.Fprintf(&b, "\n🏠 <a href=\"%s\">%s</a>", esc(info.homepage), esc(info.homepage))
+		fmt.Fprintf(&b, "<p>🏠 <a href=\"%s\">%s</a></p>", esc(info.homepage), esc(info.homepage))
 	}
 	switch {
 	case info.stable != "" && info.latest != "" && info.latest != info.stable:
-		fmt.Fprintf(&b, "\n版本:%s  ~%s", esc(info.stable), esc(info.latest))
+		fmt.Fprintf(&b, "<p>版本:%s  ~%s</p>", esc(info.stable), esc(info.latest))
 	case info.stable != "":
-		fmt.Fprintf(&b, "\n版本:%s", esc(info.stable))
+		fmt.Fprintf(&b, "<p>版本:%s</p>", esc(info.stable))
 	case info.latest != "":
-		fmt.Fprintf(&b, "\n版本:~%s", esc(info.latest))
+		fmt.Fprintf(&b, "<p>版本:~%s</p>", esc(info.latest))
 	}
 	writeFlagsRich(&b, "本地 USE", info.local, false)
 	writeFlagsRich(&b, "全局 USE", info.global, true)
 	if len(info.local) == 0 && len(info.global) == 0 {
-		b.WriteString("\n(该包无 USE 标志)")
+		b.WriteString("<p>(该包无 USE 标志)</p>")
 	}
 	if len(alsoIn) > 0 {
 		refs := make([]string, 0, len(alsoIn))
@@ -412,26 +412,26 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 			}
 			refs = append(refs, ref)
 		}
-		fmt.Fprintf(&b, "\noverlay 也有此包:%s", strings.Join(refs, ", "))
+		fmt.Fprintf(&b, "<p>overlay 也有此包:%s</p>", strings.Join(refs, ", "))
 	}
 	if overlay {
-		b.WriteString("\noverlay · USE 取自最新 ebuild,可能不全;+ 为默认开启")
+		b.WriteString("<p><i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i></p>")
 	}
 	return b.String()
 }
 
 // writeFlagsRich renders a USE-flag section for rich messages as a <ul> with full
 // descriptions; a long section (global) is wrapped in a collapsible <details>.
+// Rich messages treat newlines as whitespace, so structure MUST be block tags.
 func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse bool) {
 	if len(flags) == 0 {
 		return
 	}
 	if collapse {
-		fmt.Fprintf(b, "\n<details><summary><b>%s</b>(%d)</summary>", title, len(flags))
+		fmt.Fprintf(b, "<details><summary><b>%s</b>(%d)</summary><ul>", title, len(flags))
 	} else {
-		fmt.Fprintf(b, "\n<b>%s</b>(%d)", title, len(flags))
+		fmt.Fprintf(b, "<p><b>%s</b>(%d)</p><ul>", title, len(flags))
 	}
-	b.WriteString("<ul>")
 	for _, f := range flags {
 		if f.desc != "" {
 			fmt.Fprintf(b, "<li>%s — %s</li>", useLink(f), html.EscapeString(f.desc))
