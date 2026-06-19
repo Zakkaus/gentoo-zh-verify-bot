@@ -53,7 +53,7 @@ type recentBug struct {
 func fetchRecentBugs(ctx context.Context, fc *FeedConfig) []recentBug {
 	u := "https://bugs.gentoo.org/rest/bug?order=bug_id%20DESC&limit=30" +
 		"&include_fields=id,summary,status,resolution,product,component,priority,severity," +
-		"keywords,creation_time,cf_stabilisation_atoms,assigned_to_detail,creator_detail"
+		"keywords,creation_time,cf_stabilisation_atoms,assigned_to,assigned_to_detail,creator,creator_detail"
 	if fc.BugProduct != "" {
 		u += "&product=" + url.QueryEscape(fc.BugProduct)
 	}
