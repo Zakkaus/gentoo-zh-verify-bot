@@ -328,7 +328,19 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 		b.WriteString("\n(该包无 USE 标志)")
 	}
 	if len(alsoIn) > 0 {
-		fmt.Fprintf(&b, "\n<i>该包也存在于:%s</i>", esc(strings.Join(alsoIn, ", ")))
+		refs := make([]string, 0, len(alsoIn))
+		for _, ovName := range alsoIn {
+			ref := esc(ovName)
+			for _, o := range overlays {
+				if o.name == ovName {
+					u := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + info.atom
+					ref = fmt.Sprintf("<a href=\"%s\">%s</a>", esc(u), esc(ovName))
+					break
+				}
+			}
+			refs = append(refs, ref)
+		}
+		fmt.Fprintf(&b, "\n<i>overlay 也有此包:%s</i>", strings.Join(refs, ", "))
 	}
 	if overlay {
 		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i>")
