@@ -84,7 +84,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		"/bug <编号> — 查询 Gentoo Bugzilla\n" +
 		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
 		"/ping — 机器人状态 / 运行时长\n" +
-		"/stats — 今日同意 / 拒绝人数\n" +
+		"/stats — 今日通过 / 拒绝人数\n" +
 		"/help — 显示本帮助"
 	if v.isGroupAdmin(c, bot, gid, msg.From.ID) {
 		help += "\n\n👮 管理员:\n" +

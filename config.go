@@ -50,8 +50,12 @@ type Config struct {
 	// info; unsupported on old/third-party clients; falls back to HTML on server reject).
 	RichMessages bool `json:"rich_messages"`
 	// UserAgent (optional): overrides the outbound HTTP User-Agent for /pkg /use /news /bug.
-	UserAgent string     `json:"user_agent"`
-	Questions []Question `json:"questions"`
+	UserAgent string `json:"user_agent"`
+	// FeedChatID (optional): channel/group the bot auto-posts new Gentoo bugs + news to (0 disables).
+	FeedChatID int64 `json:"feed_chat_id"`
+	// FeedIntervalSeconds: feed poll interval (default 300, min 60).
+	FeedIntervalSeconds int        `json:"feed_interval_seconds"`
+	Questions           []Question `json:"questions"`
 }
 
 func LoadConfig(path string) (*Config, error) {

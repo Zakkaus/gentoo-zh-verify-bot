@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -64,9 +65,22 @@ func main() {
 		me.Username, len(cfg.GroupIDs), cfg.RequiredChannelID, cfg.TimeoutSeconds, len(cfg.Questions))
 	v.register(bh)
 	setupCommands(ctx, bot)
-	if sd := os.Getenv("STATE_DIRECTORY"); sd != "" {
+	sd := os.Getenv("STATE_DIRECTORY")
+	if sd != "" {
 		v.statePath = sd + "/pending.json"
 		v.load(bot)
+	}
+
+	if cfg.FeedChatID != 0 { // auto-post new Gentoo bugs + news to a channel/group
+		interval := 5 * time.Minute
+		if cfg.FeedIntervalSeconds >= 60 {
+			interval = time.Duration(cfg.FeedIntervalSeconds) * time.Second
+		}
+		feedPath := ""
+		if sd != "" {
+			feedPath = sd + "/feed.json"
+		}
+		go runFeed(ctx, bot, cfg.FeedChatID, interval, feedPath)
 	}
 
 	go pkgC.refresh(context.Background()) // warm the package-search cache in the background
