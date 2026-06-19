@@ -8,8 +8,15 @@
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",
-  "feed_chat_id": 0,
-  "feed_interval_seconds": 300,
+  "feed": {
+    "chat_id": 0,
+    "interval_seconds": 300,
+    "bugs": true,
+    "news": true,
+    "bug_product": "",
+    "bug_component": "",
+    "silent_bugs": true
+  },
   "stats_timezone": "Asia/Shanghai",
   "news_url": "https://www.gentoo.org/support/news-items/",
   "overlays": [

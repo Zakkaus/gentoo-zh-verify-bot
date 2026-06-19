@@ -74,9 +74,20 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `stats_timezone` | IANA tz for the daily /stats reset boundary (default: UTC+8) |
 | `rich_messages` | render `/pkg` & `/use` as Bot API 10.1 rich messages (default `false`; also toggleable in-chat via `/rich`) |
 | `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
-| `feed_chat_id` | optional channel/group to auto-post new Gentoo bugs + news to (`0` disables; bot must be admin there) |
-| `feed_interval_seconds` | auto-feed poll interval (default 300, min 60) |
+| `feed` | optional auto-feed object — poll Gentoo Bugzilla + news and post new items to a chat (see below); omit to disable |
 | `questions` | quiz pool; one is picked at random, options shuffled |
+
+The optional **`feed`** object (omit it entirely to disable the feature):
+
+| `feed` key | meaning |
+| --- | --- |
+| `chat_id` | channel/group to post to (`0`/absent disables; the bot must be an admin there with post rights) |
+| `interval_seconds` | poll interval (default 300, min 60) |
+| `bugs` | post new Bugzilla bugs (default `true`) |
+| `news` | post new news items (default `true`) |
+| `bug_product` | only post bugs in this Bugzilla product, e.g. `"Gentoo Security"` (empty = all) |
+| `bug_component` | only post bugs in this component, e.g. `"Vulnerabilities"` (empty = all) |
+| `silent_bugs` | post bugs without a notification (default `true`; they're high-volume) |
 
 ## Build & run
 

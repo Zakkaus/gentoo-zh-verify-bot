@@ -62,9 +62,20 @@ GITHUB_TOKEN=ghp_xxx
 | `stats_timezone` | `/stats` 每日清零所用 IANA 时区(默认 UTC+8) |
 | `rich_messages` | `/pkg`、`/use` 用 Bot API 10.1 富消息(默认 `false`;也可群内 `/rich` 开关) |
 | `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
-| `feed_chat_id` | 可选:自动播报新 bug + 新闻的频道/群(`0` 关闭;机器人须为该频道管理员) |
-| `feed_interval_seconds` | 自动播报轮询间隔(默认 300,最小 60) |
+| `feed` | 可选:自动播报对象——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天(见下);省略即关闭 |
 | `questions` | 题库;每次随机抽一题,选项顺序打乱 |
+
+可选的 **`feed`** 对象(整个省略即关闭):
+
+| `feed` 键 | 含义 |
+| --- | --- |
+| `chat_id` | 发送目标频道/群(`0`/缺省关闭;机器人须是该频道管理员且有发帖权) |
+| `interval_seconds` | 轮询间隔(默认 300,最小 60) |
+| `bugs` | 是否播报新 Bugzilla bug(默认 `true`) |
+| `news` | 是否播报新新闻(默认 `true`) |
+| `bug_product` | 只播报该 Bugzilla 产品的 bug,如 `"Gentoo Security"`(空=全部) |
+| `bug_component` | 只播报该组件的 bug,如 `"Vulnerabilities"`(空=全部) |
+| `silent_bugs` | 静默播报 bug(默认 `true`;量大,免刷通知) |
 
 ### 4. 构建运行
 需要 **Go 1.25+**(telego 要求)。

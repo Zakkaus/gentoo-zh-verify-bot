@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -71,16 +70,12 @@ func main() {
 		v.load(bot)
 	}
 
-	if cfg.FeedChatID != 0 { // auto-post new Gentoo bugs + news to a channel/group
-		interval := 5 * time.Minute
-		if cfg.FeedIntervalSeconds >= 60 {
-			interval = time.Duration(cfg.FeedIntervalSeconds) * time.Second
-		}
+	if cfg.Feed != nil && cfg.Feed.ChatID != 0 { // auto-post new Gentoo bugs + news
 		feedPath := ""
 		if sd != "" {
 			feedPath = sd + "/feed.json"
 		}
-		go runFeed(ctx, bot, cfg.FeedChatID, interval, feedPath)
+		go runFeed(ctx, bot, cfg.Feed, feedPath)
 	}
 
 	go pkgC.refresh(context.Background()) // warm the package-search cache in the background

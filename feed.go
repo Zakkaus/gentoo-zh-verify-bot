@@ -7,6 +7,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -28,9 +29,15 @@ type recentBug struct {
 	Component string `json:"component"`
 }
 
-func fetchRecentBugs(ctx context.Context) []recentBug {
+func fetchRecentBugs(ctx context.Context, fc *FeedConfig) []recentBug {
 	u := "https://bugs.gentoo.org/rest/bug?order=bug_id%20DESC&limit=30" +
 		"&include_fields=id,summary,status,product,component"
+	if fc.BugProduct != "" {
+		u += "&product=" + url.QueryEscape(fc.BugProduct)
+	}
+	if fc.BugComponent != "" {
+		u += "&component=" + url.QueryEscape(fc.BugComponent)
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := httpClient.Do(req)
@@ -88,10 +95,30 @@ func postFeed(ctx context.Context, bot *telego.Bot, chatID int64, text string, s
 	time.Sleep(time.Second) // gentle pacing for catch-up bursts
 }
 
-func pollFeed(ctx context.Context, bot *telego.Bot, chatID int64, statePath string, st *feedState) {
+func formatBug(b recentBug) string {
+	where := html.EscapeString(b.Product)
+	if b.Component != "" {
+		where += " › " + html.EscapeString(b.Component)
+	}
+	return fmt.Sprintf("🐞 <a href=\"https://bugs.gentoo.org/%d\">Bug %d</a>\n%s\n%s · %s",
+		b.ID, b.ID, html.EscapeString(b.Summary), where, html.EscapeString(b.Status))
+}
+
+func formatNews(n newsItem) string {
+	return fmt.Sprintf("📰 <a href=\"%s\">%s — %s</a>",
+		html.EscapeString(n.url), n.date, html.EscapeString(html.UnescapeString(n.title)))
+}
+
+func pollFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath string, st *feedState) {
 	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	bugs := fetchRecentBugs(fctx)
-	news, _ := fetchNews(fctx)
+	var bugs []recentBug
+	var news []newsItem
+	if fc.bugsOn() {
+		bugs = fetchRecentBugs(fctx, fc)
+	}
+	if fc.newsOn() {
+		news, _ = fetchNews(fctx)
+	}
 	cancel()
 
 	if len(bugs) > 0 {
@@ -103,14 +130,7 @@ func pollFeed(ctx context.Context, bot *telego.Bot, chatID int64, statePath stri
 				}
 			}
 			for i := len(nb) - 1; i >= 0; i-- {
-				b := nb[i]
-				where := html.EscapeString(b.Product)
-				if b.Component != "" {
-					where += " › " + html.EscapeString(b.Component)
-				}
-				text := fmt.Sprintf("🐞 <a href=\"https://bugs.gentoo.org/%d\">Bug %d</a>\n%s\n%s · %s",
-					b.ID, b.ID, html.EscapeString(b.Summary), where, html.EscapeString(b.Status))
-				postFeed(ctx, bot, chatID, text, true) // bugs are frequent -> silent
+				postFeed(ctx, bot, fc.ChatID, formatBug(nb[i]), fc.silentBugs())
 			}
 		}
 		st.LastBugID = bugs[0].ID
@@ -126,10 +146,7 @@ func pollFeed(ctx context.Context, bot *telego.Bot, chatID int64, statePath stri
 				nn = append(nn, n)
 			}
 			for i := len(nn) - 1; i >= 0; i-- {
-				n := nn[i]
-				title := html.EscapeString(html.UnescapeString(n.title))
-				text := fmt.Sprintf("📰 <a href=\"%s\">%s — %s</a>", html.EscapeString(n.url), n.date, title)
-				postFeed(ctx, bot, chatID, text, false) // news is rare/important -> notify
+				postFeed(ctx, bot, fc.ChatID, formatNews(nn[i]), false) // news -> notify
 			}
 		}
 		st.LastNewsURL = news[0].url
@@ -139,10 +156,11 @@ func pollFeed(ctx context.Context, bot *telego.Bot, chatID int64, statePath stri
 
 // runFeed polls Gentoo Bugzilla + news on an interval and posts NEW items to chatID.
 // The first poll only records a baseline (no backlog flood); later polls post new items.
-func runFeed(ctx context.Context, bot *telego.Bot, chatID int64, interval time.Duration, statePath string) {
+func runFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath string) {
 	st := loadFeedState(statePath)
-	log.Printf("feed: posting new Gentoo bugs + news to %d every %s", chatID, interval)
-	pollFeed(ctx, bot, chatID, statePath, &st)
+	interval := fc.interval()
+	log.Printf("feed: posting new Gentoo bugs + news to %d every %s", fc.ChatID, interval)
+	pollFeed(ctx, bot, fc, statePath, &st)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -150,7 +168,7 @@ func runFeed(ctx context.Context, bot *telego.Bot, chatID int64, interval time.D
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pollFeed(ctx, bot, chatID, statePath, &st)
+			pollFeed(ctx, bot, fc, statePath, &st)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // Question is one verification quiz item. Answer is the 0-based index into Options.
@@ -19,6 +20,30 @@ type OverlayCfg struct {
 	Name   string `json:"name"`
 	Repo   string `json:"repo"`   // owner/name
 	Branch string `json:"branch"` // default "master" if empty
+}
+
+// FeedConfig configures the optional auto-feed: the bot polls Gentoo Bugzilla + news
+// and posts new items to ChatID. A nil Feed or zero ChatID disables the feature.
+type FeedConfig struct {
+	ChatID          int64  `json:"chat_id"`          // channel/group to post to (bot must be admin there)
+	IntervalSeconds int    `json:"interval_seconds"` // poll interval; default 300, min 60
+	Bugs            *bool  `json:"bugs"`             // post new Bugzilla bugs (default true)
+	News            *bool  `json:"news"`             // post new news items (default true)
+	BugProduct      string `json:"bug_product"`      // only bugs in this Bugzilla product (empty = all)
+	BugComponent    string `json:"bug_component"`    // only bugs in this component (empty = all)
+	SilentBugs      *bool  `json:"silent_bugs"`      // post bugs without a notification (default true)
+}
+
+func (f *FeedConfig) bugsOn() bool     { return f.Bugs == nil || *f.Bugs }
+func (f *FeedConfig) newsOn() bool     { return f.News == nil || *f.News }
+func (f *FeedConfig) silentBugs() bool { return f.SilentBugs == nil || *f.SilentBugs }
+
+// interval is the poll interval, defaulting to 5 min with a 60 s floor.
+func (f *FeedConfig) interval() time.Duration {
+	if f.IntervalSeconds >= 60 {
+		return time.Duration(f.IntervalSeconds) * time.Second
+	}
+	return 5 * time.Minute
 }
 
 // Config is loaded from a JSON file. The bot token comes from the BOT_TOKEN env var.
@@ -51,11 +76,9 @@ type Config struct {
 	RichMessages bool `json:"rich_messages"`
 	// UserAgent (optional): overrides the outbound HTTP User-Agent for /pkg /use /news /bug.
 	UserAgent string `json:"user_agent"`
-	// FeedChatID (optional): channel/group the bot auto-posts new Gentoo bugs + news to (0 disables).
-	FeedChatID int64 `json:"feed_chat_id"`
-	// FeedIntervalSeconds: feed poll interval (default 300, min 60).
-	FeedIntervalSeconds int        `json:"feed_interval_seconds"`
-	Questions           []Question `json:"questions"`
+	// Feed (optional): auto-post new Gentoo bugs + news to a chat (see FeedConfig).
+	Feed      *FeedConfig `json:"feed"`
+	Questions []Question  `json:"questions"`
 }
 
 func LoadConfig(path string) (*Config, error) {
