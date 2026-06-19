@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/mymmrac/telego"
@@ -71,16 +70,14 @@ func main() {
 		v.load(bot)
 	}
 
-	for i := range cfg.Feeds { // auto-post new Gentoo bugs + news to each configured chat
-		fc := &cfg.Feeds[i]
-		if fc.ChatID == 0 {
-			continue
+	var feeds []*FeedConfig // one shared poller fans new bugs + news out to all configured feeds
+	for i := range cfg.Feeds {
+		if cfg.Feeds[i].ChatID != 0 {
+			feeds = append(feeds, &cfg.Feeds[i])
 		}
-		feedPath := ""
-		if sd != "" {
-			feedPath = sd + "/feed-" + strconv.FormatInt(fc.ChatID, 10) + ".json"
-		}
-		go runFeed(ctx, bot, fc, feedPath)
+	}
+	if len(feeds) > 0 {
+		go runFeeds(ctx, bot, feeds, sd)
 	}
 
 	go pkgC.refresh(context.Background()) // warm the package-search cache in the background

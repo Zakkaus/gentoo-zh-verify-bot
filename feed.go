@@ -7,8 +7,8 @@ import (
 	"html"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,16 +50,10 @@ type recentBug struct {
 	Creator      bugUser  `json:"creator_detail"`
 }
 
-func fetchRecentBugs(ctx context.Context, fc *FeedConfig) []recentBug {
+func fetchRecentBugs(ctx context.Context) []recentBug {
 	u := "https://bugs.gentoo.org/rest/bug?order=bug_id%20DESC&limit=30" +
 		"&include_fields=id,summary,status,resolution,product,component,priority,severity," +
 		"keywords,creation_time,cf_stabilisation_atoms,assigned_to,assigned_to_detail,creator,creator_detail"
-	if fc.BugProduct != "" {
-		u += "&product=" + url.QueryEscape(fc.BugProduct)
-	}
-	if fc.BugComponent != "" {
-		u += "&component=" + url.QueryEscape(fc.BugComponent)
-	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := httpClient.Do(req)
@@ -199,34 +193,41 @@ func formatNews(n newsItem) string {
 		html.EscapeString(n.url), n.date, html.EscapeString(html.UnescapeString(n.title)))
 }
 
-func pollFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath string, st *feedState) {
-	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	var bugs []recentBug
-	var news []newsItem
-	if fc.bugsOn() {
-		bugs = fetchRecentBugs(fctx, fc)
+// matchesBug reports whether a bug passes this feed's optional product/component filter.
+func (f *FeedConfig) matchesBug(b recentBug) bool {
+	if f.BugProduct != "" && !strings.EqualFold(b.Product, f.BugProduct) {
+		return false
 	}
-	if fc.newsOn() {
-		news, _ = fetchNews(fctx)
+	if f.BugComponent != "" && !strings.EqualFold(b.Component, f.BugComponent) {
+		return false
 	}
-	cancel()
+	return true
+}
 
-	if len(bugs) > 0 {
-		if st.LastBugID != 0 { // not first run -> post new bugs (oldest first)
+func feedStatePath(dir string, chatID int64) string {
+	if dir == "" {
+		return ""
+	}
+	return dir + "/feed-" + strconv.FormatInt(chatID, 10) + ".json"
+}
+
+// postFeedItems posts the bugs/news that are new to this feed (filtered, localized, deduped).
+func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feedState, bugs []recentBug, news []newsItem) {
+	if f.bugsOn() && len(bugs) > 0 {
+		if st.LastBugID != 0 { // not first run -> post new matching bugs (oldest first)
 			var nb []recentBug
 			for _, b := range bugs {
-				if b.ID > st.LastBugID {
+				if b.ID > st.LastBugID && f.matchesBug(b) {
 					nb = append(nb, b)
 				}
 			}
 			for i := len(nb) - 1; i >= 0; i-- {
-				postFeed(ctx, bot, fc.ChatID, formatBug(nb[i], fc.Lang), fc.silentBugs())
+				postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.silentBugs())
 			}
 		}
 		st.LastBugID = bugs[0].ID
 	}
-
-	if len(news) > 0 {
+	if f.newsOn() && len(news) > 0 {
 		if st.LastNewsURL != "" { // not first run -> post new news (oldest first)
 			var nn []newsItem
 			for _, n := range news {
@@ -236,21 +237,56 @@ func pollFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath st
 				nn = append(nn, n)
 			}
 			for i := len(nn) - 1; i >= 0; i-- {
-				postFeed(ctx, bot, fc.ChatID, formatNews(nn[i]), false) // news -> notify
+				postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false)
 			}
 		}
 		st.LastNewsURL = news[0].url
 	}
-	saveFeedState(statePath, *st)
 }
 
-// runFeed polls Gentoo Bugzilla + news on an interval and posts NEW items to chatID.
-// The first poll only records a baseline (no backlog flood); later polls post new items.
-func runFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath string) {
-	st := loadFeedState(statePath)
-	interval := fc.interval()
-	log.Printf("feed: posting new Gentoo bugs + news to %d every %s", fc.ChatID, interval)
-	pollFeed(ctx, bot, fc, statePath, &st)
+// pollAll fetches Gentoo bugs + news ONCE and fans them out to every feed, so the number of
+// requests to the public Gentoo servers stays at 2 per cycle no matter how many feeds exist.
+func pollAll(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, states map[int64]*feedState, stateDir string) {
+	needBugs, needNews := false, false
+	for _, f := range feeds {
+		needBugs = needBugs || f.bugsOn()
+		needNews = needNews || f.newsOn()
+	}
+	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	var bugs []recentBug
+	var news []newsItem
+	if needBugs {
+		bugs = fetchRecentBugs(fctx)
+	}
+	if needNews {
+		news, _ = fetchNews(fctx)
+	}
+	cancel()
+
+	for _, f := range feeds {
+		st := states[f.ChatID]
+		postFeedItems(ctx, bot, f, st, bugs, news)
+		saveFeedState(feedStatePath(stateDir, f.ChatID), *st)
+	}
+}
+
+// runFeeds polls Gentoo Bugzilla + news once per cycle (shared fetch) and posts new items to
+// every configured feed — each with its own language, filters and dedup cursor. The first poll
+// only records a baseline per feed (no backlog flood).
+func runFeeds(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, stateDir string) {
+	interval := feeds[0].interval()
+	for _, f := range feeds {
+		if d := f.interval(); d < interval {
+			interval = d
+		}
+	}
+	states := map[int64]*feedState{}
+	for _, f := range feeds {
+		st := loadFeedState(feedStatePath(stateDir, f.ChatID))
+		states[f.ChatID] = &st
+	}
+	log.Printf("feed: %d destination(s), polling Gentoo bugs + news every %s (shared fetch)", len(feeds), interval)
+	pollAll(ctx, bot, feeds, states, stateDir)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -258,7 +294,7 @@ func runFeed(ctx context.Context, bot *telego.Bot, fc *FeedConfig, statePath str
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			pollFeed(ctx, bot, fc, statePath, &st)
+			pollAll(ctx, bot, feeds, states, stateDir)
 		}
 	}
 }
