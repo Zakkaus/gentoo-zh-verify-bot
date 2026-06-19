@@ -18,7 +18,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 type overlay struct {
@@ -440,6 +439,18 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 		wg.Wait()
 	}
 
+	plain := renderPkg(q, mainRes, vm, ovRes, false)
+	rich := ""
+	if v.cfg.RichMessages {
+		rich = renderPkg(q, mainRes, vm, ovRes, true)
+	}
+	v.sendRichOrHTML(c, bot, msg.Chat.ID, rich, plain)
+	return nil
+}
+
+// renderPkg builds the /pkg result message. In rich mode each overlay section is a
+// collapsible <details> so long multi-source results stay compact.
+func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, rich bool) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔎 <b>%s</b> 的搜索结果", esc(q))
@@ -464,7 +475,11 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 			continue
 		}
 		found = true
-		fmt.Fprintf(&b, "\n\n🧩 <b>%s</b>", esc(o.name))
+		if rich {
+			fmt.Fprintf(&b, "\n<details><summary>🧩 <b>%s</b>(%d)</summary>", esc(o.name), len(hits))
+		} else {
+			fmt.Fprintf(&b, "\n\n🧩 <b>%s</b>", esc(o.name))
+		}
 		for _, a := range hits {
 			ver := ""
 			if vv := pkgC.overlayVer(o.name, a); vv != "" {
@@ -473,15 +488,14 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>%s",
 				esc("https://github.com/"+o.repo+"/tree/"+o.branch+"/"+a), esc(a), ver)
 		}
+		if rich {
+			b.WriteString("\n</details>")
+		}
 	}
 	if !found {
 		b.WriteString("\n\n没找到匹配的包,换个更短的关键词试试?")
 	} else {
 		b.WriteString("\n\n<i>~ 为测试版(~arch);无符号为 amd64 稳定版</i>")
 	}
-	// clickable links, no big link-preview card
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), b.String()).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
-	return nil
+	return b.String()
 }
