@@ -356,7 +356,7 @@ func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int
 	if v.isRichEnabled() && richHTML != "" {
 		params := (&telego.SendRichMessageParams{}).
 			WithChatID(tu.ID(chatID)).
-			WithRichMessage(*(&telego.InputRichMessage{}).WithHTML(richHTML))
+			WithRichMessage(*(&telego.InputRichMessage{}).WithHTML(richHTML).WithSkipEntityDetection())
 		if _, err := bot.SendRichMessage(c, params); err == nil {
 			return
 		}
@@ -376,23 +376,29 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 		label = " (" + esc(srcLabel) + ")"
 	}
 	if pkgURL != "" {
-		fmt.Fprintf(&b, "<p><b>🧩 <a href=\"%s\">%s</a></b>%s</p>", esc(pkgURL), esc(info.atom), label)
+		fmt.Fprintf(&b, "<h3>🧩 <a href=\"%s\">%s</a>%s</h3>", esc(pkgURL), esc(info.atom), label)
 	} else {
-		fmt.Fprintf(&b, "<p><b>🧩 %s</b>%s</p>", esc(info.atom), label)
+		fmt.Fprintf(&b, "<h3>🧩 %s%s</h3>", esc(info.atom), label)
 	}
+	// pack description + homepage + version into ONE block; separate <p> blocks each
+	// get paragraph spacing (= big gaps), so use <br> as a light intra-block break.
+	var hdr []string
 	if info.description != "" {
-		fmt.Fprintf(&b, "<p>%s</p>", esc(info.description))
+		hdr = append(hdr, esc(info.description))
 	}
 	if info.homepage != "" {
-		fmt.Fprintf(&b, "<p>🏠 <a href=\"%s\">%s</a></p>", esc(info.homepage), esc(info.homepage))
+		hdr = append(hdr, fmt.Sprintf("🏠 <a href=\"%s\">homepage</a>", esc(info.homepage)))
 	}
 	switch {
 	case info.stable != "" && info.latest != "" && info.latest != info.stable:
-		fmt.Fprintf(&b, "<p>版本:%s  ~%s</p>", esc(info.stable), esc(info.latest))
+		hdr = append(hdr, "版本:"+esc(info.stable)+"  ~"+esc(info.latest))
 	case info.stable != "":
-		fmt.Fprintf(&b, "<p>版本:%s</p>", esc(info.stable))
+		hdr = append(hdr, "版本:"+esc(info.stable))
 	case info.latest != "":
-		fmt.Fprintf(&b, "<p>版本:~%s</p>", esc(info.latest))
+		hdr = append(hdr, "版本:~"+esc(info.latest))
+	}
+	if len(hdr) > 0 {
+		fmt.Fprintf(&b, "<p>%s</p>", strings.Join(hdr, "<br>"))
 	}
 	writeFlagsRich(&b, "本地 USE", info.local, false)
 	writeFlagsRich(&b, "全局 USE", info.global, true)
@@ -415,7 +421,7 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 		fmt.Fprintf(&b, "<p>overlay 也有此包:%s</p>", strings.Join(refs, ", "))
 	}
 	if overlay {
-		b.WriteString("<p><i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i></p>")
+		b.WriteString("<footer><i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i></footer>")
 	}
 	return b.String()
 }

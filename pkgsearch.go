@@ -26,13 +26,16 @@ type overlay struct {
 	branch string
 }
 
-// shared outbound User-Agent for all HTTP requests this bot makes.
-const userAgent = "gentoo-zh-verify-bot"
+// shared outbound User-Agent for all HTTP requests this bot makes (override via user_agent config).
+var userAgent = "gentoo-zh-verify-bot"
 
 // overlays searched by /pkg, populated from config at startup (default gentoo-zh + guru).
 var overlays []overlay
 
 func configurePkg(cfg *Config) {
+	if cfg.UserAgent != "" {
+		userAgent = cfg.UserAgent
+	}
 	if len(cfg.Overlays) == 0 {
 		overlays = []overlay{
 			{name: "gentoo-zh", repo: "microcai/gentoo-zh", branch: "master"},
@@ -447,18 +450,17 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 		wg.Wait()
 	}
 
-	plain := renderPkg(q, mainRes, vm, ovRes, false)
+	plain := renderPkg(q, mainRes, vm, ovRes)
 	rich := ""
 	if v.isRichEnabled() {
-		rich = renderPkg(q, mainRes, vm, ovRes, true)
+		rich = renderPkgRich(q, mainRes, vm, ovRes)
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, rich, plain)
 	return nil
 }
 
-// renderPkg builds the /pkg result message. In rich mode each overlay section is a
-// collapsible <details> so long multi-source results stay compact.
-func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, rich bool) string {
+// renderPkg builds the plain-HTML /pkg result (regular sendMessage; \n line breaks work).
+func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔎 <b>%s</b> 的搜索结果", esc(q))
@@ -483,11 +485,7 @@ func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[st
 			continue
 		}
 		found = true
-		if rich {
-			fmt.Fprintf(&b, "\n<details><summary>🧩 <b>%s</b>(%d)</summary>", esc(o.name), len(hits))
-		} else {
-			fmt.Fprintf(&b, "\n\n🧩 <b>%s</b>", esc(o.name))
-		}
+		fmt.Fprintf(&b, "\n\n🧩 <b>%s</b>", esc(o.name))
 		for _, a := range hits {
 			ver := ""
 			if vv := pkgC.overlayVer(o.name, a); vv != "" {
@@ -496,14 +494,58 @@ func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[st
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>%s",
 				esc("https://github.com/"+o.repo+"/tree/"+o.branch+"/"+a), esc(a), ver)
 		}
-		if rich {
-			b.WriteString("\n</details>")
-		}
 	}
 	if !found {
 		b.WriteString("\n\n没找到匹配的包,换个更短的关键词试试?")
 	} else {
 		b.WriteString("\n\n<i>~ 为测试版(~arch);无符号为 amd64 稳定版</i>")
+	}
+	return b.String()
+}
+
+// renderPkgRich builds the Bot API 10.1 rich /pkg: a heading + official-tree <ul>, and
+// each overlay as a collapsed <details><ul>. Block tags only (rich ignores newlines).
+func renderPkgRich(q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string) string {
+	esc := html.EscapeString
+	var b strings.Builder
+	fmt.Fprintf(&b, "<h3>🔎 %s 的搜索结果</h3>", esc(q))
+	found := false
+	if len(mainRes) > 0 {
+		found = true
+		b.WriteString("<h4>📦 官方树 gentoo</h4><ul>")
+		for _, a := range mainRes {
+			ver := ""
+			if vm[a][0] != "" {
+				ver = " — " + esc(vm[a][0])
+			} else if vm[a][1] != "" {
+				ver = " — ~" + esc(vm[a][1])
+			}
+			fmt.Fprintf(&b, "<li><a href=\"%s\">%s</a>%s</li>",
+				esc("https://packages.gentoo.org/packages/"+a), esc(a), ver)
+		}
+		b.WriteString("</ul>")
+	}
+	for _, o := range overlays {
+		hits := ovRes[o.name]
+		if len(hits) == 0 {
+			continue
+		}
+		found = true
+		fmt.Fprintf(&b, "<details><summary>🧩 <b>%s</b>(%d)</summary><ul>", esc(o.name), len(hits))
+		for _, a := range hits {
+			ver := ""
+			if vv := pkgC.overlayVer(o.name, a); vv != "" {
+				ver = " — ~" + esc(vv)
+			}
+			fmt.Fprintf(&b, "<li><a href=\"%s\">%s</a>%s</li>",
+				esc("https://github.com/"+o.repo+"/tree/"+o.branch+"/"+a), esc(a), ver)
+		}
+		b.WriteString("</ul></details>")
+	}
+	if !found {
+		b.WriteString("<p>没找到匹配的包,换个更短的关键词试试?</p>")
+	} else {
+		b.WriteString("<footer><i>~ 为测试版(~arch);无符号为 amd64 稳定版</i></footer>")
 	}
 	return b.String()
 }
