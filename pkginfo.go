@@ -296,7 +296,7 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
 }
 
-func renderUse(info pkgFullInfo, srcLabel, pkgURL string, alsoIn []string) string {
+func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	if pkgURL != "" {
@@ -326,7 +326,9 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, alsoIn []string) strin
 	if len(alsoIn) > 0 {
 		fmt.Fprintf(&b, "\n<i>该包也存在于:%s</i>", esc(strings.Join(alsoIn, ", ")))
 	}
-	b.WriteString("\n\n<i>+ 默认开启 · ~ 测试版 · 点 USE 看详情</i>")
+	if overlay {
+		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i>")
+	}
 	return b.String()
 }
 
@@ -420,7 +422,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	out := ""
 	if s.official {
 		if info, ok := officialInfo(hc, atom); ok {
-			out = renderUse(info, "官方树 gentoo", "https://packages.gentoo.org/packages/"+atom, s.ovs)
+			out = renderUse(info, "官方树 gentoo", "https://packages.gentoo.org/packages/"+atom, false, s.ovs)
 		}
 	}
 	if out == "" && len(s.ovs) > 0 {
@@ -432,7 +434,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 			}
 		}
 		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
-			out = renderUse(info, "overlay:"+ovName, "https://github.com/"+o.repo+"/tree/"+o.branch+"/"+atom, s.ovs[1:])
+			out = renderUse(info, "overlay:"+ovName, "https://github.com/"+o.repo+"/tree/"+o.branch+"/"+atom, true, s.ovs[1:])
 		}
 	}
 	if out == "" {
