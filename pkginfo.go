@@ -259,6 +259,12 @@ func flagMark(f useFlag) string {
 	return ""
 }
 
+// useLink renders a flag as "[+]name" with the name linked to its useflags page.
+func useLink(f useFlag) string {
+	u := "https://packages.gentoo.org/useflags/" + f.name
+	return flagMark(f) + fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(f.name))
+}
+
 // writeLocalFlags lists package-specific flags with a one-line description.
 func writeLocalFlags(b *strings.Builder, flags []useFlag) {
 	if len(flags) == 0 {
@@ -271,9 +277,9 @@ func writeLocalFlags(b *strings.Builder, flags []useFlag) {
 			break
 		}
 		if d := shortDesc(f.desc); d != "" {
-			fmt.Fprintf(b, "\n • %s%s — %s", flagMark(f), html.EscapeString(f.name), html.EscapeString(d))
+			fmt.Fprintf(b, "\n • %s — %s", useLink(f), html.EscapeString(d))
 		} else {
-			fmt.Fprintf(b, "\n • %s%s", flagMark(f), html.EscapeString(f.name))
+			fmt.Fprintf(b, "\n • %s", useLink(f))
 		}
 	}
 }
@@ -283,11 +289,11 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	if len(flags) == 0 {
 		return
 	}
-	names := make([]string, 0, len(flags))
+	links := make([]string, 0, len(flags))
 	for _, f := range flags {
-		names = append(names, flagMark(f)+f.name)
+		links = append(links, useLink(f))
 	}
-	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), html.EscapeString(strings.Join(names, " ")))
+	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
 }
 
 func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
@@ -300,10 +306,13 @@ func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
 	if info.homepage != "" {
 		fmt.Fprintf(&b, "\n🏠 %s", esc(info.homepage))
 	}
-	if info.stable != "" {
-		fmt.Fprintf(&b, "\n版本:%s(稳定)", esc(info.stable))
-	} else if info.latest != "" {
-		fmt.Fprintf(&b, "\n版本:~%s(测试)", esc(info.latest))
+	switch {
+	case info.stable != "" && info.latest != "" && info.latest != info.stable:
+		fmt.Fprintf(&b, "\n版本:%s  ~%s", esc(info.stable), esc(info.latest))
+	case info.stable != "":
+		fmt.Fprintf(&b, "\n版本:%s", esc(info.stable))
+	case info.latest != "":
+		fmt.Fprintf(&b, "\n版本:~%s", esc(info.latest))
 	}
 	writeLocalFlags(&b, info.local)
 	writeGlobalFlags(&b, info.global)
@@ -313,7 +322,7 @@ func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
 	if len(alsoIn) > 0 {
 		fmt.Fprintf(&b, "\n<i>该包也存在于:%s</i>", esc(strings.Join(alsoIn, ", ")))
 	}
-	b.WriteString("\n\n<i>+ 为默认开启</i>")
+	b.WriteString("\n\n<i>+ 默认开启 · ~ 测试版 · 点 USE 看详情</i>")
 	return b.String()
 }
 
