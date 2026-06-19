@@ -296,10 +296,14 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
 }
 
-func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
+func renderUse(info pkgFullInfo, srcLabel, pkgURL string, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
-	fmt.Fprintf(&b, "🧩 <b>%s</b>(%s)", esc(info.atom), esc(srcLabel))
+	if pkgURL != "" {
+		fmt.Fprintf(&b, "🧩 <a href=\"%s\"><b>%s</b></a>(%s)", esc(pkgURL), esc(info.atom), esc(srcLabel))
+	} else {
+		fmt.Fprintf(&b, "🧩 <b>%s</b>(%s)", esc(info.atom), esc(srcLabel))
+	}
 	if info.description != "" {
 		fmt.Fprintf(&b, "\n%s", esc(info.description))
 	}
@@ -416,7 +420,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	out := ""
 	if s.official {
 		if info, ok := officialInfo(hc, atom); ok {
-			out = renderUse(info, "官方树 gentoo", s.ovs)
+			out = renderUse(info, "官方树 gentoo", "https://packages.gentoo.org/packages/"+atom, s.ovs)
 		}
 	}
 	if out == "" && len(s.ovs) > 0 {
@@ -428,7 +432,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 			}
 		}
 		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
-			out = renderUse(info, "overlay:"+ovName, s.ovs[1:])
+			out = renderUse(info, "overlay:"+ovName, "https://github.com/"+o.repo+"/tree/"+o.branch+"/"+atom, s.ovs[1:])
 		}
 	}
 	if out == "" {
