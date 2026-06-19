@@ -70,6 +70,8 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	}()
 	help := "🤖 可用指令:\n" +
 		"/pkg <包名> — 搜索 Gentoo 包(官方树/gentoo-zh/guru)\n" +
+		"/use <包名> — 某个包的 USE 标志 + 信息\n" +
+		"/bug <编号> — 查询 Gentoo Bugzilla\n" +
 		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
 		"/ping — 机器人状态 / 运行时长\n" +
 		"/stats — 今日同意 / 拒绝人数\n" +

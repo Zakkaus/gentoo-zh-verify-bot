@@ -1,0 +1,400 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"html"
+	"io"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
+	tu "github.com/mymmrac/telego/telegoutil"
+)
+
+type useFlag struct {
+	name string
+	desc string
+	def  bool // default-enabled (+ prefix)
+}
+
+type pkgFullInfo struct {
+	atom        string
+	description string
+	homepage    string
+	stable      string
+	latest      string
+	local       []useFlag
+	global      []useFlag
+	fetched     time.Time
+}
+
+var infoC = struct {
+	mu sync.Mutex
+	m  map[string]pkgFullInfo
+}{m: map[string]pkgFullInfo{}}
+
+// useEntry mirrors packages.gentoo.org's USE flag JSON ({name, description}).
+type useEntry struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func toUseFlags(in []useEntry) []useFlag {
+	out := make([]useFlag, 0, len(in))
+	for _, f := range in {
+		out = append(out, useFlag{
+			name: strings.TrimLeft(f.Name, "+-"),
+			desc: f.Description,
+			def:  strings.HasPrefix(f.Name, "+"),
+		})
+	}
+	return out
+}
+
+// officialInfo fetches description + USE flags + versions for an official-tree atom (cached).
+func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
+	infoC.mu.Lock()
+	if v, ok := infoC.m[atom]; ok && time.Since(v.fetched) < verCacheTTL {
+		infoC.mu.Unlock()
+		return v, true
+	}
+	infoC.mu.Unlock()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://packages.gentoo.org/packages/"+atom+".json", nil)
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return pkgFullInfo{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return pkgFullInfo{}, false
+	}
+	var pj struct {
+		Description string `json:"description"`
+		Versions    []struct {
+			Version  string   `json:"version"`
+			Keywords []string `json:"keywords"`
+		} `json:"versions"`
+		Use struct {
+			Local  []useEntry `json:"local"`
+			Global []useEntry `json:"global"`
+		} `json:"use"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&pj) != nil {
+		return pkgFullInfo{}, false
+	}
+	info := pkgFullInfo{atom: atom, description: pj.Description, fetched: time.Now()}
+	for _, vv := range pj.Versions {
+		if strings.HasPrefix(vv.Version, "9999") { // skip live ebuilds
+			continue
+		}
+		if info.latest == "" {
+			info.latest = vv.Version
+		}
+		if info.stable == "" {
+			for _, kw := range vv.Keywords {
+				if kw == "amd64" {
+					info.stable = vv.Version
+					break
+				}
+			}
+		}
+		if info.latest != "" && info.stable != "" {
+			break
+		}
+	}
+	info.local = toUseFlags(pj.Use.Local)
+	info.global = toUseFlags(pj.Use.Global)
+	infoC.mu.Lock()
+	infoC.m[atom] = info
+	infoC.mu.Unlock()
+	return info, true
+}
+
+func fetchRaw(ctx context.Context, url string) []byte {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return b
+}
+
+// parseIUSE extracts USE flag tokens from an ebuild's IUSE="..."/IUSE+="..."
+// assignments (handles multi-line; drops tokens containing shell metachars).
+func parseIUSE(eb []byte) []string {
+	lines := strings.Split(string(eb), "\n")
+	var toks []string
+	for i := 0; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(t, "IUSE=") && !strings.HasPrefix(t, "IUSE+=") {
+			continue
+		}
+		q := strings.IndexByte(t, '"')
+		if q < 0 {
+			continue
+		}
+		content := t[q+1:]
+		for {
+			if end := strings.IndexByte(content, '"'); end >= 0 {
+				toks = append(toks, strings.Fields(content[:end])...)
+				break
+			}
+			toks = append(toks, strings.Fields(content)...)
+			i++
+			if i >= len(lines) {
+				break
+			}
+			content = lines[i]
+		}
+	}
+	out := make([]string, 0, len(toks))
+	for _, tk := range toks {
+		if tk == "" || strings.ContainsAny(tk, "${}()") {
+			continue
+		}
+		out = append(out, tk)
+	}
+	return out
+}
+
+var ebuildFieldRe = map[string]*regexp.Regexp{}
+var ebuildFieldMu sync.Mutex
+
+func ebuildField(eb []byte, key string) string {
+	ebuildFieldMu.Lock()
+	re := ebuildFieldRe[key]
+	if re == nil {
+		re = regexp.MustCompile(`(?m)^` + key + `="?([^"\n]*)"?`)
+		ebuildFieldRe[key] = re
+	}
+	ebuildFieldMu.Unlock()
+	m := re.FindSubmatch(eb)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSpace(string(m[1]))
+}
+
+var mdFlagRe = regexp.MustCompile(`(?s)<flag name="([^"]+)">(.*?)</flag>`)
+var tagRe = regexp.MustCompile(`<[^>]+>`)
+var wsRe = regexp.MustCompile(`\s+`)
+
+func parseMetadataUse(md []byte) map[string]string {
+	out := map[string]string{}
+	for _, m := range mdFlagRe.FindAllSubmatch(md, -1) {
+		desc := tagRe.ReplaceAllString(string(m[2]), "")
+		desc = strings.TrimSpace(wsRe.ReplaceAllString(desc, " "))
+		out[string(m[1])] = desc
+	}
+	return out
+}
+
+// overlayInfo best-effort extracts description/homepage/USE for an overlay package
+// from its latest ebuild (IUSE) + metadata.xml (flag descriptions), via raw.githubusercontent.com.
+func overlayInfo(ctx context.Context, o overlay, atom, version string) (pkgFullInfo, bool) {
+	if version == "" {
+		return pkgFullInfo{}, false
+	}
+	pkg := pn(atom)
+	base := "https://raw.githubusercontent.com/" + o.repo + "/" + o.branch + "/" + atom + "/"
+	eb := fetchRaw(ctx, base+pkg+"-"+version+".ebuild")
+	if eb == nil {
+		return pkgFullInfo{}, false
+	}
+	descs := map[string]string{}
+	if md := fetchRaw(ctx, base+"metadata.xml"); md != nil {
+		descs = parseMetadataUse(md)
+	}
+	info := pkgFullInfo{
+		atom:        atom,
+		description: ebuildField(eb, "DESCRIPTION"),
+		latest:      version,
+	}
+	if hp := ebuildField(eb, "HOMEPAGE"); hp != "" {
+		info.homepage = strings.Fields(hp)[0]
+	}
+	for _, n := range parseIUSE(eb) {
+		clean := strings.TrimLeft(n, "+-")
+		info.local = append(info.local, useFlag{name: clean, desc: descs[clean], def: strings.HasPrefix(n, "+")})
+	}
+	return info, true
+}
+
+func writeFlags(b *strings.Builder, title string, flags []useFlag, max int) {
+	if len(flags) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n<b>%s</b>(%d)", title, len(flags))
+	for i, f := range flags {
+		if max > 0 && i >= max && len(flags) > max {
+			fmt.Fprintf(b, "\n …(共 %d 个,详见详情页)", len(flags))
+			break
+		}
+		mark := ""
+		if f.def {
+			mark = "+"
+		}
+		if f.desc != "" {
+			fmt.Fprintf(b, "\n • %s%s — %s", mark, html.EscapeString(f.name), html.EscapeString(f.desc))
+		} else {
+			fmt.Fprintf(b, "\n • %s%s", mark, html.EscapeString(f.name))
+		}
+	}
+}
+
+func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
+	esc := html.EscapeString
+	var b strings.Builder
+	fmt.Fprintf(&b, "🧩 <b>%s</b>(%s)", esc(info.atom), esc(srcLabel))
+	if info.description != "" {
+		fmt.Fprintf(&b, "\n%s", esc(info.description))
+	}
+	if info.homepage != "" {
+		fmt.Fprintf(&b, "\n🏠 %s", esc(info.homepage))
+	}
+	if info.stable != "" {
+		fmt.Fprintf(&b, "\n版本:%s(稳定)", esc(info.stable))
+	} else if info.latest != "" {
+		fmt.Fprintf(&b, "\n版本:~%s(测试)", esc(info.latest))
+	}
+	writeFlags(&b, "本地 USE", info.local, 0)
+	writeFlags(&b, "全局 USE", info.global, 12)
+	if len(info.local) == 0 && len(info.global) == 0 {
+		b.WriteString("\n(该包无 USE 标志)")
+	}
+	if len(alsoIn) > 0 {
+		fmt.Fprintf(&b, "\n<i>该包也存在于:%s</i>", esc(strings.Join(alsoIn, ", ")))
+	}
+	b.WriteString("\n\n<i>+ 为默认开启</i>")
+	return b.String()
+}
+
+// onUse handles /use <package> — show one package's USE flags + info (multi-source aware).
+func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
+	msg := update.Message
+	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+		return nil
+	}
+	bot := ctx.Bot()
+	c := ctx.Context()
+	q := commandArg(msg.Text)
+	if q == "" {
+		v.notify(c, bot, msg.Chat.ID, "用法:/use <包名>,例如 /use vim 或 /use app-editors/vim")
+		return nil
+	}
+	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	pkgC.refresh(hc)
+
+	low := strings.ToLower(q)
+	exactAtom := strings.Contains(low, "/") && isPkgPath(low)
+
+	type src struct {
+		official bool
+		ovs      []string
+	}
+	srcs := map[string]*src{}
+	get := func(a string) *src {
+		s := srcs[a]
+		if s == nil {
+			s = &src{}
+			srcs[a] = s
+		}
+		return s
+	}
+
+	if exactAtom {
+		if _, ok := officialInfo(hc, q); ok {
+			get(q).official = true
+		}
+		for _, o := range overlays {
+			if pkgC.overlayVer(o.name, q) != "" {
+				s := get(q)
+				s.ovs = append(s.ovs, o.name)
+			}
+		}
+	} else {
+		for _, a := range searchMainTree(hc, q) {
+			if strings.EqualFold(pn(a), q) {
+				get(a).official = true
+			}
+		}
+		for ov, list := range pkgC.search(q) {
+			for _, a := range list {
+				if strings.EqualFold(pn(a), q) {
+					s := get(a)
+					s.ovs = append(s.ovs, ov)
+				}
+			}
+		}
+	}
+
+	switch len(srcs) {
+	case 0:
+		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q))
+		return nil
+	case 1:
+		// fall through below
+	default:
+		atoms := make([]string, 0, len(srcs))
+		for a := range srcs {
+			atoms = append(atoms, a)
+		}
+		sort.Strings(atoms)
+		var b strings.Builder
+		b.WriteString("匹配到多个包,请用完整名指定其一:")
+		for _, a := range atoms {
+			fmt.Fprintf(&b, "\n • /use %s", a)
+		}
+		v.notify(c, bot, msg.Chat.ID, b.String())
+		return nil
+	}
+
+	var atom string
+	var s *src
+	for a, ss := range srcs {
+		atom, s = a, ss
+	}
+
+	out := ""
+	if s.official {
+		if info, ok := officialInfo(hc, atom); ok {
+			out = renderUse(info, "官方树 gentoo", s.ovs)
+		}
+	}
+	if out == "" && len(s.ovs) > 0 {
+		ovName := s.ovs[0]
+		var o overlay
+		for _, oo := range overlays {
+			if oo.name == ovName {
+				o = oo
+			}
+		}
+		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
+			out = renderUse(info, "overlay:"+ovName, s.ovs[1:])
+		}
+	}
+	if out == "" {
+		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("暂时取不到 %s 的信息,稍后再试。", atom))
+		return nil
+	}
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), out).
+		WithParseMode(telego.ModeHTML).
+		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+	return nil
+}
