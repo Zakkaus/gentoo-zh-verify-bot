@@ -336,6 +336,28 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	return b.String()
 }
 
+// normalizeUseQuery turns a pasted packages.gentoo.org / GitHub-overlay tree URL
+// into a "category/package" atom; otherwise returns the input unchanged.
+func normalizeUseQuery(q string) string {
+	q = strings.TrimSpace(q)
+	q = strings.SplitN(q, "?", 2)[0]
+	q = strings.SplitN(q, "#", 2)[0]
+	if i := strings.Index(q, "packages.gentoo.org/packages/"); i >= 0 {
+		rest := strings.TrimRight(q[i+len("packages.gentoo.org/packages/"):], "/")
+		if parts := strings.SplitN(rest, "/", 3); len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+			return parts[0] + "/" + parts[1]
+		}
+	}
+	if strings.Contains(q, "github.com/") {
+		if i := strings.Index(q, "/tree/"); i >= 0 {
+			if segs := strings.Split(strings.TrimRight(q[i+len("/tree/"):], "/"), "/"); len(segs) >= 3 {
+				return segs[len(segs)-2] + "/" + segs[len(segs)-1]
+			}
+		}
+	}
+	return q
+}
+
 // onUse handles /use <package> — show one package's USE flags + info (multi-source aware).
 func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -349,6 +371,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, "用法:/use <包名>,例如 /use vim 或 /use app-editors/vim")
 		return nil
 	}
+	q = normalizeUseQuery(q)
 	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	pkgC.refresh(hc)
