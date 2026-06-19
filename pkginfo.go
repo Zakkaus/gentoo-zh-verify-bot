@@ -235,26 +235,59 @@ func overlayInfo(ctx context.Context, o overlay, atom, version string) (pkgFullI
 	return info, true
 }
 
-func writeFlags(b *strings.Builder, title string, flags []useFlag, max int) {
+// shortDesc trims a USE flag description to one short line (first sentence, no
+// URLs, capped) so /use stays compact.
+func shortDesc(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "http"); i > 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if i := strings.IndexAny(s, ".。"); i > 8 {
+		s = s[:i]
+	}
+	r := []rune(strings.TrimSpace(s))
+	if len(r) > 64 {
+		return strings.TrimSpace(string(r[:64])) + "…"
+	}
+	return string(r)
+}
+
+func flagMark(f useFlag) string {
+	if f.def {
+		return "+"
+	}
+	return ""
+}
+
+// writeLocalFlags lists package-specific flags with a one-line description.
+func writeLocalFlags(b *strings.Builder, flags []useFlag) {
 	if len(flags) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "\n<b>%s</b>(%d)", title, len(flags))
+	fmt.Fprintf(b, "\n<b>本地 USE</b>(%d)", len(flags))
 	for i, f := range flags {
-		if max > 0 && i >= max && len(flags) > max {
-			fmt.Fprintf(b, "\n …(共 %d 个,详见详情页)", len(flags))
+		if i >= 12 && len(flags) > 12 {
+			fmt.Fprintf(b, "\n …(共 %d 个)", len(flags))
 			break
 		}
-		mark := ""
-		if f.def {
-			mark = "+"
-		}
-		if f.desc != "" {
-			fmt.Fprintf(b, "\n • %s%s — %s", mark, html.EscapeString(f.name), html.EscapeString(f.desc))
+		if d := shortDesc(f.desc); d != "" {
+			fmt.Fprintf(b, "\n • %s%s — %s", flagMark(f), html.EscapeString(f.name), html.EscapeString(d))
 		} else {
-			fmt.Fprintf(b, "\n • %s%s", mark, html.EscapeString(f.name))
+			fmt.Fprintf(b, "\n • %s%s", flagMark(f), html.EscapeString(f.name))
 		}
 	}
+}
+
+// writeGlobalFlags lists generic flags as a compact name-only line (Gentoo users know them).
+func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
+	if len(flags) == 0 {
+		return
+	}
+	names := make([]string, 0, len(flags))
+	for _, f := range flags {
+		names = append(names, flagMark(f)+f.name)
+	}
+	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), html.EscapeString(strings.Join(names, " ")))
 }
 
 func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
@@ -272,8 +305,8 @@ func renderUse(info pkgFullInfo, srcLabel string, alsoIn []string) string {
 	} else if info.latest != "" {
 		fmt.Fprintf(&b, "\n版本:~%s(测试)", esc(info.latest))
 	}
-	writeFlags(&b, "本地 USE", info.local, 0)
-	writeFlags(&b, "全局 USE", info.global, 12)
+	writeLocalFlags(&b, info.local)
+	writeGlobalFlags(&b, info.global)
 	if len(info.local) == 0 && len(info.global) == 0 {
 		b.WriteString("\n(该包无 USE 标志)")
 	}
