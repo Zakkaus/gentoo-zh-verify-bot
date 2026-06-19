@@ -6,6 +6,8 @@
   "timeout_seconds": 240,
   "notify_ttl_seconds": 60,
   "admin_log_chat_id": 0,
+  "rich_messages": false,
+  "user_agent": "",
   "stats_timezone": "Asia/Shanghai",
   "news_url": "https://www.gentoo.org/support/news-items/",
   "overlays": [

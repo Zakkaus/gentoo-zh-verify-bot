@@ -13,12 +13,13 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Admin override buttons** on every request: **👮 直接通过** (approve now) and **🚫 举报并封禁** (decline + permanent ban).
 - **Multiple groups.** Guard several groups with one bot instance.
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban.
-- **Control / info:** `/start` `/stop` (toggle verification), `/ping`, `/stats` (today's approved/declined), `/help`.
+- **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/ping`, `/stats` (today's approved/declined), `/help`.
 - **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise.
 - **USE flags:** `/use <package>` shows one package's USE flags (with descriptions, each linked to its useflags page) + info. Accepts a bare name, a `cat/pkg` atom, or a pasted `packages.gentoo.org` (or overlay GitHub) URL. Data from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
 - **Bugzilla:** `/bug <id>` looks up a [Gentoo Bugzilla](https://bugs.gentoo.org) bug (title + status), else just links it.
 - **News:** `/news [keyword]` lists or searches [Gentoo news items](https://www.gentoo.org/support/news-items/).
 - **Restart-safe:** in-progress verifications are persisted to disk and resumed after a restart (no orphaned challenges).
+- **Rich output (optional, off by default).** `/pkg` and `/use` can render as Bot API 10.1 rich messages (heading, lists, collapsible sections) — toggled per-config (`rich_messages`) or at runtime by the admin `/rich` command, with automatic fall-back to plain HTML. Off by default because older / third-party clients don't render rich messages; verification, `/bug` and `/news` always stay plain HTML.
 - The bot's own group messages auto-delete after a TTL to stay tidy; commands appear in Telegram's `/` menu (admin commands only shown to admins).
 
 ## Telegram setup
@@ -70,6 +71,8 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `overlays` | `/pkg` GitHub overlays `[{name,repo,branch}]` (default: gentoo-zh + guru) |
 | `news_url` | `/news` source index URL (default: gentoo.org news-items) |
 | `stats_timezone` | IANA tz for the daily /stats reset boundary (default: UTC+8) |
+| `rich_messages` | render `/pkg` & `/use` as Bot API 10.1 rich messages (default `false`; also toggleable in-chat via `/rich`) |
+| `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
 | `questions` | quiz pool; one is picked at random, options shuffled |
 
 ## Build & run
