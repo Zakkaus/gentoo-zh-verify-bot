@@ -13,12 +13,13 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Admin override buttons** on every request: **👮 直接通过** (approve now) and **🚫 举报并封禁** (decline + permanent ban).
 - **Multiple groups.** Guard several groups with one bot instance.
 - **Auto-leaves unauthorized chats.** If the bot is added to any group/channel that isn't in its config (a guarded group, the required channel, a feed target, or the admin-log chat), it leaves immediately — so it can't be pulled into random groups. To add a new guarded group, put its id in `group_ids` first, then add the bot.
-- **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban.
+- **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban, `/warn` = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts), `/clearwarn` = clear a user's strikes.
 - **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/ping`, `/stats` (today's approved/declined), `/help`.
 - **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise.
 - **USE flags:** `/use <package>` shows one package's USE flags (with descriptions, each linked to its useflags page) + info. Accepts a bare name, a `cat/pkg` atom, or a pasted `packages.gentoo.org` (or overlay GitHub) URL. Data from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
 - **Bugzilla:** `/bug <id>` looks up a [Gentoo Bugzilla](https://bugs.gentoo.org) bug (title + status), else just links it.
 - **News:** `/news [keyword]` lists or searches [Gentoo news items](https://www.gentoo.org/support/news-items/).
+- **Wiki search:** `/wiki <query>` searches the [Gentoo](https://wiki.gentoo.org) and [Arch](https://wiki.archlinux.org) wikis (MediaWiki), **preferring Simplified-Chinese pages** and falling back to the default page; other languages are filtered out.
 - **Auto-feed (optional).** Configure a `feed` (or a `feeds` array for several destinations) and the bot polls Gentoo Bugzilla + news every `interval_seconds` (default 300) and posts each **new** bug / news item to that channel (the bot must be an admin there with post rights). Each feed has its own language (`lang`) and filters, and all feeds share a single fetch per cycle. Deduped + restart-safe, and seeds a baseline on first run so there's no backlog flood.
 - **Restart-safe:** in-progress verifications are persisted to disk and resumed after a restart (no orphaned challenges).
 - **Rich output (optional, off by default).** `/pkg` and `/use` can render as Bot API 10.1 rich messages (heading, lists, collapsible sections) — toggled per-config (`rich_messages`) or at runtime by the admin `/rich` command, with automatic fall-back to plain HTML. Off by default because older / third-party clients don't render rich messages; verification, `/bug` and `/news` always stay plain HTML.
@@ -69,6 +70,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `channel_invite_url` | explicit channel join link; required for a **private** channel (no `@handle`) |
 | `timeout_seconds` | time to finish verification (default 240, max 1800) |
 | `notify_ttl_seconds` | auto-delete the bot's group messages after N s (`0`→60, negative→never) |
+| `warn_limit` | `/warn` strikes before a user is auto-kicked (default 3) |
 | `admin_log_chat_id` | optional chat that receives a line per moderation / failed-approve event |
 | `overlays` | `/pkg` GitHub overlays `[{name,repo,branch}]` (default: gentoo-zh + guru) |
 | `news_url` | `/news` source index URL (default: gentoo.org news-items) |
