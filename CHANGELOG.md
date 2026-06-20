@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.1] - 2026-06-21
+
+### Fixed
+- **Verification approve/timeout race — could strike or auto-ban a user who just passed.** A correct
+  answer landing right at the verification deadline could race the pending's own timeout timer:
+  `approve()` peeked the pending and called Telegram while the timer was still armed, so the timer
+  could fire `decline()` — recording a persisted failure strike, declining, and at the strike
+  threshold auto-banning a member who had in fact just verified. `approve()` now **claims** the
+  pending (stops the timer + marks it done) atomically before the network call, and re-opens it as
+  retryable only if the approve fails — so a verified user can never be struck or banned by their
+  own timeout. (Found by an internal multi-dimensional audit; the earlier reviews missed it.)
+- **Feed confirm ping lost when a bug raced past CONFIRMED.** A silently-posted UNCONFIRMED bug that
+  moved straight to IN_PROGRESS (or past CONFIRMED while the ping send transiently failed) never got
+  its 🔔 notice. The ping now fires on any UNCONFIRMED → (non-UNCONFIRMED, non-resolved) transition,
+  not only exactly CONFIRMED.
+- **Release-info: a malformed HTTP-200 distro-info CSV is no longer cached as success for 24h.** An
+  empty/garbage 200 that parses to zero rows is treated as a failed fetch (short retry window), so it
+  can't overwrite good data or silently disable Ubuntu EOL/dev-series filtering for a day.
+- **`settings.json` tolerates a missing field.** `enabled` is now a `*bool`, so a hand-written `{}`
+  keeps the seeded default instead of silently pausing verification.
+
+### Internal
+- Startup sweeps leftover `.*.tmp-*` state temp files orphaned by a prior hard kill; graceful
+  shutdown flushes pending/verifyfail state after handlers stop. New tests for the approve-claim
+  invariant, the reopen path, the IN_PROGRESS confirm ping, and the empty-settings default.
+
 ## [3.6.0] - 2026-06-21
 
 ### Added
