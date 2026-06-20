@@ -15,7 +15,9 @@
 - **自动退出未授权聊天**:被加进任何不在配置里的群/频道(非守护群、非必关频道、非播报目标、非管理日志)时,机器人会立刻退出 —— 不会被人随便拉进群刷存在。要新增守护群,先把群 id 写进 `group_ids`,再把机器人加进去。
 - **私聊也能用查询命令(限频)**:只读查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`)**私聊机器人也能直接用**,每人每分钟上限 `private_query_per_min` 次(默认 3)防滥用 —— 守护群里不限次。其它私聊消息收到统一自动回复(`private_reply` 可自定义)。
 - **频道马甲封禁(可选,`/bc`)**:有人在守护群里**用频道身份发言**(常见的刷屏 / 规避封禁手法)会被删消息 + 封禁该频道再也发不了。管理员用 `/bc` 开关,`/bc allow|deny <频道id>` 管白名单(`allow` 同时解封)—— 开关和白名单**重启不丢**。匿名群管和群的关联频道自动放行。**需要把机器人的隐私模式关掉**(BotFather → 关闭群隐私)才能看到这些消息。
-- **管理命令**(回复目标消息,仅管理员):`/sb` 删消息 + 踢出(可再申请)、`/ban` 删消息 + 永久封禁、`/warn` 警告用户(满 `warn_limit` 次自动踢出,默认 3 次,计数重启不丢)、`/clearwarn` 清除某用户的警告。
+- **管理命令**(回复目标消息,仅管理员):`/sb`、`/ban` 删消息 + 按**配置时长**封禁(`/bantime`,默认永久)、`/warn` 警告用户(满 `warn_limit` 次自动踢出,默认 3 次,计数重启不丢)、`/clearwarn` 清除某用户的警告。
+- **封禁时长可配**(`/bantime`,管理员):`/bantime 0` 永久(默认)、`/bantime 7d` / `12h` / `30m` / `3600`(秒)。`/ban`、`/sb` 和验证自动封禁都用它;由 `ban_seconds` 初始化,运行时改动重启后回到配置值。
+- **验证防滥用**:验证失败(答错/超时)只**拒绝**该次申请(绝不立即永久封禁),申请人需等 `verify_retry_seconds`(默认 180 秒)才能重新申请;**数小时内**连续失败 `verify_max_fails` 次(默认 3)后**自动封禁**(时长同上)。strike 计数重启不丢、验证成功后清零、且**会随时间衰减**(隔很久的偶发失误不累计)。自动封禁只有真正成功才清零;bot 无封禁权限时保留 strike 并持续告警管理员。
 - **控制 / 信息**:`/start` `/stop`(开关验证)、`/rich`(开关富文本输出)、`/autodel`(开关/调节查询结果自动删除,默认 3 分钟)、`/ping`、`/stats`(今日通过 / 拒绝数)、`/help`。
 - **包搜索**:`/pkg <名字>` 搜索官方树([packages.gentoo.org](https://packages.gentoo.org))与配置的 overlay(默认 `gentoo-zh` + `guru`),并显示版本——官方树包显示 **amd64 稳定版**,无稳定版则显示最新 `~` 测试版;overlay 包一律标 `~`。也支持完整 atom 查询(如 `/pkg sys-kernel/gentoo-kernel`)。
 - **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述,每个都链到其 useflags 页)+ 信息。支持**包名**、**`分类/包名`** 或直接粘贴 **packages.gentoo.org(或 overlay 的 GitHub)链接**。数据取自官方树 JSON,或 overlay 的 ebuild / `metadata.xml`。
@@ -68,6 +70,10 @@ GITHUB_TOKEN=ghp_xxx
 | `lookup_ttl_seconds` | 查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`)及其回复 N 秒后自动删除(不设→180=3 分钟、开;`0`/负数→关)。管理员用 `/autodel` 运行时开关/调节 |
 | `warn_limit` | `/warn` 多少次后自动踢出(默认 3) |
 | `private_query_per_min` | 私聊中每人每分钟可用的查询次数(默认 3;守护群不限次) |
+| `ban_seconds` | `/ban`、`/sb` 和验证自动封禁的默认时长;`0` = 永久(默认)。可用 `/bantime` 运行时调整 |
+| `verify_retry_seconds` | 被拒申请人需等待多久才能重新申请(默认 180;负数 = 无冷却) |
+| `verify_max_fails` | 连续验证失败多少次后自动封禁(默认 3;负数 = 永不自动封禁) |
+| `required_channel_fail_open` | 当 bot 读不到必关频道成员状态时,放行已答题的申请人(`true`,默认)还是拦下(`false`)。两种情况都会告警管理员 |
 | `admin_log_chat_id` | 可选:接收每次管理操作 / 批准失败的日志 |
 | `overlays` | `/pkg` 的 GitHub overlay `[{name,repo,branch}]`(默认 gentoo-zh + guru) |
 | `news_url` | `/news` 源索引 URL(默认 gentoo.org) |

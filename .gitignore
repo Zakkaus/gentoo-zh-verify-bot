@@ -13,3 +13,8 @@ config.json
 .idea/
 .vscode/
 .DS_Store
+
+# local code-review notes — kept out of the public repo
+CODE_REVIEW.md
+CODE_REVIEW_RESPONSE.md
+probe*_test.go

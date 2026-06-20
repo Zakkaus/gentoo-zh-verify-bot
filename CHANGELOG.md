@@ -4,6 +4,47 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.3.0] - 2026-06-21
+
+Configurable ban duration + verification anti-spam, plus fixes from an external code review
+and a follow-up adversarial review of the new code (13 confirmed findings, each verified).
+
+### ⚠️ Upgrade note
+- **`/sb` is now a ban, not a re-joinable kick.** Both `/sb` and `/ban` now ban for the
+  configured duration (`/bantime`, **default permanent**). If you relied on `/sb` being a
+  soft kick, set `ban_seconds` to a finite value (e.g. `3600`) or use `/warn` for lenient
+  moderation.
+
+### Added
+- **Configurable ban duration** — `/bantime` (admins): `0`=permanent (default), or `7d`/`12h`/
+  `30m`/`3600`. Used by `/ban`, `/sb`, the verification auto-ban and the report button. Config
+  `ban_seconds`. Durations are clamped to Telegram's honoured window (under 30 s → 30 s, over
+  366 days → permanent) so the reported duration always matches what Telegram enforces.
+- **Verification anti-spam** — a failed verification declines with a `verify_retry_seconds`
+  (default 180) cooldown before re-applying; after `verify_max_fails` (default 3) failures
+  **within a rolling window** the applicant is auto-banned for the configured duration. Strikes
+  persist across restarts, reset on success, and **age out** so a genuine user's isolated
+  mistakes don't accumulate. Negative values disable the cooldown / auto-ban.
+- `required_channel_fail_open` — keep the default fail-open (a channel-permission slip won't
+  lock everyone out) or set `false` to strictly enforce the channel gate.
+
+### Fixed
+- **Build toolchain** raised to **Go 1.26.4** (`go.mod` was `1.25.7`, below the fix for two
+  stdlib advisories — `net/textproto` GO-2026-5039 and `crypto/x509` GO-2026-5037); **CI now
+  runs `govulncheck`**. (The deployed binary was already built with 1.26.4.)
+- **Stale DM quiz buttons** can no longer answer a *new* verification: each pending carries a
+  random **nonce** in its callback data (legacy 3-part buttons still work across the upgrade).
+- **`/ban` report button** reports honestly — a failed ban no longer claims success.
+- **Verification auto-ban** only clears an applicant's strikes when the ban **actually
+  succeeds**; where the bot lacks ban rights, strikes are kept (no infinite-retry loop) and
+  admins keep getting alerted.
+- **Data race** in the verification cooldown read fixed (fields copied under the lock).
+- **State writes** use a unique temp file + a serialize lock (no shared-`.tmp` clobber under
+  concurrent saves).
+- Config **fail-fast validation**: rejects group id `0`, duplicate group ids, and malformed
+  overlay `repo` / duplicate overlay names. `/news` now logs loudly if it parses 0 items
+  (page-layout drift) instead of silently returning empty.
+
 ## [3.2.0] - 2026-06-20
 
 Auto-delete consistency pass + a third multi-dimension audit (7 fresh dimensions, each
@@ -422,6 +463,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.3.0
 [3.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.2.0
 [3.1.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.3
 [3.1.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.2
