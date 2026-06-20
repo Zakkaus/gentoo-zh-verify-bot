@@ -38,6 +38,13 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	}
 	relInfo.refreshing = true
 	relInfo.mu.Unlock()
+	// Always clear the in-flight flag, even if a fetch panics — otherwise refreshing would stay
+	// true forever and the labels would never refresh again (mirrors pkgCache.refresh/getNews).
+	defer func() {
+		relInfo.mu.Lock()
+		relInfo.refreshing = false
+		relInfo.mu.Unlock()
+	}()
 
 	deb := fetchDebianStatus(ctx, now)
 	ubu, ubuRel := fetchUbuntu(ctx, now)
@@ -53,7 +60,6 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 		relInfo.debian = map[string]string{} // mark attempted so we don't refetch every call
 	}
 	relInfo.fetched = now
-	relInfo.refreshing = false
 	relInfo.mu.Unlock()
 }
 

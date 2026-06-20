@@ -10,7 +10,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 var bugIDRe = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -93,9 +92,10 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 	defer cancel()
 	info, ok := fetchBug(hc, id)
 	if !ok {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID),
-			fmt.Sprintf("❓ 取不到 Bug %s 的详情(可能不存在或非公开)。直接看:%s", id, link)).
-			WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+		// Route through replyLookupPlain like every other lookup's not-found path: reply-linked
+		// + auto-deleted with the command, instead of lingering in the group forever.
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID,
+			fmt.Sprintf("❓ 取不到 Bug %s 的详情(可能不存在或非公开)。直接看:%s", id, link))
 		return nil
 	}
 
