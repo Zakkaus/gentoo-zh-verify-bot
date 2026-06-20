@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-06-20
+
+### Added
+- `/armpkgs` now also checks **AUR** (from the PKGBUILD `arch=()` declaration: any /
+  aarch64 / 32-bit-ARM-only / x86-only).
+
+### Fixed
+- `/distro` no longer mis-attributes a different distro's repo to a family when the repo
+  id merely shares a prefix (e.g. Arch Linux POWER's `archpower_*` was being counted as
+  "Arch"); matching now requires an exact id or a `<prefix>_<release>` form.
+
 ## [2.4.0] - 2026-06-20
 
 ### Added
@@ -250,6 +261,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.0
 [2.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.4.0
 [2.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.2.0
