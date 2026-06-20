@@ -102,6 +102,10 @@ type Config struct {
 	// BanSeconds: default ban duration for /ban, /sb and the auto-ban after repeated failed
 	// verification. 0 => permanent (the default). Runtime-adjustable by admins with /bantime.
 	BanSeconds int `json:"ban_seconds"`
+	// MuteSeconds: default /mute (禁言) duration in seconds — the user stays in the group but
+	// can't send messages until it expires (Telegram auto-lifts it). Default 3600 (1h); mute is
+	// always timed (no permanent mute). Admins can override per-use inline, e.g. "/mute 30m".
+	MuteSeconds int `json:"mute_seconds"`
 	// VerifyRetrySeconds: how long a declined applicant should wait before re-applying
 	// (default 180). Re-applying sooner is declined with a "please wait" notice; negative => no cooldown.
 	VerifyRetrySeconds int `json:"verify_retry_seconds"`
@@ -237,6 +241,14 @@ func LoadConfig(path string) (*Config, error) {
 	if c.VerifyMaxFails == 0 {
 		c.VerifyMaxFails = 3 // negative => never auto-ban
 	}
+	if c.MuteSeconds <= 0 {
+		c.MuteSeconds = 3600 // mute is always timed; default 1h (no permanent mute)
+	}
+	// Normalize config-supplied durations to Telegram's honoured window, mirroring the runtime
+	// /bantime + inline /mute clamp — so an out-of-range config value can't silently become a
+	// permanent ban/mute while the bot reports a finite duration.
+	c.BanSeconds = clampBanSecs(c.BanSeconds)
+	c.MuteSeconds = clampMuteSecs(c.MuteSeconds)
 	if c.PrivateReply == "" {
 		c.PrivateReply = defaultPrivateReply
 	}

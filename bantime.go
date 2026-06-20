@@ -17,6 +17,35 @@ import (
 // so the displayed duration always matches the actual effect.
 const telegramBanMax = 366 * 86400
 
+// clampBanSecs maps a ban duration onto what Telegram actually enforces, so a config value and
+// the displayed duration can't disagree: <=0 stays permanent, 1..29s becomes 30s (Telegram
+// treats <30s as permanent), and >366d becomes permanent (0).
+func clampBanSecs(secs int) int {
+	switch {
+	case secs <= 0:
+		return 0
+	case secs < 30:
+		return 30
+	case secs > telegramBanMax:
+		return 0
+	default:
+		return secs
+	}
+}
+
+// clampMuteSecs keeps a mute duration finite and Telegram-honoured (mute has no permanent
+// option): <30s -> 30s, >366d -> 366d. Caller floors <=0 to the default first.
+func clampMuteSecs(secs int) int {
+	switch {
+	case secs < 30:
+		return 30
+	case secs > telegramBanMax:
+		return telegramBanMax
+	default:
+		return secs
+	}
+}
+
 // parseBanDuration parses a /bantime argument into seconds: "0" (or 永久/perm) => permanent
 // (0), a bare number => seconds, or a number with a unit suffix s/m/h/d. It clamps to
 // Telegram's honoured window: a value under 30s is raised to 30s, and a value over 366 days
@@ -91,16 +120,28 @@ func (v *Verifier) applyBan(c context.Context, bot *telego.Bot, gid, uid int64, 
 // repeat-failure auto-ban. "/bantime" shows; "/bantime 0" => permanent; "/bantime 7d", etc.
 // Runtime override of cfg.BanSeconds (resets to the config value on restart).
 func (v *Verifier) onBanTime(ctx *th.Context, update telego.Update) error {
+	usage := "用法:/bantime <时长>,设定 /ban、/sb 和验证自动封禁的封禁时长:\n" +
+		"• /bantime 0 —— 永久封禁(被封后无法再加入本群)\n" +
+		"• /bantime 7d / 12h / 30m / 3600 —— 限时封禁(到期后可重新申请加入,相当于「踢出 + 冷静期」)\n" +
+		"(d=天 h=小时 m=分钟,纯数字=秒;最少 30 秒)"
 	return v.adminCmd(ctx, update, func() string {
 		arg := strings.TrimSpace(commandArg(update.Message.Text))
 		if arg == "" {
-			return fmt.Sprintf("⏱ 当前封禁时长:%s。\n用法:/bantime 0(永久)、/bantime 7d、/bantime 12h、/bantime 30m、/bantime 3600(秒)。", banDurationText(v.banDuration()))
+			kind := "永久,被封后无法再加入"
+			if v.banDuration() > 0 {
+				kind = "限时,到期后可重新加入"
+			}
+			return fmt.Sprintf("⏱ 当前封禁时长:%s(%s)。\n\n%s", banDurationText(v.banDuration()), kind, usage)
 		}
 		secs, ok := parseBanDuration(arg)
 		if !ok {
-			return "用法:/bantime 0(永久)、/bantime 7d、/bantime 12h、/bantime 30m、/bantime 3600(秒)。"
+			return usage
 		}
 		v.setBanDuration(secs)
-		return fmt.Sprintf("✅ 已设定封禁时长:%s。/ban、/sb 及验证连续失败自动封禁都会使用它。", banDurationText(secs))
+		kind := "永久,被封后无法再加入本群"
+		if secs > 0 {
+			kind = "限时,到期后可重新申请加入(相当于踢出 + 冷静期)"
+		}
+		return fmt.Sprintf("✅ 已设定封禁时长:%s —— %s。\n/ban、/sb 及验证连续失败自动封禁都会使用它。", banDurationText(secs), kind)
 	})
 }

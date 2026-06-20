@@ -29,8 +29,10 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 	admin := append([]telego.BotCommand{
 		{Command: "start", Description: "[管理] 开启入群验证"},
 		{Command: "stop", Description: "[管理] 关闭入群验证"},
-		{Command: "sb", Description: "[管理] 回复消息:删消息并封禁(时长见 /bantime)"},
-		{Command: "ban", Description: "[管理] 回复消息:删消息并封禁(时长见 /bantime)"},
+		{Command: "mute", Description: "[管理] 回复消息:禁言(留群但不能发言;默认1h,可 /mute 30m 指定)"},
+		{Command: "unmute", Description: "[管理] 回复消息:解除禁言"},
+		{Command: "sb", Description: "[管理] 回复消息:举报并封禁(清除其全部消息,时长见 /bantime)"},
+		{Command: "ban", Description: "[管理] 回复消息:封禁(踢出群,仅删该消息,时长见 /bantime)"},
 		{Command: "warn", Description: fmt.Sprintf("[管理] 回复消息:警告用户(满 %d 次自动踢出)", warnLimit)},
 		{Command: "clearwarn", Description: "[管理] 回复消息:清除用户警告"},
 		{Command: "bc", Description: "[管理] 频道马甲封禁开关 / 白名单"},

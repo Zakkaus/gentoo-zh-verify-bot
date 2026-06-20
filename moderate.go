@@ -89,10 +89,13 @@ func (v *Verifier) onBan(ctx *th.Context, update telego.Update) error {
 	return v.moderate(ctx, update, "/ban")
 }
 
-// moderate implements /sb and /ban: delete the replied message and ban the user for the
-// configured duration (banDuration / /bantime; 0 = permanent). Reply to the offender's
-// message; admin-only; works in any guarded group. /sb and /ban behave the same (both honour
-// the configured duration) — two names are kept for familiarity.
+// moderate implements the two reply-to-a-message moderation commands; both ban the user for
+// the configured duration (banDuration / /bantime; 0 = permanent) and log to the admin chat:
+//   - /sb  = 举报并封禁 (report + ban): deletes ALL of the user's messages in the group
+//     (revoke_messages) — for spam cleanup — then bans.
+//   - /ban = 封禁 (ban): deletes only the replied-to message, then bans.
+//
+// Admin-only; any guarded group.
 func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -106,32 +109,24 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
 
-	if !v.isGroupAdmin(c, bot, gid, msg.From.ID) {
-		v.notify(c, bot, gid, fmt.Sprintf("⛔ %s 只能由群管理员使用。", cmd))
+	target := v.warnPrecheck(ctx, msg, cmd, true) // shared admin-gate + reply-target + skip-admins
+	if target == nil {
 		return nil
 	}
-	if msg.ReplyToMessage == nil || msg.ReplyToMessage.From == nil {
-		v.notify(c, bot, gid, fmt.Sprintf("用法:回复要处理的用户的消息,再发送 %s。", cmd))
-		return nil
-	}
-	target := msg.ReplyToMessage.From
-	if isAdmin, err := v.adminStatus(c, bot, gid, target.ID); err != nil {
-		v.notify(c, bot, gid, "⚠️ 无法确认目标身份,请稍后重试。")
-		return nil
-	} else if isAdmin {
-		v.notify(c, bot, gid, "目标是管理员,已忽略。")
-		return nil
-	}
-
 	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
 
 	secs := v.banDuration()
-	if err := v.applyBan(c, bot, gid, target.ID, secs, true); err != nil {
+	revoke := cmd == "/sb" // /sb purges all of the user's messages; /ban only the replied one (deleted above)
+	if err := v.applyBan(c, bot, gid, target.ID, secs, revoke); err != nil {
 		log.Printf("%s ban user=%d in %d: %v", cmd, target.ID, gid, err)
 		v.notify(c, bot, gid, "❌ 操作失败:bot 可能缺少「封禁用户」权限。")
 		return nil
 	}
-	action := fmt.Sprintf("已封禁(%s)", banDurationText(secs))
+	verb := "封禁"
+	if cmd == "/sb" {
+		verb = "举报并封禁(已清除其全部消息)" // /sb is the report-and-ban variant + message purge
+	}
+	action := fmt.Sprintf("已%s(%s)", verb, banDurationText(secs))
 
 	v.notify(c, bot, gid, fmt.Sprintf("✅ %s:%s(id %d),操作人 %s。", action, displayName(target), target.ID, displayName(msg.From)))
 	if v.cfg.AdminLogChatID != 0 {

@@ -142,8 +142,11 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/stop — 关闭入群验证\n" +
 			"/rich — 开关富文本输出(/pkg /use)\n" +
 			"/autodel — 开关/调节查询结果自动删除(/autodel on|off|<分钟>,默认3分钟)\n" +
-			"/bantime — 设定封禁时长(/bantime 0 永久、7d、12h、30m、3600 秒)\n" +
-			"/sb、/ban — 回复某消息:删消息并封禁(时长由 /bantime 决定,默认永久)\n" +
+			"/bantime — 设定封禁时长:0=永久(不能再进群);7d/12h/30m/3600=限时(到期可重新加入,相当于踢出)。默认永久\n" +
+			"/mute — 回复某条消息:禁言发送者(留在群里但不能发言,到期自动解除);默认1h,可 /mute 30m、/mute 12h 指定时长\n" +
+			"/unmute — 回复某条消息:解除该用户的禁言\n" +
+			"/sb — 回复某条消息:举报并封禁(清除该用户在群里的全部消息 + 按 /bantime 时长封禁)\n" +
+			"/ban — 回复某条消息:封禁/踢出群(仅删被回复的那条消息 + 按 /bantime 时长封禁)\n" +
 			fmt.Sprintf("/warn — 回复某消息:警告用户(满 %d 次自动踢出)\n", v.cfg.WarnLimit) +
 			"/clearwarn — 回复某消息:清除用户警告\n" +
 			"/bc — 频道马甲封禁开关;/bc allow|deny <频道id> 管白名单"
