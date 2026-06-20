@@ -59,7 +59,7 @@ func TestReleaseLabel(t *testing.T) {
 		{"alpine_edge", "edge", []string{"alpine_"}},
 		{"opensuse_leap_15_6", "15.6", []string{"opensuse_leap"}},
 		{"almalinux_9", "9", []string{"epel_", "centos_", "almalinux_", "rockylinux_", "rhel_"}},
-		{"arch", "", []string{"arch"}},                            // rolling, exact prefix -> no label
+		{"arch", "", []string{"arch"}},                               // rolling, exact prefix -> no label
 		{"opensuse_tumbleweed", "", []string{"opensuse_tumbleweed"}}, // rolling
 	} {
 		if got := releaseLabel(c.repo, c.prefixes); got != c.want {
