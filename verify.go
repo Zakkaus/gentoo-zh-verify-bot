@@ -203,6 +203,24 @@ func (v *Verifier) stats() (date string, approved, declined int) {
 	return v.statDate, v.approved, v.declined
 }
 
+// writeJSONFile atomically writes val as JSON to path (tmp + rename), logging any failure
+// so a missing/unwritable state directory is visible rather than silently dropping state.
+func writeJSONFile(path string, val any) {
+	data, err := json.Marshal(val)
+	if err != nil {
+		log.Printf("state: marshal %s: %v", path, err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("state: write %s: %v", path, err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		log.Printf("state: rename %s: %v", path, err)
+	}
+}
+
 func (v *Verifier) save() {
 	if v.statePath == "" {
 		return
@@ -217,14 +235,7 @@ func (v *Verifier) save() {
 			QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Deadline: p.deadline.Unix()})
 	}
 	v.mu.Unlock()
-	data, err := json.Marshal(recs)
-	if err != nil {
-		return
-	}
-	tmp := v.statePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err == nil {
-		_ = os.Rename(tmp, v.statePath)
-	}
+	writeJSONFile(v.statePath, recs)
 }
 
 func (v *Verifier) load(bot *telego.Bot) {

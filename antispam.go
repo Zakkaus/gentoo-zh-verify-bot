@@ -38,7 +38,8 @@ func (v *Verifier) loadAntispam() {
 		return
 	}
 	var st antispamState
-	if json.Unmarshal(data, &st) != nil {
+	if err := json.Unmarshal(data, &st); err != nil {
+		log.Printf("antispam load: %v", err)
 		return
 	}
 	v.acMu.Lock()
@@ -60,14 +61,7 @@ func (v *Verifier) saveAntispam() {
 		st.Whitelist = append(st.Whitelist, id)
 	}
 	v.acMu.RUnlock()
-	data, err := json.Marshal(st)
-	if err != nil {
-		return
-	}
-	tmp := v.acPath + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, v.acPath)
-	}
+	writeJSONFile(v.acPath, st)
 }
 
 func (v *Verifier) antispamEnabled() bool {

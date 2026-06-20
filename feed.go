@@ -85,7 +85,9 @@ func loadFeedState(path string) feedState {
 	var st feedState
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
-			_ = json.Unmarshal(data, &st)
+			if err := json.Unmarshal(data, &st); err != nil {
+				log.Printf("feed state load %s: %v", path, err)
+			}
 		}
 	}
 	return st
@@ -95,14 +97,7 @@ func saveFeedState(path string, st feedState) {
 	if path == "" {
 		return
 	}
-	data, err := json.Marshal(st)
-	if err != nil {
-		return
-	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, path)
-	}
+	writeJSONFile(path, st)
 }
 
 // postFeed sends one feed item. It returns false on a send failure so the caller

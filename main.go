@@ -12,6 +12,10 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
+// version is the build version, set at build time via
+// -ldflags "-X main.version=$(git describe --tags)"; "dev" for a plain `go build`.
+var version = "dev"
+
 func main() {
 	configPath := flag.String("config", "/etc/gentoo-zh-verify-bot/config.json", "path to config.json")
 	flag.Parse()
@@ -61,7 +65,7 @@ func main() {
 	}
 	v.botUsername = me.Username
 	v.botID = me.ID
-	log.Printf("verify bot @%s started — groups=%d timeout=%ds", me.Username, len(cfg.Groups), cfg.TimeoutSeconds)
+	log.Printf("verify bot @%s (%s) started — groups=%d timeout=%ds", me.Username, version, len(cfg.Groups), cfg.TimeoutSeconds)
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
 		log.Printf("  group %d: required_channel=%d questions=%d", g.ID, cfg.requiredChannel(g.ID), len(cfg.questions(g.ID)))
@@ -71,6 +75,10 @@ func main() {
 	setupCommands(ctx, bot, cfg.WarnLimit)
 	sd := os.Getenv("STATE_DIRECTORY")
 	if sd != "" {
+		if err := os.MkdirAll(sd, 0o700); err != nil {
+			// Don't crash — persistence just won't work; the save helpers log each failure too.
+			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
+		}
 		v.statePath = sd + "/pending.json"
 		v.load(bot)
 		v.warnPath = sd + "/warns.json"

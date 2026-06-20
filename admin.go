@@ -24,7 +24,7 @@ func (v *Verifier) stateText() string {
 
 func (v *Verifier) onPing(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
-		return fmt.Sprintf("🏓 pong | 运行 %s | 验证:%s", uptimeStr(v.startTime), v.stateText())
+		return fmt.Sprintf("🏓 pong | %s | 运行 %s | 验证:%s", version, uptimeStr(v.startTime), v.stateText())
 	})
 }
 

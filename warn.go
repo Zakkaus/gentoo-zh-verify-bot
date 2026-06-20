@@ -27,7 +27,8 @@ func (v *Verifier) loadWarns() {
 		return
 	}
 	var recs []warnRec
-	if json.Unmarshal(data, &recs) != nil {
+	if err := json.Unmarshal(data, &recs); err != nil {
+		log.Printf("warns load: %v", err)
 		return
 	}
 	v.mu.Lock()
@@ -55,14 +56,7 @@ func (v *Verifier) saveWarns() {
 		}
 	}
 	v.mu.Unlock()
-	data, err := json.Marshal(recs)
-	if err != nil {
-		return
-	}
-	tmp := v.warnPath + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, v.warnPath)
-	}
+	writeJSONFile(v.warnPath, recs)
 }
 
 // warnPrecheck shares the admin-gate + reply-target resolution of /warn and /clearwarn.
