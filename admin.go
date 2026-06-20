@@ -83,6 +83,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		"/use <包名> — 某个包的 USE 标志 + 信息\n" +
 		"/bug <编号> — 查询 Gentoo Bugzilla\n" +
 		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
+		"/wiki <关键词> — 搜索 Gentoo / Arch wiki(含中文页)\n" +
 		"/ping — 机器人状态 / 运行时长\n" +
 		"/stats — 今日通过 / 拒绝人数\n" +
 		"/help — 显示本帮助"
