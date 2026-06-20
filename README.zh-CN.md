@@ -18,7 +18,7 @@
 - **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述,每个都链到其 useflags 页)+ 信息。支持**包名**、**`分类/包名`** 或直接粘贴 **packages.gentoo.org(或 overlay 的 GitHub)链接**。数据取自官方树 JSON,或 overlay 的 ebuild / `metadata.xml`。
 - **Bugzilla**:`/bug <编号>` 查询 [Gentoo Bugzilla](https://bugs.gentoo.org) 工单(标题 + 状态),取不到则给链接。
 - **新闻**:`/news [关键词]` 列出 / 搜索 [Gentoo 新闻条目](https://www.gentoo.org/support/news-items/)。
-- **自动播报(可选)**:设置 `feed_chat_id` 后,机器人每隔 `feed_interval_seconds`(默认 300 秒)轮询 Gentoo Bugzilla + 新闻,把**新增的** bug / 新闻发到该频道(机器人需是该频道管理员且有发帖权)。去重 + 重启不丢;首次运行只记录基线,不补发历史。
+- **自动播报(可选)**:配置 `feed`(或用 `feeds` 数组配多个目标)后,机器人每隔 `interval_seconds`(默认 300 秒)轮询 Gentoo Bugzilla + 新闻,把**新增的** bug / 新闻发到该频道(机器人需是该频道管理员且有发帖权)。每个 feed 有各自的语言(`lang`)与过滤,所有 feed 每周期共享一次抓取。去重 + 重启不丢;首次运行只记录基线,不补发历史。
 - **重启不丢**:进行中的验证会持久化到磁盘,重启后恢复(systemd 下,见 unit 里的 `StateDirectory=`)。
 - **富文本输出(可选,默认关)**:`/pkg`、`/use` 可用 Bot API 10.1 富消息渲染(标题、列表、可折叠分组),由配置 `rich_messages` 或管理员 `/rich` 命令开关,失败自动回落纯 HTML。默认关闭(旧 / 第三方客户端不渲染富消息);入群验证、`/bug`、`/news` 始终用纯 HTML。
 - 机器人自己发的群消息在 TTL 后自动删除以保持整洁;命令显示在 Telegram 的 `/` 菜单中(管理命令仅管理员可见)。
@@ -26,7 +26,7 @@
 ## 部署
 
 ### 1. 创建机器人
-通过 [@BotFather](https://t.me/BotFather) 创建机器人取得 token,并**关闭隐私模式**(让它能读取群消息)。
+通过 [@BotFather](https://t.me/BotFather) 创建机器人取得 token。(隐私模式可保持**开启**:本机器人只处理命令、入群申请与按钮回调,不读取普通群消息。)
 
 ### 2. 群 / 频道设置
 - 把机器人加入每个群并设为**管理员**,授予三项权限:**批准新成员**、**封禁用户**、**删除消息**。
@@ -62,14 +62,15 @@ GITHUB_TOKEN=ghp_xxx
 | `stats_timezone` | `/stats` 每日清零所用 IANA 时区(默认 UTC+8) |
 | `rich_messages` | `/pkg`、`/use` 用 Bot API 10.1 富消息(默认 `false`;也可群内 `/rich` 开关) |
 | `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
-| `feed` | 可选:自动播报对象——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天(见下);省略即关闭 |
+| `feed` / `feeds` | 可选:自动播报——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天。`feed` 是单个目标;`feeds` 是它们的数组(每个有各自的聊天、语言、过滤)。见下;省略即关闭 |
 | `questions` | 题库;每次随机抽一题,选项顺序打乱 |
 
-可选的 **`feed`** 对象(整个省略即关闭):
+可选的 **`feed`** 对象——或 **`feeds`**(这些对象的数组,配多个目标,每周期共享一次抓取)。两者都省略即关闭:
 
 | `feed` 键 | 含义 |
 | --- | --- |
 | `chat_id` | 发送目标频道/群(`0`/缺省关闭;机器人须是该频道管理员且有发帖权) |
+| `lang` | bug 字段标签语言:`zh`(默认)或 `en` |
 | `interval_seconds` | 轮询间隔(默认 300,最小 60) |
 | `bugs` | 是否播报新 Bugzilla bug(默认 `true`) |
 | `news` | 是否播报新新闻(默认 `true`) |
