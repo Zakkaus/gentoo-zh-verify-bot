@@ -25,6 +25,7 @@
 - **论坛搜索**:`/bbs <关键词>` 内联返回 [Arch Linux CN](https://forum.archlinuxcn.org) 论坛(中文,走 Discourse API)的结果,并附各大英文论坛(Gentoo、Arch BBS、Ubuntu、Debian)的一键站内搜索按钮 —— 中文优先,英文备用。
 - **arm64 状态**:`/arm <包名>` 显示一个 Gentoo 包在 **arm64 (aarch64) 上的 keyword 状态** —— 稳定、~测试、还是未 keyword —— ARM 用户一眼就能看出该包在自己架构上能不能用。
 - **跨发行版 arm64**:`/armpkgs <包名>` 查该包在 **Gentoo、Debian、Ubuntu、Fedora、Arch Linux ARM、AUR** 上的 arm64 支持(各走自己的按架构 API;AUR 读 PKGBUILD 的 `arch=()`)。特别适合 Gentoo 还没给某包 keyword arm64、但别的发行版已经有的情况 —— 这通常说明它能用,可 `ACCEPT_KEYWORDS="~arm64"` 强制开启自行编译。
+- **跨发行版通道标注**:Debian/Ubuntu 的发行版按**实时角色**标注(`stable`/`testing`/`oldstable`/`LTS`),取自 `distro-info-data` 而非写死 —— Debian 下次发布时"stable"会自动跟着变。**RHEL 生态拆分**为 RHEL(AlmaLinux/Rocky 1:1 重建 = 真实 RHEL 版本)、**CentOS Stream**(滚动上游)和 **EPEL**,因为它们是不同的产品。
 - **跨发行版查包**:`/pkgs <包名>`(别名 `/distro`)一条消息显示一个包在 **Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL/EPEL、openSUSE(Leap + 风滚草)** 各自的当前版本(走 [Repology](https://repology.org) API),同生态的变体单独列行。每个版本都标注它来自哪个 release(如 Debian `(unstable)`、Fedora `(43)`、Alpine `(edge)`);每个发行版都链到其软件包页面;查不到精确匹配时给出最接近包的版本表 + 可折叠的其它匹配。支持 `rich_messages` / `/rich` 富文本开关(对齐 `/pkg`、`/use`)。
 - **自动播报(可选)**:配置 `feed`(或用 `feeds` 数组配多个目标)后,机器人每隔 `interval_seconds`(默认 300 秒)轮询 Gentoo Bugzilla + 新闻,把**新增的** bug / 新闻发到该频道(机器人需是该频道管理员且有发帖权)。每个 feed 有各自的语言(`lang`)与过滤,所有 feed 每周期共享一次抓取。去重 + 重启不丢;首次运行只记录基线,不补发历史。
 - **重启不丢**:进行中的验证会持久化到磁盘,重启后恢复(systemd 下,见 unit 里的 `StateDirectory=`)。

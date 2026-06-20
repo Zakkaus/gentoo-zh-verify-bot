@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.7.0] - 2026-06-20
+
+### Added
+- `/pkgs` labels Debian/Ubuntu releases by their **live role** — `stable` / `testing` /
+  `oldstable` / `LTS` — derived from Debian's `distro-info-data` (release dates), not
+  hardcoded; so when Debian 14 releases, "stable" follows it with no code change. (Debian
+  firefox now reads `140.12.0 (13 stable)`.)
+- The **RHEL ecosystem is split into three distinct families**: **RHEL** (the AlmaLinux/Rocky
+  1:1 rebuilds — the actual RHEL versions), **CentOS Stream** (the rolling upstream of the
+  next RHEL), and **EPEL** — each with its own version, since they are different products.
+  (firefox now shows `RHEL 140.11.0 (9)` separately from `CentOS Stream 140.11.0 (10)`.)
+
 ## [2.6.1] - 2026-06-20
 
 ### Fixed
@@ -316,6 +328,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.7.0
 [2.6.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.6.1
 [2.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.6.0
 [2.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.3
