@@ -86,15 +86,20 @@ func saveFeedState(path string, st feedState) {
 	}
 }
 
-func postFeed(ctx context.Context, bot *telego.Bot, chatID int64, text string, silent bool) {
+// postFeed sends one feed item. It returns false on a send failure so the caller
+// won't advance the dedup cursor past an item that was never delivered (e.g. a
+// transient error, a Telegram rate-limit, or the context being cancelled at shutdown).
+func postFeed(ctx context.Context, bot *telego.Bot, chatID int64, text string, silent bool) bool {
 	m := htmlMessage(chatID, text)
 	if silent {
 		m = m.WithDisableNotification()
 	}
 	if _, err := bot.SendMessage(ctx, m); err != nil {
 		log.Printf("feed: post to %d: %v", chatID, err)
+		return false
 	}
 	time.Sleep(time.Second) // gentle pacing for catch-up bursts
+	return true
 }
 
 // dateOnly turns "2026-02-26T04:42:47Z" into "2026-02-26".
@@ -200,21 +205,32 @@ func feedStatePath(dir string, chatID int64) string {
 // postFeedItems posts the bugs/news that are new to this feed (filtered, localized, deduped).
 func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feedState, bugs []recentBug, news []newsItem) {
 	if f.bugsOn() && len(bugs) > 0 {
-		if st.LastBugID != 0 { // not first run -> post new matching bugs (oldest first)
+		if st.LastBugID == 0 {
+			st.LastBugID = bugs[0].ID // first run: record a baseline, don't backfill history
+		} else {
 			var nb []recentBug
 			for _, b := range bugs {
 				if b.ID > st.LastBugID && f.matchesBug(b) {
 					nb = append(nb, b)
 				}
 			}
-			for i := len(nb) - 1; i >= 0; i-- {
-				postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.silentBugs())
+			delivered := true
+			for i := len(nb) - 1; i >= 0; i-- { // oldest first
+				if !postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.silentBugs()) {
+					delivered = false // leave the cursor so the next cycle retries this item
+					break
+				}
+				st.LastBugID = nb[i].ID
+			}
+			if delivered {
+				st.LastBugID = bugs[0].ID // all sent -> advance past newest seen (incl. filtered-out)
 			}
 		}
-		st.LastBugID = bugs[0].ID
 	}
 	if f.newsOn() && len(news) > 0 {
-		if st.LastNewsURL != "" { // not first run -> post new news (oldest first)
+		if st.LastNewsURL == "" {
+			st.LastNewsURL = news[0].url // first run: baseline only
+		} else {
 			var nn []newsItem
 			for _, n := range news {
 				if n.url == st.LastNewsURL {
@@ -222,11 +238,18 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 				}
 				nn = append(nn, n)
 			}
-			for i := len(nn) - 1; i >= 0; i-- {
-				postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false)
+			delivered := true
+			for i := len(nn) - 1; i >= 0; i-- { // oldest first
+				if !postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false) {
+					delivered = false
+					break
+				}
+				st.LastNewsURL = nn[i].url
+			}
+			if delivered {
+				st.LastNewsURL = news[0].url
 			}
 		}
-		st.LastNewsURL = news[0].url
 	}
 }
 
