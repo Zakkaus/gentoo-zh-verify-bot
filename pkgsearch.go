@@ -68,6 +68,50 @@ var httpClient = &http.Client{Timeout: 25 * time.Second}
 // limit from 60/h to 5000/h. Reading public repos needs a token with NO scopes.
 var githubToken string
 
+// httpGet issues a GET with the shared client + User-Agent (plus any extra headers)
+// and returns the response only on HTTP 200; the caller must close resp.Body.
+func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	for k, vs := range hdr {
+		for _, val := range vs {
+			req.Header.Add(k, val)
+		}
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+	}
+	return resp, nil
+}
+
+// httpGetJSON GETs url and decodes a 200 JSON response into dst (streamed, no size cap).
+func httpGetJSON(ctx context.Context, url string, hdr http.Header, dst any) error {
+	resp, err := httpGet(ctx, url, hdr)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return json.NewDecoder(resp.Body).Decode(dst)
+}
+
+// httpGetBody GETs url and returns up to limit bytes of a 200 response (for HTML/text scraping).
+func httpGetBody(ctx context.Context, url string, limit int64) ([]byte, error) {
+	resp, err := httpGet(ctx, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(io.LimitReader(resp.Body, limit))
+}
+
 // pkgCache holds, per overlay, a map of "category/package" atom -> latest version string.
 type pkgCache struct {
 	mu          sync.Mutex
@@ -135,22 +179,17 @@ func ebuildAtomVer(path string) (string, string, bool) {
 	return dir, ver, true
 }
 
+// treeURL returns the GitHub web tree URL for an atom in this overlay.
+func (o overlay) treeURL(atom string) string {
+	return "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + atom
+}
+
 // fetchOverlay returns atom -> latest version for one overlay, via the cached GitHub recursive tree.
 func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 	u := fmt.Sprintf("https://api.github.com/repos/%s/git/trees/%s?recursive=1", o.repo, o.branch)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/vnd.github+json")
+	hdr := http.Header{"Accept": {"application/vnd.github+json"}}
 	if githubToken != "" {
-		req.Header.Set("Authorization", "Bearer "+githubToken)
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github trees %s: HTTP %d", o.repo, resp.StatusCode)
+		hdr.Set("Authorization", "Bearer "+githubToken)
 	}
 	var tree struct {
 		Tree []struct {
@@ -159,7 +198,7 @@ func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 		} `json:"tree"`
 		Truncated bool `json:"truncated"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
+	if err := httpGetJSON(ctx, u, hdr, &tree); err != nil {
 		return nil, err
 	}
 	pkgs := map[string]string{}
@@ -272,38 +311,16 @@ var verC = struct {
 	m  map[string]verInfo
 }{m: map[string]verInfo{}}
 
-// pkgVersion returns (amd64-stable, newest) versions for a "cat/pkg" atom via packages.gentoo.org JSON.
-func pkgVersion(ctx context.Context, atom string) (string, string) {
-	verC.mu.Lock()
-	if v, ok := verC.m[atom]; ok && time.Since(v.fetched) < verCacheTTL {
-		verC.mu.Unlock()
-		return v.stable, v.latest
-	}
-	verC.mu.Unlock()
+// pkgVersionJSON is one entry of packages.gentoo.org's package "versions" array.
+type pkgVersionJSON struct {
+	Version  string   `json:"version"`
+	Keywords []string `json:"keywords"`
+}
 
-	u := "https://packages.gentoo.org/packages/" + atom + ".json"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", ""
-	}
-	var pj struct {
-		Versions []struct {
-			Version  string   `json:"version"`
-			Keywords []string `json:"keywords"`
-		} `json:"versions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&pj); err != nil || len(pj.Versions) == 0 {
-		return "", ""
-	}
-	// newest non-live version for "latest", newest amd64-stable for "stable" (matches officialInfo)
-	latest, stable := "", ""
-	for _, vv := range pj.Versions {
+// pickStableLatest scans versions (newest-first, as packages.gentoo.org returns them)
+// for the newest non-live version (latest) and the newest amd64-stable version (stable).
+func pickStableLatest(versions []pkgVersionJSON) (stable, latest string) {
+	for _, vv := range versions {
 		if strings.HasPrefix(vv.Version, "9999") { // skip live ebuilds
 			continue
 		}
@@ -322,6 +339,25 @@ func pkgVersion(ctx context.Context, atom string) (string, string) {
 			break
 		}
 	}
+	return stable, latest
+}
+
+// pkgVersion returns (amd64-stable, newest) versions for a "cat/pkg" atom via packages.gentoo.org JSON.
+func pkgVersion(ctx context.Context, atom string) (string, string) {
+	verC.mu.Lock()
+	if v, ok := verC.m[atom]; ok && time.Since(v.fetched) < verCacheTTL {
+		verC.mu.Unlock()
+		return v.stable, v.latest
+	}
+	verC.mu.Unlock()
+
+	var pj struct {
+		Versions []pkgVersionJSON `json:"versions"`
+	}
+	if err := httpGetJSON(ctx, "https://packages.gentoo.org/packages/"+atom+".json", nil, &pj); err != nil || len(pj.Versions) == 0 {
+		return "", ""
+	}
+	stable, latest := pickStableLatest(pj.Versions)
 	verC.mu.Lock()
 	verC.m[atom] = verInfo{stable: stable, latest: latest, fetched: time.Now()}
 	verC.mu.Unlock()
@@ -340,16 +376,11 @@ func searchMainTree(ctx context.Context, name string) []string {
 		}
 		return nil
 	}
-	u := "https://packages.gentoo.org/packages/search?q=" + url.QueryEscape(name)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
+	body, err := httpGetBody(ctx, "https://packages.gentoo.org/packages/search?q="+url.QueryEscape(name), 2<<20)
 	if err != nil {
 		log.Printf("main tree search: %v", err)
 		return nil
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	seen := map[string]bool{}
 	low := strings.ToLower(name)
 	type scored struct {
@@ -492,7 +523,7 @@ func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[st
 				ver = " — ~" + esc(vv) // overlay packages are testing (~arch)
 			}
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>%s",
-				esc("https://github.com/"+o.repo+"/tree/"+o.branch+"/"+a), esc(a), ver)
+				esc(o.treeURL(a)), esc(a), ver)
 		}
 	}
 	if !found {
@@ -538,7 +569,7 @@ func renderPkgRich(q string, mainRes []string, vm map[string][2]string, ovRes ma
 				ver = " — ~" + esc(vv)
 			}
 			fmt.Fprintf(&b, "<li><a href=\"%s\">%s</a>%s</li>",
-				esc("https://github.com/"+o.repo+"/tree/"+o.branch+"/"+a), esc(a), ver)
+				esc(o.treeURL(a)), esc(a), ver)
 		}
 		b.WriteString("</ul></details>")
 	}

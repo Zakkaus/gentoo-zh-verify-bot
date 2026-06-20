@@ -45,6 +45,9 @@ type pendingRec struct {
 	Deadline   int64    `json:"deadline"`
 }
 
+// Verifier holds the bot's runtime state: config, the pending-verification map
+// (keyed by group+user), the daily approve/decline counters, and the enabled /
+// rich-output toggles. All mutable fields are guarded by mu.
 type Verifier struct {
 	cfg         *Config
 	botUsername string
@@ -69,6 +72,16 @@ func loadStatsLoc(name string) *time.Location {
 	return time.FixedZone("UTC+8", 8*3600)
 }
 
+// htmlMessage builds the bot's standard outbound message: HTML parse mode with link
+// previews disabled. Chain .WithReplyMarkup / .WithDisableNotification as needed.
+func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
+	return tu.Message(tu.ID(chatID), text).
+		WithParseMode(telego.ModeHTML).
+		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})
+}
+
+// NewVerifier builds a Verifier from config: verification starts enabled, rich output
+// follows cfg.RichMessages, and the stats timezone is resolved (default UTC+8).
 func NewVerifier(cfg *Config) *Verifier {
 	return &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), enabled: true, rich: cfg.RichMessages}
@@ -231,10 +244,8 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	))
 
 	msgID := 0
-	if sent, err := bot.SendMessage(c, tu.Message(tu.ID(gid), body).
-		WithParseMode(telego.ModeHTML).
-		WithReplyMarkup(tu.InlineKeyboard(rows...)).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})); err != nil {
+	if sent, err := bot.SendMessage(c, htmlMessage(gid, body).
+		WithReplyMarkup(tu.InlineKeyboard(rows...))); err != nil {
 		log.Printf("join %d in %d: post challenge failed: %v", uid, gid, err)
 		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 群 %d 未能发出用户 %d 的入群验证消息:%v;请手动处理该申请", gid, uid, err))
 	} else if sent != nil {
@@ -288,11 +299,9 @@ func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64
 			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "📢 关注频道 " + v.cfg.ChannelDisplay, URL: curl}))
 		}
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 我已关注,继续", CallbackData: recheckPrefix + strconv.FormatInt(uid, 10)}))
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid),
+		_, _ = bot.SendMessage(c, htmlMessage(uid,
 			fmt.Sprintf("完成验证还差一步:请先关注频道 %s,关注后回到本对话点「✅ 我已关注,继续」。", v.channelLinkHTML())).
-			WithParseMode(telego.ModeHTML).
-			WithReplyMarkup(tu.InlineKeyboard(rows...)).
-			WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 		return
 	}
 	v.sendQuizzes(c, bot, uid)
@@ -320,11 +329,9 @@ func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 			rows = append(rows, tu.InlineKeyboardRow(
 				telego.InlineKeyboardButton{Text: opt, CallbackData: fmt.Sprintf("%s%s:%s:%d", answerPrefix, gidStr, uidStr, i)}))
 		}
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid),
+		_, _ = bot.SendMessage(c, htmlMessage(uid,
 			fmt.Sprintf("请回答下面的问题完成入群验证:\n\n❓ %s", html.EscapeString(dq.text))).
-			WithParseMode(telego.ModeHTML).
-			WithReplyMarkup(tu.InlineKeyboard(rows...)).
-			WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	}
 }
 

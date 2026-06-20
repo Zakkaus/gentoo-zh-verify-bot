@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"html"
-	"io"
-	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -67,50 +64,19 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 	}
 	infoC.mu.Unlock()
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://packages.gentoo.org/packages/"+atom+".json", nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return pkgFullInfo{}, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return pkgFullInfo{}, false
-	}
 	var pj struct {
-		Description string `json:"description"`
-		Versions    []struct {
-			Version  string   `json:"version"`
-			Keywords []string `json:"keywords"`
-		} `json:"versions"`
-		Use struct {
+		Description string           `json:"description"`
+		Versions    []pkgVersionJSON `json:"versions"`
+		Use         struct {
 			Local  []useEntry `json:"local"`
 			Global []useEntry `json:"global"`
 		} `json:"use"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&pj) != nil {
+	if err := httpGetJSON(ctx, "https://packages.gentoo.org/packages/"+atom+".json", nil, &pj); err != nil {
 		return pkgFullInfo{}, false
 	}
 	info := pkgFullInfo{atom: atom, description: pj.Description, fetched: time.Now()}
-	for _, vv := range pj.Versions {
-		if strings.HasPrefix(vv.Version, "9999") { // skip live ebuilds
-			continue
-		}
-		if info.latest == "" {
-			info.latest = vv.Version
-		}
-		if info.stable == "" {
-			for _, kw := range vv.Keywords {
-				if kw == "amd64" {
-					info.stable = vv.Version
-					break
-				}
-			}
-		}
-		if info.latest != "" && info.stable != "" {
-			break
-		}
-	}
+	info.stable, info.latest = pickStableLatest(pj.Versions)
 	info.local = toUseFlags(pj.Use.Local)
 	info.global = toUseFlags(pj.Use.Global)
 	infoC.mu.Lock()
@@ -120,17 +86,7 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 }
 
 func fetchRaw(ctx context.Context, url string) []byte {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	b, _ := httpGetBody(ctx, url, 1<<20)
 	return b
 }
 
@@ -296,6 +252,30 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
 }
 
+// overlayByName looks up a configured overlay by its display name.
+func overlayByName(name string) (overlay, bool) {
+	for _, o := range overlays {
+		if o.name == name {
+			return o, true
+		}
+	}
+	return overlay{}, false
+}
+
+// overlayRefs renders the overlays in alsoIn (that also carry atom) as a
+// comma-separated list of linked names — the "overlay 也有此包" footer.
+func overlayRefs(alsoIn []string, atom string) string {
+	refs := make([]string, 0, len(alsoIn))
+	for _, ovName := range alsoIn {
+		ref := html.EscapeString(ovName)
+		if o, ok := overlayByName(ovName); ok {
+			ref = fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(o.treeURL(atom)), html.EscapeString(ovName))
+		}
+		refs = append(refs, ref)
+	}
+	return strings.Join(refs, ", ")
+}
+
 func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
@@ -328,19 +308,7 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 		b.WriteString("\n(该包无 USE 标志)")
 	}
 	if len(alsoIn) > 0 {
-		refs := make([]string, 0, len(alsoIn))
-		for _, ovName := range alsoIn {
-			ref := esc(ovName)
-			for _, o := range overlays {
-				if o.name == ovName {
-					u := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + info.atom
-					ref = fmt.Sprintf("<a href=\"%s\">%s</a>", esc(u), esc(ovName))
-					break
-				}
-			}
-			refs = append(refs, ref)
-		}
-		fmt.Fprintf(&b, "\n<i>overlay 也有此包:%s</i>", strings.Join(refs, ", "))
+		fmt.Fprintf(&b, "\n<i>overlay 也有此包:%s</i>", overlayRefs(alsoIn, info.atom))
 	}
 	if overlay {
 		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i>")
@@ -363,9 +331,7 @@ func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int
 			return
 		}
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(chatID), plainHTML).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+	_, _ = bot.SendMessage(c, htmlMessage(chatID, plainHTML))
 }
 
 // renderUseRich builds the Bot API 10.1 rich-message /use — no truncation, full flag
@@ -408,19 +374,7 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 		b.WriteString("<p>(该包无 USE 标志)</p>")
 	}
 	if len(alsoIn) > 0 {
-		refs := make([]string, 0, len(alsoIn))
-		for _, ovName := range alsoIn {
-			ref := esc(ovName)
-			for _, o := range overlays {
-				if o.name == ovName {
-					u := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + info.atom
-					ref = fmt.Sprintf("<a href=\"%s\">%s</a>", esc(u), esc(ovName))
-					break
-				}
-			}
-			refs = append(refs, ref)
-		}
-		fmt.Fprintf(&b, "<p>overlay 也有此包:%s</p>", strings.Join(refs, ", "))
+		fmt.Fprintf(&b, "<p>overlay 也有此包:%s</p>", overlayRefs(alsoIn, info.atom))
 	}
 	if overlay {
 		b.WriteString("<footer><i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i></footer>")
@@ -486,6 +440,56 @@ func normalizeQuery(q string) string {
 	return q
 }
 
+// useSrc records where a /use atom was found: the official tree and/or named overlays.
+type useSrc struct {
+	official bool
+	ovs      []string
+}
+
+// resolveUseSources finds which atom(s) match q for /use and from which sources. An
+// exact "category/package" query resolves directly via the official JSON + overlay
+// caches; a bare name is matched (name-exact) against the official tree search and
+// the overlay caches. Returns atom -> sources (caller picks single / disambiguates).
+func resolveUseSources(ctx context.Context, q string) map[string]*useSrc {
+	srcs := map[string]*useSrc{}
+	get := func(a string) *useSrc {
+		s := srcs[a]
+		if s == nil {
+			s = &useSrc{}
+			srcs[a] = s
+		}
+		return s
+	}
+
+	low := strings.ToLower(q)
+	if strings.Contains(low, "/") && isPkgPath(low) {
+		if _, ok := officialInfo(ctx, q); ok {
+			get(q).official = true
+		}
+		for _, o := range overlays {
+			if pkgC.overlayVer(o.name, q) != "" {
+				s := get(q)
+				s.ovs = append(s.ovs, o.name)
+			}
+		}
+		return srcs
+	}
+	for _, a := range searchMainTree(ctx, q) {
+		if strings.EqualFold(pn(a), q) {
+			get(a).official = true
+		}
+	}
+	for ov, list := range pkgC.search(q) {
+		for _, a := range list {
+			if strings.EqualFold(pn(a), q) {
+				s := get(a)
+				s.ovs = append(s.ovs, ov)
+			}
+		}
+	}
+	return srcs
+}
+
 // onUse handles /use <package> — show one package's USE flags + info (multi-source aware).
 func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -504,48 +508,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	defer cancel()
 	pkgC.refresh(hc)
 
-	low := strings.ToLower(q)
-	exactAtom := strings.Contains(low, "/") && isPkgPath(low)
-
-	type src struct {
-		official bool
-		ovs      []string
-	}
-	srcs := map[string]*src{}
-	get := func(a string) *src {
-		s := srcs[a]
-		if s == nil {
-			s = &src{}
-			srcs[a] = s
-		}
-		return s
-	}
-
-	if exactAtom {
-		if _, ok := officialInfo(hc, q); ok {
-			get(q).official = true
-		}
-		for _, o := range overlays {
-			if pkgC.overlayVer(o.name, q) != "" {
-				s := get(q)
-				s.ovs = append(s.ovs, o.name)
-			}
-		}
-	} else {
-		for _, a := range searchMainTree(hc, q) {
-			if strings.EqualFold(pn(a), q) {
-				get(a).official = true
-			}
-		}
-		for ov, list := range pkgC.search(q) {
-			for _, a := range list {
-				if strings.EqualFold(pn(a), q) {
-					s := get(a)
-					s.ovs = append(s.ovs, ov)
-				}
-			}
-		}
-	}
+	srcs := resolveUseSources(hc, q)
 
 	switch len(srcs) {
 	case 0:
@@ -569,7 +532,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	}
 
 	var atom string
-	var s *src
+	var s *useSrc
 	for a, ss := range srcs {
 		atom, s = a, ss
 	}
@@ -586,14 +549,9 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	}
 	if out == "" && len(s.ovs) > 0 {
 		ovName := s.ovs[0]
-		var o overlay
-		for _, oo := range overlays {
-			if oo.name == ovName {
-				o = oo
-			}
-		}
+		o, _ := overlayByName(ovName)
 		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
-			url := "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + atom
+			url := o.treeURL(atom)
 			out = renderUse(info, "overlay:"+ovName, url, true, s.ovs[1:])
 			if v.isRichEnabled() {
 				outRich = renderUseRich(info, "overlay:"+ovName, url, true, s.ovs[1:])

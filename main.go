@@ -80,7 +80,7 @@ func main() {
 		go runFeeds(ctx, bot, feeds, sd)
 	}
 
-	go pkgC.refresh(context.Background()) // warm the package-search cache in the background
+	go pkgC.refresh(ctx) // warm the package-search cache in the background (cancelled on shutdown)
 
 	if err := bh.Start(); err != nil {
 		log.Fatalf("handler stopped: %v", err)

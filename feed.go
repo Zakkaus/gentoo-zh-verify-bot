@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"html"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // feedState is the on-disk dedup cursor so a restart doesn't re-post or miss items.
@@ -54,21 +52,11 @@ func fetchRecentBugs(ctx context.Context) []recentBug {
 	u := "https://bugs.gentoo.org/rest/bug?order=bug_id%20DESC&limit=30" +
 		"&include_fields=id,summary,status,resolution,product,component,priority,severity," +
 		"keywords,creation_time,cf_stabilisation_atoms,assigned_to,assigned_to_detail,creator,creator_detail"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		log.Printf("feed: bugs fetch: %v", err)
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
 	var br struct {
 		Bugs []recentBug `json:"bugs"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&br) != nil {
+	if err := httpGetJSON(ctx, u, nil, &br); err != nil {
+		log.Printf("feed: bugs fetch: %v", err)
 		return nil
 	}
 	return br.Bugs // newest first (order=bug_id DESC)
@@ -99,9 +87,7 @@ func saveFeedState(path string, st feedState) {
 }
 
 func postFeed(ctx context.Context, bot *telego.Bot, chatID int64, text string, silent bool) {
-	m := tu.Message(tu.ID(chatID), text).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})
+	m := htmlMessage(chatID, text)
 	if silent {
 		m = m.WithDisableNotification()
 	}

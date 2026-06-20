@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"html"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -26,16 +24,6 @@ type bugInfo struct {
 func fetchBug(ctx context.Context, id string) (bugInfo, bool) {
 	u := "https://bugs.gentoo.org/rest/bug/" + id +
 		"?include_fields=summary,status,resolution,product,component,severity"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return bugInfo{}, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return bugInfo{}, false
-	}
 	var br struct {
 		Error bool `json:"error"`
 		Bugs  []struct {
@@ -47,7 +35,7 @@ func fetchBug(ctx context.Context, id string) (bugInfo, bool) {
 			Severity   string `json:"severity"`
 		} `json:"bugs"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&br) != nil || br.Error || len(br.Bugs) == 0 {
+	if err := httpGetJSON(ctx, u, nil, &br); err != nil || br.Error || len(br.Bugs) == 0 {
 		return bugInfo{}, false
 	}
 	b := br.Bugs[0]
@@ -96,8 +84,6 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 		}
 		fmt.Fprintf(&b, "\n产品:%s", html.EscapeString(comp))
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), b.String()).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()))
 	return nil
 }

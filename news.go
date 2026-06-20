@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 type newsItem struct {
@@ -48,14 +45,10 @@ var newsC = struct {
 }{}
 
 func fetchNews(c context.Context) ([]newsItem, error) {
-	req, _ := http.NewRequestWithContext(c, http.MethodGet, newsURL, nil)
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := httpClient.Do(req)
+	body, err := httpGetBody(c, newsURL, 2<<20)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	seen := map[string]bool{}
 	var items []newsItem
 	for _, m := range newsRe.FindAllStringSubmatch(string(body), -1) {
@@ -134,8 +127,6 @@ func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 			b.WriteString("\n没找到匹配的新闻。")
 		}
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), b.String()).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true}))
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()))
 	return nil
 }
