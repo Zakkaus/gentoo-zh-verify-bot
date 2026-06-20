@@ -190,6 +190,8 @@ func (v *Verifier) register(bh *th.BotHandler) {
 		log.Printf("recovered from handler panic: %v", recovered)
 		return nil
 	}))
+	// drop channel sock-puppet posts before any handler (no-op unless block_channel_senders)
+	bh.Use(v.antispam)
 	bh.Handle(v.onAnswer, th.CallbackDataPrefix(answerPrefix))
 	bh.Handle(v.onAdminAction, th.CallbackDataPrefix(adminPrefix))
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))

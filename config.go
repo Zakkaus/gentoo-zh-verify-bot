@@ -82,6 +82,11 @@ type Config struct {
 	// PrivateReply: the unified auto-reply sent when someone DMs the bot outside the
 	// verification flow (the commands only work in groups). Empty => a built-in default.
 	PrivateReply string `json:"private_reply"`
+	// BlockChannelSenders: delete + ban messages posted on behalf of a channel ("channel
+	// sock-puppets") in the guarded groups. Needs the bot's privacy mode OFF to see them.
+	BlockChannelSenders bool `json:"block_channel_senders"`
+	// ChannelWhitelist: channel sender chats allowed to post in the groups (never blocked).
+	ChannelWhitelist []int64 `json:"channel_whitelist"`
 	// Feeds (optional): one or more auto-feed destinations (see FeedConfig), each with its own
 	// chat, language and filters. The singular "feed" is also accepted and merged into Feeds.
 	Feeds     []FeedConfig `json:"feeds"`
@@ -143,6 +148,17 @@ func LoadConfig(path string) (*Config, error) {
 func (c *Config) IsGroup(id int64) bool {
 	for _, g := range c.GroupIDs {
 		if g == id {
+			return true
+		}
+	}
+	return false
+}
+
+// channelAllowed reports whether a channel sender chat is explicitly whitelisted to
+// post in the guarded groups (so the channel-sock-puppet filter leaves it alone).
+func (c *Config) channelAllowed(id int64) bool {
+	for _, w := range c.ChannelWhitelist {
+		if w == id {
 			return true
 		}
 	}
