@@ -249,8 +249,8 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 				}
 				st.LastBugID = nb[i].ID
 			}
-			if delivered {
-				st.LastBugID = bugs[0].ID // all sent -> advance past newest seen (incl. filtered-out)
+			if delivered && bugs[0].ID > st.LastBugID {
+				st.LastBugID = bugs[0].ID // all sent -> advance FORWARD past newest seen (incl. filtered-out)
 			}
 		}
 	}
@@ -258,12 +258,21 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 		if st.LastNewsURL == "" {
 			st.LastNewsURL = news[0].url // first run: baseline only
 		} else {
+			found := false
 			var nn []newsItem
 			for _, n := range news {
 				if n.url == st.LastNewsURL {
+					found = true
 					break
 				}
 				nn = append(nn, n)
+			}
+			if !found {
+				// The cursor item is no longer in the fetched list (the index/URL format
+				// changed or it scrolled off the page). Re-baseline to the newest item
+				// instead of re-broadcasting the entire news archive.
+				st.LastNewsURL = news[0].url
+				nn = nil
 			}
 			delivered := true
 			for i := len(nn) - 1; i >= 0; i-- { // oldest first
@@ -273,7 +282,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 				}
 				st.LastNewsURL = nn[i].url
 			}
-			if delivered {
+			if delivered && len(nn) > 0 {
 				st.LastNewsURL = news[0].url
 			}
 		}
