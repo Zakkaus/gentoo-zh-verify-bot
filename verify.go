@@ -195,6 +195,9 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))
 	bh.Handle(v.onJoinRequest, th.AnyChatJoinRequest())
 	bh.Handle(v.onMyChatMember, th.AnyMyChatMember())
+	// before the command handlers: any private message except /start (verify deep link)
+	// gets the unified auto-reply — so DM'd commands respond instead of silently no-opping
+	bh.Handle(v.onPrivateDM, privateNonStart)
 	bh.Handle(v.onSb, th.CommandEqual("sb"))
 	bh.Handle(v.onBan, th.CommandEqual("ban"))
 	bh.Handle(v.onWarn, th.CommandEqual("warn"))
@@ -211,8 +214,6 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onBbs, th.CommandEqual("bbs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
-	// last: any other DM gets the unified auto-reply (commands only work in groups)
-	bh.Handle(v.onPrivateDM, privateMessage)
 }
 
 // onMyChatMember auto-leaves any group or channel the bot is added to that isn't a
