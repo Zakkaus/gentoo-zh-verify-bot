@@ -32,6 +32,16 @@ func TestFamilyChannels(t *testing.T) {
 	}, []string{"ubuntu_"}); len(g) != 1 {
 		t.Errorf("ubuntu-like = %v, want one line", g)
 	}
+	// RHEL-like: the same version is in several clone releases -> labelled by the NEWEST one
+	// (centos_stream_10), not an arbitrary older almalinux_8.
+	rhel := []string{"epel_", "centos_", "almalinux_", "rockylinux_", "rhel_"}
+	g := familyChannels([]repologyPkg{
+		{"almalinux_8", "140.11.0"}, {"almalinux_9", "140.11.0"},
+		{"centos_stream_9", "140.11.0"}, {"centos_stream_10", "140.11.0"},
+	}, rhel)
+	if len(g) != 1 || g[0].label != "stream.10" {
+		t.Errorf("rhel-like = %v, want one line labelled stream.10 (newest clone release)", g)
+	}
 }
 
 // TestVerTier verifies the /distro per-distro version preference: a real release (tier 0)

@@ -151,39 +151,54 @@ type channelLine struct{ ver, label string }
 // stays a single line. The stable version's label is the highest-numbered release that
 // actually ships it (so Debian's stable shows "13"/trixie, not the higher "14"/forky that
 // carries a different version).
+// bestLabel returns the most representative release label for a given version among rows:
+// a rolling/dev channel that carries it (when preferRolling), otherwise the highest-numbered
+// release that ships it — so a version present in several releases is labelled by the newest
+// one (e.g. RHEL firefox 140.11.0 → the newest clone release, not an arbitrary older one),
+// not by whichever repo happened to be scanned first.
+func bestLabel(rows []repologyPkg, prefixes []string, version string, preferRolling bool) string {
+	rolling, numbered := "", ""
+	for _, p := range rows {
+		if p.Version != version {
+			continue
+		}
+		lbl := releaseLabel(p.Repo, prefixes)
+		if rollingRelease(lbl) {
+			rolling = lbl
+		} else if numbered == "" || verLess(numbered, lbl) {
+			numbered = lbl
+		}
+	}
+	if preferRolling && rolling != "" {
+		return rolling
+	}
+	if numbered != "" {
+		return numbered
+	}
+	return rolling
+}
+
+// familyChannels returns the versions to show for one distro family: the newest version
+// (preferring its rolling/dev channel label), plus the current stable when that differs —
+// so e.g. Debian shows both unstable and stable, while a package at one version everywhere
+// stays a single line. Each version is labelled by the newest release that actually ships it.
 func familyChannels(rows []repologyPkg, prefixes []string) []channelLine {
 	if len(rows) == 0 {
 		return nil
 	}
-	nv, nr := newestRow(rows)
-	nLabel := releaseLabel(nr, prefixes)
-	// If a rolling/dev channel also carries the newest version, label the line with it
-	// (e.g. "unstable" rather than an arbitrary numbered release that happens to tie).
+	nv, _ := newestRow(rows)
+	out := []channelLine{{nv, bestLabel(rows, prefixes, nv, true)}}
+	stable := "" // highest version among numbered (non-rolling) releases
 	for _, p := range rows {
-		if p.Version == nv {
-			if lbl := releaseLabel(p.Repo, prefixes); rollingRelease(lbl) {
-				nLabel = lbl
-				break
-			}
-		}
-	}
-	out := []channelLine{{nv, nLabel}}
-	stable := ""                 // highest version among numbered (non-rolling) releases
-	label := map[string]string{} // version -> highest-numbered release label that has it
-	for _, p := range rows {
-		lbl := releaseLabel(p.Repo, prefixes)
-		if rollingRelease(lbl) {
+		if rollingRelease(releaseLabel(p.Repo, prefixes)) {
 			continue
 		}
 		if stable == "" || betterVer(stable, p.Version) {
 			stable = p.Version
 		}
-		if cur, ok := label[p.Version]; !ok || verLess(cur, lbl) {
-			label[p.Version] = lbl
-		}
 	}
 	if stable != "" && stable != nv {
-		out = append(out, channelLine{stable, label[stable]})
+		out = append(out, channelLine{stable, bestLabel(rows, prefixes, stable, false)})
 	}
 	return out
 }
