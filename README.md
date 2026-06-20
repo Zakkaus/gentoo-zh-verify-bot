@@ -97,7 +97,7 @@ The optional **`feed`** object — or **`feeds`**, an array of these objects for
 | `news` | post new news items (default `true`) |
 | `bug_product` | only post bugs in this Bugzilla product, e.g. `"Gentoo Security"` (empty = all) |
 | `bug_component` | only post bugs in this component, e.g. `"Vulnerabilities"` (empty = all) |
-| `silent_bugs` | post bugs without a notification (default `true`; they're high-volume) |
+| `silent_bugs` | `true` forces every bug silent. When unset, **UNCONFIRMED bugs post silently** (a fresh report may be a false alarm) and confirmed bugs post with a notification |
 
 ## Build & run
 

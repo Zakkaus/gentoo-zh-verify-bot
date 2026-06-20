@@ -12,7 +12,7 @@
   "block_channel_senders": false,
   "channel_whitelist": [],
   "feeds": [
-    {"chat_id": 0, "lang": "en", "interval_seconds": 300, "bugs": true, "news": true, "bug_product": "", "bug_component": "", "silent_bugs": true},
+    {"chat_id": 0, "lang": "en", "interval_seconds": 300, "bugs": true, "news": true, "bug_product": "", "bug_component": ""},
     {"chat_id": 0, "lang": "zh", "interval_seconds": 300}
   ],
   "stats_timezone": "Asia/Shanghai",

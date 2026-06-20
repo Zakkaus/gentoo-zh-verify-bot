@@ -85,7 +85,7 @@ GITHUB_TOKEN=ghp_xxx
 | `news` | 是否播报新新闻(默认 `true`) |
 | `bug_product` | 只播报该 Bugzilla 产品的 bug,如 `"Gentoo Security"`(空=全部) |
 | `bug_component` | 只播报该组件的 bug,如 `"Vulnerabilities"`(空=全部) |
-| `silent_bugs` | 静默播报 bug(默认 `true`;量大,免刷通知) |
+| `silent_bugs` | `true` 强制所有 bug 静默。不设时:**未确认(UNCONFIRMED)bug 静默推送**(可能误报),已确认 bug 带通知 |
 
 ### 4. 构建运行
 需要 **Go 1.25+**(telego 要求)。

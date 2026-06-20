@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] - 2026-06-20
+
+### Changed
+- Feed bug notifications are now status-aware: **UNCONFIRMED bugs post silently** (a
+  fresh report may be a false alarm) and confirmed bugs post with a notification.
+  `silent_bugs: true` still forces every bug silent. (Was: all bugs silent by default.)
+
 ## [1.5.0] - 2026-06-20
 
 ### Added
