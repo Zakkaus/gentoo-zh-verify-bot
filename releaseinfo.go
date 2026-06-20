@@ -21,6 +21,8 @@ var relInfo = struct {
 	debian     map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
 	ubuntu     map[string]bool   // Ubuntu version ("24.04") -> is it an LTS?
 	ubuntuRel  map[string]bool   // Ubuntu version ("24.04") -> already released (date in the past)?
+	ubuntuEOL  map[string]bool   // Ubuntu version ("18.04") -> past standard end-of-life?
+	ubuntuSer  map[string]bool   // Ubuntu series codename ("resolute") -> already released?
 	fetched    time.Time
 	refreshing bool // a fetch is in flight (so concurrent /pkgs don't all hit upstream)
 }{}
@@ -47,14 +49,14 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	}()
 
 	deb := fetchDebianStatus(ctx, now)
-	ubu, ubuRel := fetchUbuntu(ctx, now)
+	ubu, ubuRel, ubuEOL, ubuSer := fetchUbuntu(ctx, now)
 
 	relInfo.mu.Lock()
 	if deb != nil {
 		relInfo.debian = deb
 	}
 	if ubu != nil {
-		relInfo.ubuntu, relInfo.ubuntuRel = ubu, ubuRel
+		relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = ubu, ubuRel, ubuEOL, ubuSer
 	}
 	if relInfo.debian == nil {
 		relInfo.debian = map[string]string{} // mark attempted so we don't refetch every call
@@ -140,12 +142,12 @@ func deriveDebianStatus(body string, now time.Time) map[string]string {
 // fetchUbuntu returns, per Ubuntu version, whether it's an LTS and whether it's already
 // released (release date in the past) — the latter so /pkgs can exclude an in-development
 // series (e.g. 26.10 before its release date) from the "current stable" line.
-func fetchUbuntu(ctx context.Context, now time.Time) (lts, released map[string]bool) {
+func fetchUbuntu(ctx context.Context, now time.Time) (lts, released, eol, series map[string]bool) {
 	body, err := httpGetBody(ctx, "https://debian.pages.debian.net/distro-info-data/ubuntu.csv", 1<<20)
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
-	lts, released = map[string]bool{}, map[string]bool{}
+	lts, released, eol, series = map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, c := range parseDistroInfo(string(body)) {
 		if len(c) < 1 || c[0] == "" {
 			continue
@@ -161,8 +163,34 @@ func fetchUbuntu(ctx context.Context, now time.Time) (lts, released map[string]b
 			}
 		}
 		released[ver] = rel
+		// eol (index 5) = end of standard support. A series past it (e.g. 18.04, 20.04) is no
+		// longer a current desktop release, so /pkgs must not surface its last lingering deb as
+		// Ubuntu's current version — newer releases ship the app as a Snap instead.
+		if len(c) >= 6 {
+			if t, perr := time.Parse("2006-01-02", c[5]); perr == nil && !t.After(now) {
+				eol[ver] = true
+			}
+		}
+		// series codename (index 2) -> released, keyed lowercase: madison labels Ubuntu suites by
+		// codename (e.g. "resolute"), so /armpkgs can flag an unreleased dev series ("stonking").
+		if len(c) >= 3 {
+			if s := strings.ToLower(strings.TrimSpace(c[2])); s != "" {
+				series[s] = rel
+			}
+		}
 	}
-	return lts, released
+	return lts, released, eol, series
+}
+
+// ubuntuDevSuite reports whether an Ubuntu madison suite (a series codename like "stonking" or
+// "questing") is a not-yet-released development series, per distro-info-data — so /armpkgs flags
+// it instead of presenting it as Ubuntu's current arm64 version. Unknown suites (a Debian
+// codename, or before the CSV loads) are NOT dev, so the newest suite still shows.
+func ubuntuDevSuite(series string) bool {
+	relInfo.mu.Lock()
+	defer relInfo.mu.Unlock()
+	released, known := relInfo.ubuntuSer[strings.ToLower(series)]
+	return known && !released
 }
 
 // debianRelabel maps a raw Debian release label to its role; "unstable" and unknowns pass
@@ -183,23 +211,33 @@ func debianRelabel(raw string) string {
 func ubuntuRelabel(raw string) string {
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
+	out := raw
 	if relInfo.ubuntu[raw] {
-		return raw + " LTS"
+		out += " LTS"
 	}
-	return raw
+	if relInfo.ubuntuEOL[raw] { // honest marker if an EOL series is shown anyway (fallback path)
+		out += " · 已停止支持"
+	}
+	return out
 }
 
-// ubuntuTesting reports whether an Ubuntu release label should be excluded from the "current
-// stable" line: a pre-release pocket (proposed/backports), or a series whose release date is
-// still in the future per distro-info-data (e.g. 26.10 before it ships). Unknown or clean
-// released series are NOT excluded, so before the CSV loads /pkgs falls back to showing the
-// highest numbered series. Mirrors debianTesting (which excludes the numbered testing series).
-func ubuntuTesting(label string) bool {
+// ubuntuExcluded reports whether an Ubuntu release label should be excluded from the "current
+// stable" line: a pre-release pocket (proposed/backports); a series whose release date is still
+// in the future per distro-info-data (e.g. 26.10 before it ships); or a series past its standard
+// end-of-life (e.g. 18.04, 20.04). The EOL exclusion is what stops an ancient LTS — which only
+// still carries a real deb because newer releases moved the app to a Snap — from masquerading as
+// Ubuntu's current version. All derived live from distro-info-data; unknown/clean released series
+// are NOT excluded, so before the CSV loads /pkgs falls back to the highest numbered series.
+// Mirrors debianTesting (which excludes the numbered testing series).
+func ubuntuExcluded(label string) bool {
 	if strings.Contains(label, "proposed") || strings.Contains(label, "backport") {
 		return true
 	}
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
+	if relInfo.ubuntuEOL[label] {
+		return true
+	}
 	released, known := relInfo.ubuntuRel[label]
 	return known && !released
 }

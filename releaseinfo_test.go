@@ -38,20 +38,27 @@ func TestDeriveDebianStatus(t *testing.T) {
 	}
 }
 
-// TestUbuntuTesting verifies the stable-line exclusion: an unreleased series (future date) and
-// proposed/backports pockets are excluded; released series and unknown labels are not.
-func TestUbuntuTesting(t *testing.T) {
+// TestUbuntuExcluded verifies the stable-line exclusion: an unreleased series (future date),
+// proposed/backports pockets, and a series past standard EOL (18.04/20.04) are all excluded;
+// current released series and unknown labels are not.
+func TestUbuntuExcluded(t *testing.T) {
 	relInfo.mu.Lock()
-	relInfo.ubuntuRel = map[string]bool{"24.04": true, "26.04": true, "26.10": false}
+	relInfo.ubuntuRel = map[string]bool{"18.04": true, "20.04": true, "24.04": true, "26.04": true, "26.10": false}
+	relInfo.ubuntuEOL = map[string]bool{"18.04": true, "20.04": true}
 	relInfo.mu.Unlock()
-	defer func() { relInfo.mu.Lock(); relInfo.ubuntuRel = nil; relInfo.mu.Unlock() }()
+	defer func() {
+		relInfo.mu.Lock()
+		relInfo.ubuntuRel, relInfo.ubuntuEOL = nil, nil
+		relInfo.mu.Unlock()
+	}()
 
 	for label, want := range map[string]bool{
 		"26.10": true, "24.04": false, "26.04": false,
 		"26.10.proposed": true, "24.04.backports": true, "99.99": false,
+		"18.04": true, "20.04": true, // past standard end-of-life
 	} {
-		if got := ubuntuTesting(label); got != want {
-			t.Errorf("ubuntuTesting(%q) = %v, want %v", label, got, want)
+		if got := ubuntuExcluded(label); got != want {
+			t.Errorf("ubuntuExcluded(%q) = %v, want %v", label, got, want)
 		}
 	}
 }

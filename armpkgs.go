@@ -72,9 +72,27 @@ func parseMadison(body string) []madEntry {
 	return ordered
 }
 
-// madisonArmStatus queries a madison endpoint (arch-filtered to arm64) and reports the
-// newest suite that ships the package on arm64.
-func madisonArmStatus(ctx context.Context, madisonURL, pkg string) string {
+// pickMadison chooses the suite/version to display from madison entries (oldest-first): the
+// newest RELEASED suite, falling back to the newest overall (dev=true, for the caller to flag)
+// when only an unreleased development series carries the package. devSuite (optional) reports
+// whether a suite is an unreleased dev series; nil means never (keep the newest, e.g. Debian sid).
+func pickMadison(entries []madEntry, devSuite func(string) bool) (suite, ver string, dev bool) {
+	pick := entries[len(entries)-1] // madison lists oldest-first, so the last is the newest suite
+	dev = devSuite != nil && devSuite(pick.suite)
+	if dev {
+		for i := len(entries) - 2; i >= 0; i-- {
+			if !devSuite(entries[i].suite) {
+				return entries[i].suite, entries[i].ver, false
+			}
+		}
+	}
+	return pick.suite, pick.ver, dev
+}
+
+// madisonArmStatus queries a madison endpoint (arch-filtered to arm64) and reports the newest
+// suite that ships the package on arm64. devSuite (optional) flags an unreleased dev series so an
+// unshipped future release isn't presented as current; a Snap transitional version shows as "snap".
+func madisonArmStatus(ctx context.Context, madisonURL, pkg string, devSuite func(string) bool) string {
 	body, err := httpGetBody(ctx, madisonURL+neturl.QueryEscape(pkg)+"&text=on&a=arm64", 1<<20)
 	if err != nil {
 		return "⚠️ 查询失败"
@@ -83,8 +101,11 @@ func madisonArmStatus(ctx context.Context, madisonURL, pkg string) string {
 	if len(entries) == 0 {
 		return "❌ 无 arm64 包"
 	}
-	e := entries[len(entries)-1] // madison lists oldest-first, so the last is the newest suite
-	return fmt.Sprintf("✅ %s %s", e.suite, e.ver)
+	suite, ver, dev := pickMadison(entries, devSuite)
+	if dev {
+		suite += "(开发版)"
+	}
+	return fmt.Sprintf("✅ %s %s", suite, displayVer(ver))
 }
 
 // fedoraArmStatus checks Fedora rawhide via mdapi. aarch64 is a Fedora primary arch, so a
@@ -154,6 +175,7 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
+	ensureReleaseInfo(hc, time.Now()) // load Ubuntu series status so an unreleased dev suite is flagged
 	pe := neturl.PathEscape(name)
 
 	// Each source is independent — query them concurrently. fn returns (status, link).
@@ -163,10 +185,10 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	}{
 		{"Gentoo", func() (string, string) { return v.gentooArmStatus(hc, name) }},
 		{"Debian", func() (string, string) {
-			return madisonArmStatus(hc, "https://qa.debian.org/madison.php?package=", name), "https://tracker.debian.org/pkg/" + pe
+			return madisonArmStatus(hc, "https://qa.debian.org/madison.php?package=", name, nil), "https://tracker.debian.org/pkg/" + pe
 		}},
 		{"Ubuntu", func() (string, string) {
-			return madisonArmStatus(hc, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name), "https://launchpad.net/ubuntu/+source/" + pe
+			return madisonArmStatus(hc, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name, ubuntuDevSuite), "https://launchpad.net/ubuntu/+source/" + pe
 		}},
 		{"Fedora", func() (string, string) {
 			return fedoraArmStatus(hc, name), "https://packages.fedoraproject.org/pkgs/" + pe + "/"

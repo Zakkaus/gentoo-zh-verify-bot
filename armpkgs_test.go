@@ -47,6 +47,36 @@ htop | 2.0.1-1 | xenial/universe | arm64`
 	}
 }
 
+// TestPickMadison verifies the /armpkgs suite selection: the newest RELEASED suite wins, an
+// unreleased development series (e.g. "stonking") is skipped (or flagged when it's all there is),
+// and with no devSuite filter (Debian) the newest suite — including sid — is kept as-is. The Snap
+// transitional version is left for displayVer to render.
+func TestPickMadison(t *testing.T) {
+	dev := func(s string) bool { return s == "stonking" } // the only unreleased dev series here
+
+	// firefox-like Ubuntu: newest suite is the unreleased "stonking" -> skip to released "resolute".
+	s, v, d := pickMadison([]madEntry{
+		{"jammy", "110"}, {"noble", "120"},
+		{"resolute", "1:1snap1-0ubuntu10"}, {"stonking", "1:1snap1-0ubuntu10"},
+	}, dev)
+	if s != "resolute" || d {
+		t.Errorf("pickMadison should pick released 'resolute', got %q dev=%v", s, d)
+	}
+	if displayVer(v) != "snap" {
+		t.Errorf("a Snap transitional must display as snap, got %q", displayVer(v))
+	}
+
+	// nil devSuite (Debian): keep the newest suite (sid), unflagged.
+	if s2, _, d2 := pickMadison([]madEntry{{"trixie", "1"}, {"sid", "2"}}, nil); s2 != "sid" || d2 {
+		t.Errorf("nil devSuite should keep the newest suite, got %q dev=%v", s2, d2)
+	}
+
+	// only a dev series ships it -> fall back to it, flagged dev.
+	if s3, _, d3 := pickMadison([]madEntry{{"stonking", "9"}}, dev); s3 != "stonking" || !d3 {
+		t.Errorf("all-dev should fall back to newest flagged dev, got %q dev=%v", s3, d3)
+	}
+}
+
 // TestAurArchLabel verifies the PKGBUILD arch=() classification: any / aarch64 / 32-bit
 // ARM only / x86-only, and a missing arch line.
 func TestAurArchLabel(t *testing.T) {

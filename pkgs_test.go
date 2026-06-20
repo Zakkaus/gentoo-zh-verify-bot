@@ -58,6 +58,7 @@ func TestVerTier(t *testing.T) {
 		{"9999", 2},        // live ebuild
 		{"9999.9999", 2},   // live ebuild, multi-part
 		{"152.0_beta9", 0}, // a real (pre)release, not a pseudo-version
+		{"1snap1", 2},      // Ubuntu Snap transitional deb — a pseudo-version
 	} {
 		if got := verTier(c.v); got != c.want {
 			t.Errorf("verTier(%q) = %d, want %d", c.v, got, c.want)
@@ -79,6 +80,8 @@ func TestBetterVer(t *testing.T) {
 		{"2026.06.01", "2026.06.09", true}, // newer date wins within the date tier
 		{"3.5.0", "3.5.1", true},           // higher real release wins
 		{"3.5.1", "3.5.0", false},
+		{"1snap1", "112.0.5615.49", true},  // a real deb beats a Snap transitional
+		{"112.0.5615.49", "1snap1", false}, // a Snap transitional never beats a real deb
 	} {
 		if got := betterVer(c.cur, c.cand); got != c.want {
 			t.Errorf("betterVer(%q, %q) = %v, want %v", c.cur, c.cand, got, c.want)
@@ -159,5 +162,60 @@ func TestBareDateSnapshot(t *testing.T) {
 		if ch.ver == "20260327" || ch.ver == "20250315" {
 			t.Errorf("snapshot leaked into /pkgs output: %+v", ch)
 		}
+	}
+}
+
+// TestSnapVersionAndUbuntuChannels covers the Ubuntu Snap-transitional fix: a Snap version is a
+// pseudo-version (so a real deb wins) rendered as "snap"; and with EOL/unreleased series excluded,
+// an app shipped as a Snap in current Ubuntu shows "snap" at the newest supported release instead
+// of an ancient EOL LTS deb — while a real deb in the newest release still shows normally.
+func TestSnapVersionAndUbuntuChannels(t *testing.T) {
+	for _, v := range []string{"1snap1", "2snap3", "1SNAP1", "1:1snap1-0ubuntu10"} {
+		if !snapVersion(v) {
+			t.Errorf("%q should be a Snap transitional version", v)
+		}
+	}
+	// Genuine versions that merely contain the substring "snap" must NOT be treated as Snap
+	// transitionals (gcc-snapshot's real AUR version is the canonical trap here).
+	for _, v := range []string{"9.1.2141", "17.0.0.snapshot20260614", "2.4.7-snapshot", "1.0~git20240101"} {
+		if snapVersion(v) {
+			t.Errorf("%q must NOT be flagged as a Snap transitional", v)
+		}
+		if displayVer(v) != v {
+			t.Errorf("displayVer(%q) must be unchanged, got %q", v, displayVer(v))
+		}
+	}
+	if verTier("17.0.0.snapshot20260614") != 0 {
+		t.Errorf("a real snapshot version must be a tier-0 real release, got %d", verTier("17.0.0.snapshot20260614"))
+	}
+	if displayVer("1snap1") != "snap" {
+		t.Errorf("displayVer(1snap1) = %q, want snap", displayVer("1snap1"))
+	}
+
+	// EOL series (18.04/20.04) and the unreleased 26.10 are excluded; current releases ship only
+	// the Snap transitional deb -> one line, "snap" at the newest supported release (26.04).
+	excl := func(lbl string) bool {
+		switch lbl {
+		case "18.04", "20.04", "16.04", "14.04", "26.10":
+			return true
+		}
+		return false
+	}
+	chromium := []repologyPkg{
+		{"ubuntu_18_04", "112.0.5615.49"}, {"ubuntu_20_04", "85.0.4183.83"},
+		{"ubuntu_22_04", "1snap1"}, {"ubuntu_24_04", "1snap1"},
+		{"ubuntu_26_04", "1snap1"}, {"ubuntu_26_10", "1snap1"},
+	}
+	if g := familyChannels(chromium, []string{"ubuntu_"}, excl); len(g) != 1 || g[0].label != "26.04" || displayVer(g[0].ver) != "snap" {
+		t.Errorf("chromium-like Ubuntu = %v, want one line snap@26.04", g)
+	}
+
+	// vim-like: a real deb in the newest supported release shows normally (not snap, not EOL).
+	vim := []repologyPkg{
+		{"ubuntu_20_04", "8.1.2269"}, {"ubuntu_22_04", "9.0.1"},
+		{"ubuntu_24_04", "9.1.0"}, {"ubuntu_26_04", "9.1.2141"},
+	}
+	if g := familyChannels(vim, []string{"ubuntu_"}, excl); len(g) != 1 || g[0] != (channelLine{"9.1.2141", "26.04"}) {
+		t.Errorf("vim-like Ubuntu = %v, want 9.1.2141@26.04", g)
 	}
 }

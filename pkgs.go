@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	neturl "net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -122,12 +123,34 @@ func allNines(v string) bool {
 	return nine
 }
 
+// snapTransitionalRe matches the Ubuntu Snap-transitional deb version shape — Repology reports it
+// as "1snap1", madison as "1:1snap1-0ubuntu10" — i.e. "snap" bracketed by digits. Anchoring on the
+// digit-snap-digit token (rather than a bare "snap" substring) keeps genuine versions that merely
+// contain "snap" — e.g. gcc-snapshot's "17.0.0.snapshot20260614" — from being mistaken for a stub.
+var snapTransitionalRe = regexp.MustCompile(`(?i)\d+snap\d+`)
+
+// snapVersion reports whether v is an Ubuntu "Snap transitional" deb version: a stub deb that just
+// installs the Snap and carries no real upstream version. Treated as a pseudo-version so it can't
+// be ranked above a real deb (otherwise an ancient LTS's lingering deb wins), and rendered as
+// "snap" so /pkgs honestly shows the distro now ships the app as a Snap.
+func snapVersion(v string) bool { return snapTransitionalRe.MatchString(v) }
+
+// displayVer maps an internal version to its user-facing form: a Snap transitional version shows
+// as "snap" (the real, useful fact) instead of the meaningless "1snap1".
+func displayVer(v string) string {
+	if snapVersion(v) {
+		return "snap"
+	}
+	return v
+}
+
 // verTier ranks a version so a family shows its real packaged version: 0 = real release,
-// 1 = a date / CalVer (could be a snapshot OR a genuine version like yt-dlp's), 2 = a
-// Gentoo 9999 live ebuild (tracks git HEAD). Lower is preferred.
+// 1 = a date / CalVer (could be a snapshot OR a genuine version like yt-dlp's), 2 = a pseudo
+// version (a Gentoo 9999 live ebuild, or an Ubuntu Snap transitional deb) that tracks no real
+// release. Lower is preferred.
 func verTier(v string) int {
 	switch {
-	case allNines(v):
+	case allNines(v), snapVersion(v):
 		return 2
 	case dateSnapshot(v):
 		return 1
@@ -413,8 +436,8 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		switch f.label {
 		case "Debian": // Debian numbers a testing series (forky/14) above stable
 			isTesting = debianTesting
-		case "Ubuntu": // exclude an unreleased series + proposed/backports pockets
-			isTesting = ubuntuTesting
+		case "Ubuntu": // exclude unreleased + proposed/backports + EOL series (18.04/20.04, …)
+			isTesting = ubuntuExcluded
 		}
 		url := fmt.Sprintf(f.search, qproj)
 		for _, ch := range familyChannels(rows, f.prefixes, isTesting) {
@@ -443,8 +466,8 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		if ln.rel != "" {
 			rel = fmt.Sprintf(" <i>(%s)</i>", esc(ln.rel))
 		}
-		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s%s", famLink, esc(ln.ver), rel)
-		fmt.Fprintf(&rich, "<li><b>%s</b>:%s%s</li>", famLink, esc(ln.ver), rel)
+		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s%s", famLink, esc(displayVer(ln.ver)), rel)
+		fmt.Fprintf(&rich, "<li><b>%s</b>:%s%s</li>", famLink, esc(displayVer(ln.ver)), rel)
 	}
 	rich.WriteString("</ul>")
 	if len(alts) > 0 {
