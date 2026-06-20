@@ -74,6 +74,22 @@ func wikiTitlePath(title string) string {
 
 func (w wikiSource) pageURL(title string) string { return w.titleBase + wikiTitlePath(title) }
 
+// hasNonASCII reports whether s has any non-ASCII rune — used to drop foreign-language
+// pages that aren't tagged as a translation (e.g. Arch's "Kernel/Compilação").
+func hasNonASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanDisplayTitle strips the HTML markup MediaWiki wraps around a displaytitle.
+func cleanDisplayTitle(s string) string {
+	return html.UnescapeString(strings.TrimSpace(tagRe.ReplaceAllString(s, "")))
+}
+
 // searchTitles queries one MediaWiki site and returns matching page titles in rank order.
 func searchTitles(ctx context.Context, w wikiSource, query string, limit int) []string {
 	u := fmt.Sprintf("%s?action=query&list=search&srsearch=%s&srlimit=%d&srprop=&format=json",
@@ -95,15 +111,43 @@ func searchTitles(ctx context.Context, w wikiSource, query string, limit int) []
 	return out
 }
 
-// pickWikiTitles drops non-zh/en languages, dedupes by base topic preferring the zh-cn
-// page, and returns titles with zh pages first then en (rank order preserved), capped at max.
+// displayTitles fetches the display title (the Chinese H1 for Gentoo /zh-cn pages) for the
+// given canonical titles, as a title -> displaytitle map.
+func displayTitles(ctx context.Context, w wikiSource, titles []string) map[string]string {
+	out := map[string]string{}
+	if len(titles) == 0 {
+		return out
+	}
+	u := fmt.Sprintf("%s?action=query&prop=info&inprop=displaytitle&format=json&titles=%s",
+		w.api, url.QueryEscape(strings.Join(titles, "|")))
+	var resp struct {
+		Query struct {
+			Pages map[string]struct {
+				Title        string `json:"title"`
+				Displaytitle string `json:"displaytitle"`
+			} `json:"pages"`
+		} `json:"query"`
+	}
+	if err := httpGetJSON(ctx, u, nil, &resp); err != nil {
+		return out
+	}
+	for _, p := range resp.Query.Pages {
+		if p.Displaytitle != "" {
+			out[p.Title] = p.Displaytitle
+		}
+	}
+	return out
+}
+
+// pickWikiTitles drops other/foreign-language pages, dedupes by base topic preferring the
+// zh-cn page, and returns titles with zh first then en (rank order preserved), capped at max.
 func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
 	type entry struct{ title, lang string }
 	chosen := map[string]entry{}
 	var order []string
 	for _, t := range titles {
 		base, lang := w.classify(t)
-		if lang == "other" {
+		if lang == "other" || (lang == "en" && hasNonASCII(base)) {
 			continue
 		}
 		if cur, ok := chosen[base]; ok {
@@ -131,7 +175,8 @@ func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
 }
 
 // onWiki handles /wiki <query> — searches the Gentoo and Arch wikis (MediaWiki) and posts
-// the top hits inline, preferring simplified-Chinese pages. Both wikis run concurrently.
+// the top hits inline, preferring simplified-Chinese pages and showing each page's display
+// title (Chinese for zh-cn pages). Both wikis run concurrently.
 func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -147,13 +192,15 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	hc, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	picked := make([][]string, len(wikiSources))
+	titles := make([][]string, len(wikiSources))
+	dtitles := make([]map[string]string, len(wikiSources))
 	var wg sync.WaitGroup
 	for i, w := range wikiSources {
 		wg.Add(1)
 		go func(i int, w wikiSource) {
 			defer wg.Done()
-			picked[i] = w.pickWikiTitles(searchTitles(hc, w, q, 16), 4)
+			titles[i] = w.pickWikiTitles(searchTitles(hc, w, q, 24), 4)
+			dtitles[i] = displayTitles(hc, w, titles[i])
 		}(i, w)
 	}
 	wg.Wait()
@@ -162,13 +209,17 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	fmt.Fprintf(&b, "📚 <b>%s</b> 的 wiki 搜索", html.EscapeString(q))
 	found := false
 	for i, w := range wikiSources {
-		if len(picked[i]) == 0 {
+		if len(titles[i]) == 0 {
 			continue
 		}
 		found = true
 		fmt.Fprintf(&b, "\n\n<b>%s Wiki</b>", html.EscapeString(w.name))
-		for _, t := range picked[i] {
-			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(w.pageURL(t)), html.EscapeString(t))
+		for _, t := range titles[i] {
+			label := cleanDisplayTitle(dtitles[i][t])
+			if label == "" {
+				label = t
+			}
+			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(w.pageURL(t)), html.EscapeString(label))
 		}
 	}
 	if !found {
