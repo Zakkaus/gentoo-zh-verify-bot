@@ -19,6 +19,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "bug", Description: "查询 Gentoo Bugzilla 编号"},
 		{Command: "news", Description: "查看 / 搜索 Gentoo 新闻"},
 		{Command: "wiki", Description: "搜索 Gentoo / Arch wiki(含中文页)"},
+		{Command: "bbs", Description: "搜各大 Linux 论坛(中文优先)"},
 		{Command: "ping", Description: "查看机器人状态 / 运行时长"},
 		{Command: "stats", Description: "今日通过 / 拒绝人数"},
 	}

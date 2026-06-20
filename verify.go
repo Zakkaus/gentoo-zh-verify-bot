@@ -208,6 +208,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onBug, th.CommandEqual("bug"))
 	bh.Handle(v.onNews, th.CommandEqual("news"))
 	bh.Handle(v.onWiki, th.CommandEqual("wiki"))
+	bh.Handle(v.onBbs, th.CommandEqual("bbs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }

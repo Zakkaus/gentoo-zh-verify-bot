@@ -1,0 +1,97 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"html"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
+	tu "github.com/mymmrac/telego/telegoutil"
+)
+
+const archcnForum = "https://forum.archlinuxcn.org"
+
+type forumTopic struct{ title, url string }
+
+// searchArchcn searches the Arch Linux CN Discourse forum (clean JSON API) and returns
+// the top matching topics — the Chinese, inline part of /bbs.
+func searchArchcn(ctx context.Context, query string, limit int) []forumTopic {
+	u := archcnForum + "/search.json?q=" + url.QueryEscape(query)
+	var resp struct {
+		Topics []struct {
+			ID    int    `json:"id"`
+			Slug  string `json:"slug"`
+			Title string `json:"title"`
+		} `json:"topics"`
+	}
+	if err := httpGetJSON(ctx, u, nil, &resp); err != nil {
+		return nil
+	}
+	out := make([]forumTopic, 0, limit)
+	for _, t := range resp.Topics {
+		out = append(out, forumTopic{t.Title, fmt.Sprintf("%s/t/%s/%d", archcnForum, t.Slug, t.ID)})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+// forumLinks are the major English Linux forums offered as one-tap search buttons (a
+// site-scoped DuckDuckGo search, which needs no forum API) — the English backup to the
+// inline Chinese results above.
+var forumLinks = []struct{ name, site string }{
+	{"Gentoo 论坛", "forums.gentoo.org"},
+	{"Arch BBS", "bbs.archlinux.org"},
+	{"Ubuntu 论坛", "ubuntuforums.org"},
+	{"Debian 论坛", "forums.debian.net"},
+}
+
+func ddgSiteSearch(site, query string) string {
+	return "https://duckduckgo.com/?q=" + url.QueryEscape("site:"+site+" "+query)
+}
+
+// onBbs handles /bbs <query> — inline results from the Arch Linux CN forum (Chinese first),
+// plus search-link buttons to the major English forums.
+func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
+	msg := update.Message
+	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+		return nil
+	}
+	bot := ctx.Bot()
+	c := ctx.Context()
+	q := commandArg(msg.Text)
+	if q == "" {
+		v.notify(c, bot, msg.Chat.ID, "用法:/bbs <关键词>,例如 /bbs nvidia 黑屏 —— 搜各大 Linux 论坛(中文优先)")
+		return nil
+	}
+	hc, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "💬 <b>%s</b> 的论坛搜索", html.EscapeString(q))
+	if hits := searchArchcn(hc, q, 5); len(hits) > 0 {
+		b.WriteString("\n\n<b>Arch Linux CN 论坛</b>")
+		for _, h := range hits {
+			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(h.url), html.EscapeString(h.title))
+		}
+	} else {
+		b.WriteString("\n\nArch Linux CN 论坛暂无匹配结果。")
+	}
+	b.WriteString("\n\n其它论坛(点按钮搜索):")
+
+	var rows [][]telego.InlineKeyboardButton
+	for i := 0; i < len(forumLinks); i += 2 {
+		var row []telego.InlineKeyboardButton
+		for j := i; j < i+2 && j < len(forumLinks); j++ {
+			row = append(row, telego.InlineKeyboardButton{Text: forumLinks[j].name, URL: ddgSiteSearch(forumLinks[j].site, q)})
+		}
+		rows = append(rows, row)
+	}
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyMarkup(tu.InlineKeyboard(rows...)))
+	return nil
+}
