@@ -59,6 +59,11 @@ func fetchNews(c context.Context) ([]newsItem, error) {
 		seen[path] = true
 		items = append(items, newsItem{date: date, title: title, url: newsBase + path})
 	}
+	if len(items) == 0 && len(body) > 0 {
+		// We fetched a page but matched nothing — most likely the index HTML structure changed
+		// and newsRe needs updating. Log loudly rather than silently returning "no news".
+		log.Printf("fetchNews: parsed 0 items from %d bytes of %s — the news page layout may have changed (update newsRe)", len(body), newsURL)
+	}
 	return items, nil
 }
 
