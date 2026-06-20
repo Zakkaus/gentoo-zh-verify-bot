@@ -93,6 +93,21 @@ type Config struct {
 	// PrivateQueryPerMin: how many lookup queries (/pkg /use /bug …) a user may run per
 	// minute in a PRIVATE chat (anti-abuse; default 3). Guarded groups are never limited.
 	PrivateQueryPerMin int `json:"private_query_per_min"`
+	// RequiredChannelFailOpen: when the bot cannot read the required channel's membership
+	// (it isn't an admin there, the channel moved, etc.), should a verified applicant be let
+	// through (fail-open, default true — a permission slip won't lock everyone out) or held
+	// back (fail-closed, set false — strictly enforce the channel gate)? Admins are alerted
+	// either way. nil => default true.
+	RequiredChannelFailOpen *bool `json:"required_channel_fail_open"`
+	// BanSeconds: default ban duration for /ban, /sb and the auto-ban after repeated failed
+	// verification. 0 => permanent (the default). Runtime-adjustable by admins with /bantime.
+	BanSeconds int `json:"ban_seconds"`
+	// VerifyRetrySeconds: how long a declined applicant should wait before re-applying
+	// (default 180). Re-applying sooner is declined with a "please wait" notice; negative => no cooldown.
+	VerifyRetrySeconds int `json:"verify_retry_seconds"`
+	// VerifyMaxFails: failed verifications (wrong answer / timeout) before the applicant is
+	// permanently banned (default 3). Negative => never auto-ban (unlimited retries).
+	VerifyMaxFails int `json:"verify_max_fails"`
 	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).
 	Overlays []OverlayCfg `json:"overlays"`
 	// NewsURL: the Gentoo news-items index for /news (defaults to gentoo.org when empty).
@@ -146,6 +161,34 @@ func LoadConfig(path string) (*Config, error) {
 	if len(c.Groups) == 0 {
 		return nil, fmt.Errorf("at least one group is required (groups, group_ids, or group_id)")
 	}
+	// Fail fast on group-list mistakes that would otherwise misbehave silently at runtime.
+	seenGroup := map[int64]bool{}
+	for i := range c.Groups {
+		id := c.Groups[i].ID
+		if id == 0 {
+			return nil, fmt.Errorf("group id 0 is invalid (a Telegram group/supergroup id is negative)")
+		}
+		if seenGroup[id] {
+			return nil, fmt.Errorf("duplicate group id %d", id)
+		}
+		seenGroup[id] = true
+	}
+	// Validate overlay entries up front: an empty/malformed repo would only surface as a
+	// confusing runtime GitHub API error, and a duplicate name would collide cache keys.
+	seenOverlay := map[string]bool{}
+	for i, o := range c.Overlays {
+		if parts := strings.Split(o.Repo, "/"); o.Repo == "" || len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("overlay %d: repo must be \"owner/name\" (got %q)", i, o.Repo)
+		}
+		name := o.Name
+		if name == "" {
+			name = o.Repo
+		}
+		if seenOverlay[name] {
+			return nil, fmt.Errorf("duplicate overlay name %q", name)
+		}
+		seenOverlay[name] = true
+	}
 
 	validateQuestions := func(qs []Question, where string) error {
 		for i, q := range qs {
@@ -187,6 +230,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.PrivateQueryPerMin <= 0 {
 		c.PrivateQueryPerMin = 3
+	}
+	if c.VerifyRetrySeconds == 0 {
+		c.VerifyRetrySeconds = 180 // negative is honoured as "no cooldown"
+	}
+	if c.VerifyMaxFails == 0 {
+		c.VerifyMaxFails = 3 // negative => never auto-ban
 	}
 	if c.PrivateReply == "" {
 		c.PrivateReply = defaultPrivateReply
@@ -237,6 +286,12 @@ func (c *Config) requiredChannel(id int64) int64 {
 		return *g.RequiredChannelID
 	}
 	return c.RequiredChannelID
+}
+
+// failOpenChannel reports whether to let a verified applicant through when the required
+// channel's membership can't be read (default true). See RequiredChannelFailOpen.
+func (c *Config) failOpenChannel() bool {
+	return c.RequiredChannelFailOpen == nil || *c.RequiredChannelFailOpen
 }
 
 func (c *Config) channelDisplay(id int64) string {

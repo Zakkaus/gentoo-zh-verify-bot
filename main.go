@@ -85,6 +85,8 @@ func main() {
 		v.loadWarns()
 		v.acPath = sd + "/antispam.json"
 		v.loadAntispam()
+		v.vfailPath = sd + "/verifyfail.json"
+		v.loadVerifyFails()
 	} else {
 		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: pending verifications, warn counts, the /bc state and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
 	}

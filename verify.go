@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +21,7 @@ import (
 )
 
 const (
-	answerPrefix  = "v:"   // applicant answers the quiz (in DM): v:<gid>:<uid>:<idx>
+	answerPrefix  = "v:"   // applicant answers the quiz (in DM): v:<gid>:<uid>:<nonce>:<idx>
 	adminPrefix   = "adm:" // admin override (in group): adm:<action>:<gid>:<uid>
 	recheckPrefix = "ch:"  // "I followed the channel, continue" (in DM): ch:<uid>
 )
@@ -30,6 +33,7 @@ type pending struct {
 	qText      string
 	qOpts      []string
 	correctIdx int
+	nonce      string // per-pending token; a quiz button only counts if its nonce matches
 	deadline   time.Time
 	timer      *time.Timer
 	done       bool
@@ -42,7 +46,18 @@ type pendingRec struct {
 	QText      string   `json:"q_text"`
 	QOpts      []string `json:"q_opts"`
 	CorrectIdx int      `json:"correct_idx"`
+	Nonce      string   `json:"nonce"`
 	Deadline   int64    `json:"deadline"`
+}
+
+// newNonce returns a short random token used to bind a DM quiz button to the pending it was
+// issued for, so a stale button from a previous (overwritten) request can't answer a new quiz.
+func newNonce() string {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36) // fallback; uniqueness is what matters
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // Verifier holds the bot's runtime state: config, the pending-verification map
@@ -73,6 +88,9 @@ type Verifier struct {
 	queryHits   map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
 	lookupOn    bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
 	lookupTTL   time.Duration         // how long before that deletion, guarded by mu
+	banSecs     int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
+	vfail       map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
+	vfailPath   string                // persistence path for vfail
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -109,6 +127,7 @@ func NewVerifier(cfg *Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
 		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, queryHits: map[int64][]time.Time{},
+		vfail: map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders}
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
@@ -289,20 +308,40 @@ func (v *Verifier) stats() (date string, approved, declined int) {
 	return v.statDate, v.approved, v.declined
 }
 
-// writeJSONFile atomically writes val as JSON to path (tmp + rename), logging any failure
-// so a missing/unwritable state directory is visible rather than silently dropping state.
+// stateWriteMu serializes all state-file writes. The files are small and written rarely, so a
+// single global lock is cheap and removes the race where two concurrent saves (e.g. an approve
+// and a timeout-decline) would otherwise interleave on a shared temp file.
+var stateWriteMu sync.Mutex
+
+// writeJSONFile atomically writes val as JSON to path: marshal, write to a UNIQUE temp file in
+// the same directory, then rename. The unique temp name (vs a fixed "path.tmp") means
+// concurrent writers can't clobber each other's temp; the global lock serializes the rename.
+// Any failure is logged so a missing/unwritable state directory is visible.
 func writeJSONFile(path string, val any) {
 	data, err := json.Marshal(val)
 	if err != nil {
 		log.Printf("state: marshal %s: %v", path, err)
 		return
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		log.Printf("state: write %s: %v", path, err)
+	stateWriteMu.Lock()
+	defer stateWriteMu.Unlock()
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*") // mode 0600
+	if err != nil {
+		log.Printf("state: temp for %s: %v", path, err)
+		return
+	}
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		log.Printf("state: write %s: %v", path, werr)
 		return
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
 		log.Printf("state: rename %s: %v", path, err)
 	}
 }
@@ -318,7 +357,7 @@ func (v *Verifier) save() {
 			continue
 		}
 		recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-			QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Deadline: p.deadline.Unix()})
+			QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Deadline: p.deadline.Unix()})
 	}
 	v.mu.Unlock()
 	writeJSONFile(v.statePath, recs)
@@ -340,7 +379,7 @@ func (v *Verifier) load(bot *telego.Bot) {
 	for _, r := range recs {
 		gid, uid := r.GroupID, r.UserID
 		p := &pending{groupMsgID: r.GroupMsgID, qText: r.QText, qOpts: r.QOpts,
-			correctIdx: r.CorrectIdx, deadline: time.Unix(r.Deadline, 0)}
+			correctIdx: r.CorrectIdx, nonce: r.Nonce, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
 		if delay < time.Second {
 			delay = time.Second
@@ -395,6 +434,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onArmpkgs, th.CommandEqual("armpkgs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
+	bh.Handle(v.onBanTime, th.CommandEqual("bantime"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 
@@ -438,6 +478,14 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	gid := jr.Chat.ID
 	uid := jr.From.ID
+	// Anti-spam cooldown: a recently-failed applicant must wait out cfg.VerifyRetrySeconds
+	// before re-applying (they were told the wait time when declined). Decline early re-tries
+	// silently rather than reposting a challenge.
+	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
+		_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
+		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, int(wait.Seconds())+1)
+		return nil
+	}
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 
 	q := v.cfg.randomQuestion(gid)
@@ -488,7 +536,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		}
 		oldMsgID = old.groupMsgID
 	}
-	p := &pending{groupMsgID: msgID, qText: text, qOpts: opts, correctIdx: correctIdx,
+	p := &pending{groupMsgID: msgID, qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(),
 		deadline: time.Now().Add(time.Duration(v.cfg.TimeoutSeconds) * time.Second)}
 	p.timer = time.AfterFunc(time.Until(p.deadline), func() { v.decline(context.Background(), bot, gid, uid, "timeout") })
 	v.pend[key] = p
@@ -555,15 +603,16 @@ func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64
 // sendQuizzes DMs the quiz for every group where this user has a live verification.
 func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 	type dmq struct {
-		gid  int64
-		text string
-		opts []string
+		gid   int64
+		text  string
+		opts  []string
+		nonce string
 	}
 	var qs []dmq
 	v.mu.Lock()
 	for k, p := range v.pend {
 		if k.uid == uid && !p.done {
-			qs = append(qs, dmq{k.gid, p.qText, p.qOpts})
+			qs = append(qs, dmq{k.gid, p.qText, p.qOpts, p.nonce})
 		}
 	}
 	v.mu.Unlock()
@@ -572,7 +621,7 @@ func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 		rows := make([][]telego.InlineKeyboardButton, 0, len(dq.opts))
 		for i, opt := range dq.opts {
 			rows = append(rows, tu.InlineKeyboardRow(
-				telego.InlineKeyboardButton{Text: opt, CallbackData: fmt.Sprintf("%s%s:%s:%d", answerPrefix, gidStr, uidStr, i)}))
+				telego.InlineKeyboardButton{Text: opt, CallbackData: fmt.Sprintf("%s%s:%s:%s:%d", answerPrefix, gidStr, uidStr, dq.nonce, i)}))
 		}
 		_, _ = bot.SendMessage(c, htmlMessage(uid,
 			fmt.Sprintf("请回答下面的问题完成入群验证:\n\n❓ %s", html.EscapeString(dq.text))).
@@ -620,14 +669,23 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	parts := strings.SplitN(strings.TrimPrefix(cq.Data, answerPrefix), ":", 3)
-	if len(parts) != 3 {
+	// callback data: v:<gid>:<uid>:<nonce>:<idx> (current). A legacy 3-part button
+	// v:<gid>:<uid>:<idx> from a pre-nonce version still on a user's screen across the upgrade
+	// restart is accepted with an empty nonce, which matches a restored pending (nonce "").
+	parts := strings.Split(strings.TrimPrefix(cq.Data, answerPrefix), ":")
+	var nonce, idxStr string
+	switch len(parts) {
+	case 4:
+		nonce, idxStr = parts[2], parts[3]
+	case 3:
+		nonce, idxStr = "", parts[2]
+	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
 	}
 	gid, _ := strconv.ParseInt(parts[0], 10, 64)
 	owner, _ := strconv.ParseInt(parts[1], 10, 64)
-	choice, err := strconv.Atoi(parts[2])
+	choice, err := strconv.Atoi(idxStr)
 	if err != nil {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
@@ -640,19 +698,24 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 	v.mu.Lock()
 	p, ok := v.pend[pkey{gid, owner}]
 	done := !ok || p.done
-	correctIdx := -1
+	correctIdx, curNonce := -1, ""
 	if ok {
-		correctIdx = p.correctIdx
+		correctIdx, curNonce = p.correctIdx, p.nonce
 	}
 	v.mu.Unlock()
 	if done {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该验证已处理或已过期。"))
 		return nil
 	}
+	if nonce != curNonce {
+		// A stale button from a previous (overwritten) request — don't let it answer this quiz.
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该题目已过期,请重新打开验证链接获取新题。").WithShowAlert())
+		return nil
+	}
 
 	if choice != correctIdx {
-		v.decline(c, bot, gid, owner, "wrong answer")
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("❌ 答错了,已拒绝。可重新申请。").WithShowAlert())
+		_, banned := v.decline(c, bot, gid, owner, "wrong answer")
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(banned)).WithShowAlert())
 		return nil
 	}
 	if !v.isChannelMember(c, bot, gid, owner) {
@@ -697,10 +760,13 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理或无法批准。"))
 		}
 	case "ban":
-		if v.banApplicant(c, bot, gid, target) {
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("🚫 已拒绝并永久封禁"))
-		} else {
+		switch handled, banned := v.banApplicant(c, bot, gid, target); {
+		case !handled:
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理。"))
+		case banned:
+			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", banDurationText(v.banDuration()))))
+		default:
+			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("已拒绝;但封禁失败(可能缺权限),请手动封禁。").WithShowAlert())
 		}
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
@@ -721,9 +787,10 @@ func (v *Verifier) isChannelMember(c context.Context, bot *telego.Bot, gid, user
 		// must NOT lock every applicant out — and alert admins instead of silently blocking.
 		if v.botID != 0 {
 			if _, e2 := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: v.botID}); e2 != nil {
-				log.Printf("isChannelMember: bot cannot access required channel %d (%v) — passing applicant %d through; make the bot an admin of that channel", rc, e2, userID)
+				open := v.cfg.failOpenChannel()
+				log.Printf("isChannelMember: bot cannot access required channel %d (%v) for applicant %d; fail_open=%v — make the bot an admin of that channel", rc, e2, userID, open)
 				v.channelAccessAlert(c, bot, rc)
-				return true
+				return open // configurable: default fail-open (don't lock everyone out); strict deployments set required_channel_fail_open:false
 			}
 		}
 		log.Printf("getChatMember(channel=%d user=%d): %v", rc, userID, err)
@@ -828,6 +895,7 @@ func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) b
 	if _, ok := v.consume(gid, uid); !ok {
 		return true // a concurrent path already consumed it; the approve still succeeded
 	}
+	v.clearVerifyFails(gid, uid) // verified successfully — reset any failure strikes
 	v.deleteChallenge(c, bot, gid, msgID)
 	v.recordDecision(true)
 	v.save()
@@ -835,34 +903,72 @@ func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) b
 	return true
 }
 
-func (v *Verifier) decline(c context.Context, bot *telego.Bot, gid, uid int64, reason string) bool {
-	p, ok := v.consume(gid, uid)
-	if !ok {
-		return false
+// wrongAnswerText is the callback alert shown after a wrong answer: a ban notice if this
+// failure triggered the auto-ban, otherwise a decline + retry-after-cooldown hint.
+func (v *Verifier) wrongAnswerText(banned bool) string {
+	if banned {
+		return "❌ 验证连续失败多次,已被封禁。"
 	}
-	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
-		log.Printf("decline %d in %d (%s): %v", uid, gid, reason, err) // benign if request already gone
+	if s := v.cfg.VerifyRetrySeconds; s > 0 {
+		return fmt.Sprintf("❌ 答错了,已拒绝。请 %d 秒后重新申请。", s)
 	}
-	v.deleteChallenge(c, bot, gid, p.groupMsgID)
-	v.recordDecision(false)
-	v.save()
-	log.Printf("decline user=%d group=%d (%s)", uid, gid, reason)
-	return true
+	return "❌ 答错了,已拒绝。可重新申请。"
 }
 
-func (v *Verifier) banApplicant(c context.Context, bot *telego.Bot, gid, uid int64) bool {
+// decline rejects a failed verification (wrong answer / timeout). It records a strike; once an
+// applicant reaches cfg.VerifyMaxFails strikes it is banned (for the configured duration)
+// instead of being allowed to retry forever. Returns handled=false if there was no live
+// pending, and banned=true if this failure crossed the auto-ban threshold.
+func (v *Verifier) decline(c context.Context, bot *telego.Bot, gid, uid int64, reason string) (handled, banned bool) {
 	p, ok := v.consume(gid, uid)
 	if !ok {
-		return false
+		return false, false
+	}
+	v.deleteChallenge(c, bot, gid, p.groupMsgID)
+	v.recordDecision(false)
+	count, doBan := v.recordVerifyFail(gid, uid)
+
+	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}) // benign if already gone
+	if doBan {
+		secs := v.banDuration()
+		if err := v.applyBan(c, bot, gid, uid, secs, false); err != nil {
+			log.Printf("verify auto-ban %d in %d: %v", uid, gid, err)
+			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 在群 %d 验证连续失败 %d 次,自动封禁失败(可能缺权限):%v", uid, gid, count, err))
+			banned = false
+		} else {
+			v.adminAlert(c, bot, fmt.Sprintf("🚫 用户 %d 在群 %d 验证连续失败 %d 次,已自动封禁(%s)", uid, gid, count, banDurationText(secs)))
+			banned = true
+		}
+		if banned {
+			v.clearVerifyFails(gid, uid) // ONLY on a successful ban (so a later unban starts fresh).
+			// On ban FAILURE keep the strikes: the threshold stays tripped, every further failure
+			// re-attempts the ban and re-alerts admins, and the cooldown keeps throttling — so a
+			// missing "ban users" right can't turn the cap into an infinite-retry loop.
+		}
+	}
+	v.save()
+	log.Printf("decline user=%d group=%d (%s) fails=%d banned=%v", uid, gid, reason, count, banned)
+	return true, banned
+}
+
+// banApplicant declines the join request and bans the user. It returns handled=false if there
+// was no live pending to act on, and banned=false if the BanChatMember call failed (e.g. the
+// bot lacks ban rights) — so the admin gets honest feedback instead of a false "banned".
+func (v *Verifier) banApplicant(c context.Context, bot *telego.Bot, gid, uid int64) (handled, banned bool) {
+	p, ok := v.consume(gid, uid)
+	if !ok {
+		return false, false
 	}
 	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
-	if err := bot.BanChatMember(c, &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+	banned = true
+	if err := v.applyBan(c, bot, gid, uid, v.banDuration(), true); err != nil { // honour /bantime like the other ban paths
+		banned = false
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
-		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 封禁用户 %d(群 %d)失败:%v", uid, gid, err))
+		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 封禁用户 %d(群 %d)失败(可能缺权限):%v;申请已拒绝,请手动封禁", uid, gid, err))
 	}
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	v.recordDecision(false)
 	v.save()
-	log.Printf("banApplicant user=%d group=%d (admin report)", uid, gid)
-	return true
+	log.Printf("banApplicant user=%d group=%d banned=%v (admin report)", uid, gid, banned)
+	return true, banned
 }

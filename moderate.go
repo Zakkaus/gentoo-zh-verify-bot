@@ -83,15 +83,17 @@ func (v *Verifier) notify(c context.Context, bot *telego.Bot, chatID int64, text
 }
 
 func (v *Verifier) onSb(ctx *th.Context, update telego.Update) error {
-	return v.moderate(ctx, update, false)
+	return v.moderate(ctx, update, "/sb")
 }
 func (v *Verifier) onBan(ctx *th.Context, update telego.Update) error {
-	return v.moderate(ctx, update, true)
+	return v.moderate(ctx, update, "/ban")
 }
 
-// moderate implements /sb (delete + kick, rejoinable) and /ban (delete + permanent ban).
-// Reply to the offender's message; admin-only; works in any guarded group.
-func (v *Verifier) moderate(ctx *th.Context, update telego.Update, permanent bool) error {
+// moderate implements /sb and /ban: delete the replied message and ban the user for the
+// configured duration (banDuration / /bantime; 0 = permanent). Reply to the offender's
+// message; admin-only; works in any guarded group. /sb and /ban behave the same (both honour
+// the configured duration) — two names are kept for familiarity.
+func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
 		return nil
@@ -99,10 +101,6 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, permanent boo
 	bot := ctx.Bot()
 	c := ctx.Context()
 	gid := msg.Chat.ID
-	cmd := "/sb"
-	if permanent {
-		cmd = "/ban"
-	}
 
 	defer func() {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
@@ -127,23 +125,20 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, permanent boo
 
 	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
 
-	if err := bot.BanChatMember(c, &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: target.ID, RevokeMessages: true}); err != nil {
+	secs := v.banDuration()
+	if err := v.applyBan(c, bot, gid, target.ID, secs, true); err != nil {
 		log.Printf("%s ban user=%d in %d: %v", cmd, target.ID, gid, err)
 		v.notify(c, bot, gid, "❌ 操作失败:bot 可能缺少「封禁用户」权限。")
 		return nil
 	}
-	action := "已永久封禁(不可再加入)"
-	if !permanent {
-		_ = bot.UnbanChatMember(c, &telego.UnbanChatMemberParams{ChatID: tu.ID(gid), UserID: target.ID, OnlyIfBanned: true})
-		action = "已踢出(可重新申请入群)"
-	}
+	action := fmt.Sprintf("已封禁(%s)", banDurationText(secs))
 
 	v.notify(c, bot, gid, fmt.Sprintf("✅ %s:%s(id %d),操作人 %s。", action, displayName(target), target.ID, displayName(msg.From)))
 	if v.cfg.AdminLogChatID != 0 {
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(v.cfg.AdminLogChatID),
 			fmt.Sprintf("%s %s: 群 %d 目标 %d (%s) 操作人 %s", cmd, action, gid, target.ID, displayName(target), displayName(msg.From))))
 	}
-	log.Printf("%s by admin=%d target=%d group=%d permanent=%v", cmd, msg.From.ID, target.ID, gid, permanent)
+	log.Printf("%s by admin=%d target=%d group=%d ban_secs=%d", cmd, msg.From.ID, target.ID, gid, secs)
 	return nil
 }
 
