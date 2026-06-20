@@ -156,13 +156,8 @@ func formatBug(b recentBug, lang string) string {
 		comp += " › " + b.Component
 	}
 	line(pick("组件", "Component"), comp)
-	imp := zhVal(bugPriorityZH, b.Priority, zh)
-	sev := zhVal(bugSeverityZH, b.Severity, zh)
-	importance := strings.Trim(imp+" · "+sev, " ·")
-	if imp != "" && strings.EqualFold(imp, sev) {
-		importance = imp // collapse a redundant "普通 · 普通" / "Normal · normal"
-	}
-	line(pick("重要度", "Importance"), importance)
+	line(pick("优先级", "Priority"), zhVal(bugPriorityZH, b.Priority, zh))
+	line(pick("严重性", "Severity"), zhVal(bugSeverityZH, b.Severity, zh))
 	if len(b.Keywords) > 0 {
 		line(pick("关键词", "Keywords"), strings.Join(b.Keywords, ", "))
 	}

@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.3] - 2026-06-20
+
+### Changed
+- Feed bug **Priority** and **Severity** are now shown as two separate labelled lines
+  (优先级 / 严重性) instead of one combined `重要度` line, so even identical values read
+  clearly. Supersedes the 1.5.2 collapse.
+
 ## [1.5.2] - 2026-06-20
 
 ### Changed
@@ -114,6 +121,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.3
 [1.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.2
 [1.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.0
