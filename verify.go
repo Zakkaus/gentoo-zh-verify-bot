@@ -904,14 +904,21 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot *telego.Bot, channe
 }
 
 func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) bool {
-	// Peek WITHOUT consuming, so a transient approve failure doesn't strand the
-	// applicant — the pending, its timer and the in-group challenge all stay
-	// intact for a retry / admin button / timeout.
+	// CLAIM the pending before the network approve — stop its timeout timer and mark it done,
+	// atomically with the peek — so the timer (or a concurrent callback) can't decline/strike/
+	// auto-ban a user we're about to approve. The entry stays in the map (done, timer stopped) so
+	// a FAILED approve can re-open it as retryable: a transient failure must not strand the
+	// applicant (their pending, in-group challenge and a fresh timeout all survive for a retry).
+	key := pkey{gid, uid}
 	v.mu.Lock()
-	p, ok := v.pend[pkey{gid, uid}]
+	p, ok := v.pend[key]
 	if !ok || p.done {
 		v.mu.Unlock()
 		return false
+	}
+	p.done = true
+	if p.timer != nil {
+		p.timer.Stop()
 	}
 	msgID := p.groupMsgID
 	v.mu.Unlock()
@@ -919,18 +926,40 @@ func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) b
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		log.Printf("approve %d in %d: %v", uid, gid, err)
 		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 批准用户 %d 加入群 %d 失败(可能缺权限):%v;已保留申请,可重试或等待超时", uid, gid, err))
+		v.reopenPending(bot, gid, uid, p) // restore as retryable (re-arm the timeout)
 		return false
 	}
-	// Succeeded — now claim the pending and clean up.
-	if _, ok := v.consume(gid, uid); !ok {
-		return true // a concurrent path already consumed it; the approve still succeeded
+	// Succeeded — drop the (already-claimed) pending and clean up. Only delete if it's still ours,
+	// so a request that replaced it while the approve was in flight isn't clobbered.
+	v.mu.Lock()
+	if cur, ok := v.pend[key]; ok && cur == p {
+		delete(v.pend, key)
 	}
+	v.mu.Unlock()
 	v.clearVerifyFails(gid, uid) // verified successfully — reset any failure strikes
 	v.deleteChallenge(c, bot, gid, msgID)
 	v.recordDecision(true)
 	v.save()
 	log.Printf("approve user=%d group=%d", uid, gid)
 	return true
+}
+
+// reopenPending re-arms a pending that was claimed for an approve that then FAILED, so the
+// applicant can still retry, be approved by an admin, or time out normally. No-op if a newer
+// request has since replaced the entry, or it was otherwise consumed.
+func (v *Verifier) reopenPending(bot *telego.Bot, gid, uid int64, p *pending) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.pend[pkey{gid, uid}]; !ok || cur != p || !p.done {
+		return // replaced or already consumed — leave it alone
+	}
+	p.done = false
+	delay := time.Until(p.deadline)
+	if delay < time.Second {
+		delay = time.Second
+	}
+	nonce := p.nonce // mirror onJoinRequest: a background-context timer that only declines THIS pending
+	p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, "timeout") })
 }
 
 // wrongAnswerText is the callback alert shown after a wrong answer: a ban notice if this
