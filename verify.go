@@ -387,8 +387,10 @@ func (v *Verifier) load(bot *telego.Bot) {
 		v.mu.Lock()
 		v.pend[pkey{gid, uid}] = p
 		// arm the timer with the entry already in the map (mirrors onJoinRequest), so a
-		// near-immediate fire can't decline()->consume() before the entry exists
-		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, "timeout") })
+		// near-immediate fire can't decline()->consume() before the entry exists. The captured
+		// nonce makes the decline a no-op if a fresh request has since replaced this pending.
+		nonce := p.nonce
+		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, "timeout") })
 		v.mu.Unlock()
 	}
 	if len(recs) > 0 {
@@ -435,6 +437,8 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
 	bh.Handle(v.onBanTime, th.CommandEqual("bantime"))
+	bh.Handle(v.onMute, th.CommandEqual("mute"))
+	bh.Handle(v.onUnmute, th.CommandEqual("unmute"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 
@@ -531,6 +535,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	v.mu.Lock()
 	oldMsgID := 0
 	if old, ok := v.pend[key]; ok {
+		old.done = true // mark replaced, so a stale callback for it bails even before the nonce check
 		if old.timer != nil {
 			old.timer.Stop()
 		}
@@ -538,7 +543,8 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	}
 	p := &pending{groupMsgID: msgID, qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(),
 		deadline: time.Now().Add(time.Duration(v.cfg.TimeoutSeconds) * time.Second)}
-	p.timer = time.AfterFunc(time.Until(p.deadline), func() { v.decline(context.Background(), bot, gid, uid, "timeout") })
+	nonce := p.nonce // captured so this pending's timeout only declines THIS pending (not a later one)
+	p.timer = time.AfterFunc(time.Until(p.deadline), func() { v.decline(context.Background(), bot, gid, uid, nonce, "timeout") })
 	v.pend[key] = p
 	v.mu.Unlock()
 	if oldMsgID != 0 && oldMsgID != msgID {
@@ -714,7 +720,7 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 	}
 
 	if choice != correctIdx {
-		_, banned := v.decline(c, bot, gid, owner, "wrong answer")
+		_, banned := v.decline(c, bot, gid, owner, nonce, "wrong answer")
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(banned)).WithShowAlert())
 		return nil
 	}
@@ -845,6 +851,25 @@ func (v *Verifier) consume(gid, uid int64) (*pending, bool) {
 	return p, true
 }
 
+// consumeNonce is consume but only claims the pending if its nonce still matches — used by the
+// timeout (and wrong-answer) path so a STALE timer/callback from a since-replaced request can't
+// decline/strike/ban a freshly re-issued pending under the same (gid,uid) key.
+func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key := pkey{gid, uid}
+	p, ok := v.pend[key]
+	if !ok || p.done || p.nonce != nonce {
+		return nil, false // gone, already handled, or a different (newer) pending now holds the key
+	}
+	p.done = true
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	delete(v.pend, key)
+	return p, true
+}
+
 func (v *Verifier) deleteChallenge(c context.Context, bot *telego.Bot, gid int64, msgID int) {
 	if msgID != 0 {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msgID})
@@ -915,12 +940,13 @@ func (v *Verifier) wrongAnswerText(banned bool) string {
 	return "❌ 答错了,已拒绝。可重新申请。"
 }
 
-// decline rejects a failed verification (wrong answer / timeout). It records a strike; once an
-// applicant reaches cfg.VerifyMaxFails strikes it is banned (for the configured duration)
-// instead of being allowed to retry forever. Returns handled=false if there was no live
-// pending, and banned=true if this failure crossed the auto-ban threshold.
-func (v *Verifier) decline(c context.Context, bot *telego.Bot, gid, uid int64, reason string) (handled, banned bool) {
-	p, ok := v.consume(gid, uid)
+// decline rejects a failed verification (wrong answer / timeout). nonce identifies the exact
+// pending being rejected, so a stale timer can't decline a since-replaced one (see consumeNonce).
+// It records a strike; once an applicant reaches cfg.VerifyMaxFails strikes it is banned (for
+// the configured duration) instead of retrying forever. Returns handled=false if there was no
+// matching live pending, and banned=true if this failure crossed the auto-ban threshold.
+func (v *Verifier) decline(c context.Context, bot *telego.Bot, gid, uid int64, nonce, reason string) (handled, banned bool) {
+	p, ok := v.consumeNonce(gid, uid, nonce)
 	if !ok {
 		return false, false
 	}
