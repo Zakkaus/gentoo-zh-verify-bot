@@ -196,7 +196,7 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 
-	// newest version per family (date-snapshot-aware)
+	// newest version per family from Repology
 	best := map[string]string{}
 	for _, p := range pkgs {
 		if fam := famOf(p.Repo); fam != "" && p.Version != "" {
@@ -205,27 +205,57 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 			}
 		}
 	}
-	if len(best) == 0 {
+
+	// Build the displayed lines. Gentoo is special: use the bot's own packages.gentoo.org
+	// data so amd64-stable and ~amd64 testing show on SEPARATE lines (Repology can't express
+	// Gentoo keyword status). All other families come from Repology, one line each.
+	type distroLine struct{ label, ver, url string }
+	var lines []distroLine
+	if atoms := searchMainTree(hc, proj); len(atoms) > 0 {
+		atom := atoms[0]
+		if pkgName := atom[strings.LastIndexByte(atom, '/')+1:]; strings.EqualFold(pkgName, proj) {
+			gURL := "https://packages.gentoo.org/packages/" + atom
+			stable, testing := pkgVersion(hc, atom)
+			switch {
+			case stable != "" && testing != "" && stable != testing:
+				lines = append(lines, distroLine{"Gentoo amd64", stable, gURL}, distroLine{"Gentoo ~amd64", testing, gURL})
+			case testing != "":
+				lines = append(lines, distroLine{"Gentoo ~amd64", testing, gURL})
+			case stable != "":
+				lines = append(lines, distroLine{"Gentoo amd64", stable, gURL})
+			}
+		}
+	}
+	qproj := neturl.QueryEscape(proj)
+	for _, f := range distroFamilies {
+		if f.label == "Gentoo" {
+			if len(lines) == 0 { // bot lookup found nothing -> fall back to Repology's gentoo version
+				if ver, ok := best["Gentoo"]; ok {
+					lines = append(lines, distroLine{"Gentoo", ver, fmt.Sprintf(f.search, qproj)})
+				}
+			}
+			continue
+		}
+		if ver, ok := best[f.label]; ok {
+			lines = append(lines, distroLine{f.label, ver, fmt.Sprintf(f.search, qproj)})
+		}
+	}
+	if len(lines) == 0 {
 		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE 里都没有打包(可能是某发行版专属)。", proj))
 		return nil
 	}
 
-	verURL, projEsc, qproj := esc(repologyVersionsURL(proj)), esc(proj), neturl.QueryEscape(proj)
-	head := fmt.Sprintf("📦 <a href=\"%s\">%s</a> 跨发行版版本", verURL, projEsc)
+	head := fmt.Sprintf("📦 <a href=\"%s\">%s</a> 跨发行版版本", esc(repologyVersionsURL(proj)), esc(proj))
 	if !exact {
 		head += fmt.Sprintf(" <i>(「%s」最接近的匹配)</i>", esc(name))
 	}
 	var plain, rich strings.Builder
 	plain.WriteString(head + ":")
 	rich.WriteString("<h3>" + head + "</h3><ul>")
-	for _, f := range distroFamilies {
-		ver, ok := best[f.label]
-		if !ok {
-			continue
-		}
-		famLink := fmt.Sprintf("<a href=\"%s\">%s</a>", esc(fmt.Sprintf(f.search, qproj)), f.label)
-		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s", famLink, esc(ver))
-		fmt.Fprintf(&rich, "<li><b>%s</b>:%s</li>", famLink, esc(ver))
+	for _, ln := range lines {
+		famLink := fmt.Sprintf("<a href=\"%s\">%s</a>", esc(ln.url), esc(ln.label))
+		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s", famLink, esc(ln.ver))
+		fmt.Fprintf(&rich, "<li><b>%s</b>:%s</li>", famLink, esc(ln.ver))
 	}
 	rich.WriteString("</ul>")
 	if len(alts) > 0 {

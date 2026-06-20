@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.9.1] - 2026-06-20
+
+### Changed
+- `/distro` now shows Gentoo's **amd64-stable and ~amd64 (testing) on separate lines**
+  when they differ (from packages.gentoo.org, reusing the `/pkg` version logic) — e.g.
+  firefox shows `Gentoo amd64 140.12.0` and `Gentoo ~amd64 152.0` — and collapses to one
+  line when stable == testing.
+
 ## [1.9.0] - 2026-06-20
 
 ### Changed
@@ -178,6 +186,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.9.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.1
 [1.9.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.0
 [1.8.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.1
 [1.8.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.0
