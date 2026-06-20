@@ -141,6 +141,8 @@ func displayTitles(ctx context.Context, w wikiSource, titles []string) map[strin
 
 // pickWikiTitles drops other/foreign-language pages, dedupes by base topic preferring the
 // zh-cn page, and returns titles with zh first then en (rank order preserved), capped at max.
+// Dedupe is case-insensitive on the base (so "NVIDIA" and "NVidia" collapse to one topic) while
+// the chosen page's original title is preserved for display.
 func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
 	type entry struct{ title, lang string }
 	chosen := map[string]entry{}
@@ -150,14 +152,15 @@ func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
 		if lang == "other" || (lang == "en" && hasNonASCII(base)) {
 			continue
 		}
-		if cur, ok := chosen[base]; ok {
+		key := strings.ToLower(base) // case-insensitive topic key
+		if cur, ok := chosen[key]; ok {
 			if cur.lang != "zh" && lang == "zh" { // upgrade en -> zh for the same topic
-				chosen[base] = entry{t, lang}
+				chosen[key] = entry{t, lang}
 			}
 			continue
 		}
-		chosen[base] = entry{t, lang}
-		order = append(order, base)
+		chosen[key] = entry{t, lang}
+		order = append(order, key)
 	}
 	var zh, en []string
 	for _, b := range order {
