@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-06-20
+
+### Added
+- **Per-group configuration** — a new `groups` array lets each guarded group set its own
+  `required_channel_id`, `channel_display`, `channel_invite_url` and `questions`, each
+  falling back to the global default when unset. The legacy `group_ids` / `group_id` are
+  still accepted (treated as groups with no overrides). A configured group the bot isn't
+  yet an admin of stays inert (no join requests reach it) rather than erroring.
+
 ## [1.6.0] - 2026-06-20
 
 ### Added
@@ -135,6 +144,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.6.0
 [1.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.4
 [1.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.3

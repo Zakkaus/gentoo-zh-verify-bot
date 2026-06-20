@@ -56,10 +56,10 @@ GITHUB_TOKEN=ghp_xxx
 
 | 键 | 含义 |
 | --- | --- |
-| `group_ids` | 要守护的群(也可用单数 `group_id`) |
-| `required_channel_id` | 申请人必须关注的频道数字 id;`0` 关闭 |
-| `channel_display` | 展示给用户的频道,如 `@YourChannel` |
-| `channel_invite_url` | 频道邀请链接;**私有频道**(无 `@` 用户名)必填 |
+| `groups` | 每个群单独配置:`[{id, required_channel_id?, channel_display?, channel_invite_url?, questions?}]`。每个可选字段**缺省时回落到下面的全局默认**,所以两个群既能共享设置、也能各自独立配置。也接受裸 `group_ids` 列表(或单数 `group_id`),当作无覆盖的群 |
+| `required_channel_id` | **全局默认**:申请人必须关注的频道数字 id;`0` 关闭(可在 `groups` 里按群覆盖) |
+| `channel_display` | **全局默认**:展示给用户的频道,如 `@YourChannel` |
+| `channel_invite_url` | **全局默认**:频道邀请链接;**私有频道**(无 `@` 用户名)必填 |
 | `timeout_seconds` | 验证超时秒数(默认 240,上限 1800) |
 | `notify_ttl_seconds` | 机器人群消息 N 秒后自动删除(`0`→60,负数→不删) |
 | `warn_limit` | `/warn` 多少次后自动踢出(默认 3) |
@@ -73,7 +73,7 @@ GITHUB_TOKEN=ghp_xxx
 | `block_channel_senders` | 频道马甲封禁的**初始**状态(运行时用 `/bc` 开关,持久化;默认 `false`;需关隐私模式) |
 | `channel_whitelist` | **初始**频道白名单(运行时用 `/bc allow|deny`,持久化) |
 | `feed` / `feeds` | 可选:自动播报——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天。`feed` 是单个目标;`feeds` 是它们的数组(每个有各自的聊天、语言、过滤)。见下;省略即关闭 |
-| `questions` | 题库;每次随机抽一题,选项顺序打乱 |
+| `questions` | **全局默认**题库;每次随机抽一题,选项顺序打乱(可在 `groups` 里按群覆盖) |
 
 可选的 **`feed`** 对象——或 **`feeds`**(这些对象的数组,配多个目标,每周期共享一次抓取)。两者都省略即关闭:
 

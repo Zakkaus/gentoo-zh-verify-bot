@@ -54,7 +54,10 @@ Everything else lives in `config.json` (copy `config.example.json`):
 
 ```json
 {
-  "group_ids": [-1001234567890, -1009876543210],
+  "groups": [
+    {"id": -1001234567890},
+    {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"}
+  ],
   "required_channel_id": 0,
   "channel_display": "@YourChannel",
   "timeout_seconds": 240,
@@ -68,10 +71,10 @@ Everything else lives in `config.json` (copy `config.example.json`):
 
 | key | meaning |
 | --- | --- |
-| `group_ids` | groups to guard (or use singular `group_id`) |
-| `required_channel_id` | numeric channel id applicants must join; `0` disables it |
-| `channel_display` | channel shown to users, e.g. `@YourChannel` |
-| `channel_invite_url` | explicit channel join link; required for a **private** channel (no `@handle`) |
+| `groups` | per-group config: `[{id, required_channel_id?, channel_display?, channel_invite_url?, questions?}]`. Each optional field **falls back to the global default** below, so groups can share settings or be configured independently. A bare `group_ids` list (or singular `group_id`) is also accepted and treated as groups with no overrides |
+| `required_channel_id` | **global default** channel applicants must join; `0` disables it (override per-group in `groups`) |
+| `channel_display` | **global default** channel shown to users, e.g. `@YourChannel` |
+| `channel_invite_url` | **global default** explicit join link; required for a **private** channel (no `@handle`) |
 | `timeout_seconds` | time to finish verification (default 240, max 1800) |
 | `notify_ttl_seconds` | auto-delete the bot's group messages after N s (`0`→60, negative→never) |
 | `warn_limit` | `/warn` strikes before a user is auto-kicked (default 3) |
@@ -85,7 +88,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `block_channel_senders` | **initial** state of the channel sock-puppet filter (runtime toggle is `/bc`, persisted; default `false`; needs privacy mode OFF) |
 | `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow|deny`, persisted) |
 | `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
-| `questions` | quiz pool; one is picked at random, options shuffled |
+| `questions` | **global default** quiz pool; one is picked at random, options shuffled (override per-group in `groups`) |
 
 The optional **`feed`** object — or **`feeds`**, an array of these objects for several destinations (all served by one shared fetch per cycle). Omit both to disable:
 
