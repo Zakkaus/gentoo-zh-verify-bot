@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestParseMadison verifies the madison parser: it keeps base-release suites (newest wins
 // per suite), drops pocket variants (-updates / -security / -backports) and the
@@ -41,5 +44,22 @@ htop | 2.0.1-1 | xenial/universe | arm64`
 	// no arm64 lines -> empty
 	if e := parseMadison(""); len(e) != 0 {
 		t.Errorf("empty body should yield no entries, got %v", e)
+	}
+}
+
+// TestAurArchLabel verifies the PKGBUILD arch=() classification: any / aarch64 / 32-bit
+// ARM only / x86-only, and a missing arch line.
+func TestAurArchLabel(t *testing.T) {
+	for _, c := range []struct{ pkgbuild, wantSub string }{
+		{"pkgname=x\narch=('any')\n", "any"},
+		{"arch=('i686' 'x86_64' 'aarch64' 'armv7h')", "aarch64"},
+		{"arch=(x86_64 aarch64)", "aarch64"},
+		{"arch=('armv7h' 'armv6h')", "32"},  // 32-bit ARM only, no aarch64
+		{"arch=('x86_64')", "x86"},          // x86-only
+		{"pkgname=x\nno arch here", "无法解析"}, // missing arch=()
+	} {
+		if got := aurArchLabel(c.pkgbuild); !strings.Contains(got, c.wantSub) {
+			t.Errorf("aurArchLabel(%q) = %q, want substring %q", c.pkgbuild, got, c.wantSub)
+		}
 	}
 }

@@ -45,7 +45,9 @@ var distroFamilies = []struct {
 func famOf(repo string) string {
 	for _, f := range distroFamilies {
 		for _, p := range f.prefixes {
-			if repo == p || strings.HasPrefix(repo, p) {
+			// Match the repo exactly, or as "<prefix>_<release>" — but NOT a different distro
+			// that merely starts with the same letters (e.g. archpower_* is not "arch").
+			if repo == p || strings.HasPrefix(repo, strings.TrimRight(p, "_")+"_") {
 				return f.label
 			}
 		}
@@ -121,6 +123,16 @@ func repologyVersionsURL(proj string) string {
 	return "https://repology.org/project/" + neturl.PathEscape(proj) + "/versions"
 }
 
+// newestRow returns the highest version among rows and the repo it came from.
+func newestRow(rows []repologyPkg) (ver, repo string) {
+	for _, p := range rows {
+		if ver == "" || betterVer(ver, p.Version) {
+			ver, repo = p.Version, p.Repo
+		}
+	}
+	return ver, repo
+}
+
 // releaseLabel turns the Repology repo id of a family's winning version into a short
 // release name shown in parentheses — so e.g. debian_unstable -> "unstable" (sid),
 // ubuntu_25_04 -> "25.04", fedora_rawhide -> "rawhide", alpine_3_21 -> "3.21". A rolling
@@ -137,6 +149,7 @@ func releaseLabel(repo string, prefixes []string) string {
 	if s == "" || s == repo { // exact-prefix (rolling) repo, or no prefix matched
 		return ""
 	}
+	s = strings.TrimPrefix(s, "stable_") // nix_stable_25_11 -> 25.11, not "stable.25.11"
 	return strings.ReplaceAll(s, "_", ".")
 }
 
@@ -215,14 +228,12 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 
-	// newest version per family from Repology, remembering which repo (release) it came from
-	type famVer struct{ ver, repo string }
-	best := map[string]famVer{}
+	// group every repo row by family, so each family can show its rolling/dev channel AND
+	// its newest stable release when their versions differ (e.g. Debian unstable vs stable).
+	famRows := map[string][]repologyPkg{}
 	for _, p := range pkgs {
 		if fam := famOf(p.Repo); fam != "" && p.Version != "" {
-			if cur, ok := best[fam]; !ok || betterVer(cur.ver, p.Version) {
-				best[fam] = famVer{p.Version, p.Repo}
-			}
+			famRows[fam] = append(famRows[fam], p)
 		}
 	}
 
@@ -249,17 +260,22 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 	}
 	qproj := neturl.QueryEscape(proj)
 	for _, f := range distroFamilies {
+		rows := famRows[f.label]
 		if f.label == "Gentoo" {
-			if len(lines) == 0 { // bot lookup found nothing -> fall back to Repology's gentoo version
-				if fv, ok := best["Gentoo"]; ok {
-					lines = append(lines, distroLine{"Gentoo", fv.ver, "", fmt.Sprintf(f.search, qproj)})
-				}
+			if len(lines) == 0 && len(rows) > 0 { // bot lookup found nothing -> fall back to Repology
+				nv, nr := newestRow(rows)
+				lines = append(lines, distroLine{"Gentoo", nv, releaseLabel(nr, f.prefixes), fmt.Sprintf(f.search, qproj)})
 			}
 			continue
 		}
-		if fv, ok := best[f.label]; ok {
-			lines = append(lines, distroLine{f.label, fv.ver, releaseLabel(fv.repo, f.prefixes), fmt.Sprintf(f.search, qproj)})
+		if len(rows) == 0 {
+			continue
 		}
+		// One line per distro: the newest version + the release it's from. (Repology numbers
+		// releases inconsistently across distros — e.g. Debian's highest number is testing,
+		// Fedora's is stable — so we don't try to auto-label a "stable channel" from them.)
+		nv, nr := newestRow(rows)
+		lines = append(lines, distroLine{f.label, nv, releaseLabel(nr, f.prefixes), fmt.Sprintf(f.search, qproj)})
 	}
 	if len(lines) == 0 {
 		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE 里都没有打包(可能是某发行版专属)。", proj))

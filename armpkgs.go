@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	neturl "net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -101,6 +102,38 @@ func fedoraArmStatus(ctx context.Context, pkg string) string {
 	return fmt.Sprintf("✅ rawhide %s(aarch64 主架构)", r.Version)
 }
 
+var aurArchRe = regexp.MustCompile(`(?i)arch=\(([^)]*)\)`)
+
+// aurArchLabel reads a PKGBUILD's arch=() declaration. "any" is architecture-independent;
+// "aarch64" is declared arm64; "arm/armv6h/armv7h" are 32-bit ARM only; otherwise x86-only
+// (the package may still build on arm64, the maintainer just didn't declare it).
+func aurArchLabel(pkgbuild string) string {
+	m := aurArchRe.FindStringSubmatch(pkgbuild)
+	if m == nil {
+		return "⚠️ 无法解析 PKGBUILD"
+	}
+	arch := strings.ToLower(m[1])
+	switch {
+	case strings.Contains(arch, "any"):
+		return "✅ any(架构无关)"
+	case strings.Contains(arch, "aarch64"):
+		return "✅ 声明 aarch64"
+	case strings.Contains(arch, "arm"):
+		return "🟡 仅 32 位 ARM(无 aarch64)"
+	default:
+		return "❌ 仅 x86(PKGBUILD 未声明 aarch64;源码构建有时仍可)"
+	}
+}
+
+// aurArmStatus fetches an AUR package's PKGBUILD and reports its declared arch support.
+func (v *Verifier) aurArmStatus(ctx context.Context, pkg string) string {
+	body, err := httpGetBody(ctx, "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h="+neturl.QueryEscape(pkg), 64<<10)
+	if err != nil {
+		return "❌ 不在 AUR"
+	}
+	return aurArchLabel(string(body))
+}
+
 // alarmArmStatus checks whether Arch Linux ARM packages the name for aarch64 (200 vs 404).
 func alarmArmStatus(ctx context.Context, pkg string) string {
 	if _, err := httpGetBody(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), 1<<10); err != nil {
@@ -138,6 +171,7 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 		}},
 		{"Fedora", func() string { return fedoraArmStatus(hc, name) }},
 		{"Arch Linux ARM", func() string { return alarmArmStatus(hc, name) }},
+		{"AUR", func() string { return v.aurArmStatus(hc, name) }},
 	}
 	results := make([]srcResult, len(sources))
 	var wg sync.WaitGroup
@@ -156,7 +190,7 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	for _, r := range results {
 		fmt.Fprintf(&b, "\n • <b>%s</b>:%s", esc(r.label), esc(r.status))
 	}
-	b.WriteString("\n<i>提示:若 Gentoo 未 keyword arm64 但其它发行版已支持,通常意味着实际可用 —— 可 ACCEPT_KEYWORDS=\"~arm64\" 强制开启自行编译。各发行版按各自包名查询;AUR 为源码构建未列入。</i>")
+	b.WriteString("\n<i>提示:若 Gentoo 未 keyword arm64 但其它发行版已支持,通常意味着实际可用 —— 可 ACCEPT_KEYWORDS=\"~arm64\" 强制开启自行编译。各发行版按各自包名查询;AUR 显示 PKGBUILD 声明的架构(未声明 aarch64 也常能从源码构建)。</i>")
 	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
 	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
 	return nil
