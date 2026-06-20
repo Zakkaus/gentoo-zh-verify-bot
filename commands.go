@@ -20,8 +20,9 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "news", Description: "查看 / 搜索 Gentoo 新闻"},
 		{Command: "wiki", Description: "搜索 Gentoo / Arch wiki(含中文页)"},
 		{Command: "bbs", Description: "搜各大 Linux 论坛(中文优先)"},
-		{Command: "distro", Description: "跨发行版查包版本(Gentoo/AUR/Arch/Alpine/Debian/Ubuntu/Nix/Fedora/RHEL/openSUSE)"},
-		{Command: "arm", Description: "查包在 arm64 (aarch64) 上的 Gentoo keyword 状态"},
+		{Command: "pkgs", Description: "跨发行版查包版本(Gentoo/AUR/Arch/Alpine/Debian/Ubuntu/Nix/Fedora/RHEL/openSUSE)"},
+		{Command: "arm", Description: "查包在 arm64 上的 Gentoo keyword 状态"},
+		{Command: "armpkgs", Description: "跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM)"},
 		{Command: "ping", Description: "查看机器人状态 / 运行时长"},
 		{Command: "stats", Description: "今日通过 / 拒绝人数"},
 	}
