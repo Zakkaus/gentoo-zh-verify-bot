@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,26 @@ var githubToken string
 // recursive GitHub tree (a few MB), small enough to bound memory on a hostile body.
 const maxJSONBytes = 32 << 20
 
+// httpSem bounds the number of CONCURRENT outbound requests (every lookup + the feed share it).
+// This preserves "群里不限次" — group lookups aren't frequency-limited — while capping worst-case
+// concurrent network/goroutine pressure under a spam burst (e.g. /armpkgs fans out ~6 each). Each
+// httpGet holds one slot until its response body is closed.
+const httpMaxConcurrent = 24
+
+var httpSem = make(chan struct{}, httpMaxConcurrent)
+
+// semReleaseCloser releases one httpSem slot exactly once, when the response body is closed.
+type semReleaseCloser struct {
+	io.ReadCloser
+	once sync.Once
+}
+
+func (s *semReleaseCloser) Close() error {
+	err := s.ReadCloser.Close()
+	s.once.Do(func() { <-httpSem })
+	return err
+}
+
 // httpGet issues a GET with the shared client + User-Agent (plus any extra headers)
 // and returns the response only on HTTP 200; the caller must close resp.Body.
 func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, error) {
@@ -36,14 +57,22 @@ func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, 
 			req.Header.Add(k, val)
 		}
 	}
+	select { // acquire a concurrency slot (or give up if the request context is already done)
+	case httpSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		<-httpSem
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
+		<-httpSem
 		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
 	}
+	resp.Body = &semReleaseCloser{ReadCloser: resp.Body} // slot released when the caller closes the body
 	return resp, nil
 }
 

@@ -24,19 +24,20 @@ func (v *Verifier) applyMute(c context.Context, bot *telego.Bot, gid, uid int64,
 	})
 }
 
-// applyUnmute restores a member's right to post (all "can send …" flags true), lifting a mute
-// early. UntilDate 0 = no time limit on the granted permissions.
+// applyUnmute lifts a mute early by restoring the member to the GROUP's own default
+// permissions (so a restrictive group isn't over-granted) — fetched via GetChat. If that's
+// unavailable it falls back to a permissive set (the common case where members can post freely).
 func (v *Verifier) applyUnmute(c context.Context, bot *telego.Bot, gid, uid int64) error {
-	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{
-		ChatID: tu.ID(gid),
-		UserID: uid,
-		Permissions: telego.ChatPermissions{
-			CanSendMessages: telego.ToPtr(true), CanSendAudios: telego.ToPtr(true), CanSendDocuments: telego.ToPtr(true),
-			CanSendPhotos: telego.ToPtr(true), CanSendVideos: telego.ToPtr(true), CanSendVideoNotes: telego.ToPtr(true),
-			CanSendVoiceNotes: telego.ToPtr(true), CanSendPolls: telego.ToPtr(true), CanSendOtherMessages: telego.ToPtr(true),
-			CanAddWebPagePreviews: telego.ToPtr(true), CanInviteUsers: telego.ToPtr(true),
-		},
-	})
+	perms := telego.ChatPermissions{
+		CanSendMessages: telego.ToPtr(true), CanSendAudios: telego.ToPtr(true), CanSendDocuments: telego.ToPtr(true),
+		CanSendPhotos: telego.ToPtr(true), CanSendVideos: telego.ToPtr(true), CanSendVideoNotes: telego.ToPtr(true),
+		CanSendVoiceNotes: telego.ToPtr(true), CanSendPolls: telego.ToPtr(true), CanSendOtherMessages: telego.ToPtr(true),
+		CanAddWebPagePreviews: telego.ToPtr(true), CanInviteUsers: telego.ToPtr(true),
+	}
+	if chat, err := bot.GetChat(c, &telego.GetChatParams{ChatID: tu.ID(gid)}); err == nil && chat != nil && chat.Permissions != nil {
+		perms = *chat.Permissions // restore the group's default policy, not a blanket allow
+	}
+	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{ChatID: tu.ID(gid), UserID: uid, Permissions: perms})
 }
 
 // onMute handles /mute [时长] — reply to a message; mute the sender (禁言: stays in the group
