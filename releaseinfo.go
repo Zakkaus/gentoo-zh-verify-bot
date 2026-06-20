@@ -55,20 +55,25 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	deb := fetchDebianStatus(ctx, now)
 	ubu, ubuRel, ubuEOL, ubuSer := fetchUbuntu(ctx, now)
 
+	// Treat an EMPTY parsed result as a failed fetch, not success: a malformed/empty HTTP-200 body
+	// (GitLab Pages error page, schema drift) parses to zero rows -> empty maps, which must not
+	// overwrite good data or be cached as fresh for the full 24h. A valid CSV always yields a
+	// non-empty status/lts map, so len>0 is a sound validity proxy.
+	debOK, ubuOK := len(deb) > 0, len(ubu) > 0
 	relInfo.mu.Lock()
-	if deb != nil {
+	if debOK {
 		relInfo.debian = deb
 	}
-	if ubu != nil {
+	if ubuOK {
 		relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = ubu, ubuRel, ubuEOL, ubuSer
 	}
 	if relInfo.debian == nil {
 		relInfo.debian = map[string]string{} // mark attempted so the freshness gate can hold (no per-call refetch)
 	}
 	// Only treat the data fresh for the full TTL when BOTH sources succeeded this round; otherwise
-	// keep it fresh only briefly (relInfoRetryTTL) so a transiently-failed source self-heals soon
+	// keep it fresh only briefly (relInfoRetryTTL) so a failed/degraded source self-heals soon
 	// instead of serving degraded EOL/dev labels for 24h.
-	relInfo.fetched = relInfoNextFetched(now, deb != nil && ubu != nil)
+	relInfo.fetched = relInfoNextFetched(now, debOK && ubuOK)
 	relInfo.mu.Unlock()
 }
 
