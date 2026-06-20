@@ -79,6 +79,10 @@ type Config struct {
 	// NotifyTTLSeconds: auto-delete the bot's own in-group messages after N seconds
 	// (0 => default 60; negative => never delete).
 	NotifyTTLSeconds int `json:"notify_ttl_seconds"`
+	// LookupTTLSeconds: auto-delete a lookup command (/pkg /use /bug /news /wiki /bbs
+	// /distro) AND its answer after N seconds. Unset (nil) => default 180 (3 min), enabled;
+	// 0 or negative => disabled. Admins can toggle/adjust at runtime with /autodel.
+	LookupTTLSeconds *int `json:"lookup_ttl_seconds"`
 	// WarnLimit: number of /warn strikes before the user is auto-kicked (default 3).
 	WarnLimit int `json:"warn_limit"`
 	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).

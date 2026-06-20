@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -66,6 +68,38 @@ func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
 	})
 }
 
+// onAutoDel handles /autodel — toggle/adjust auto-deletion of lookup commands + answers.
+//
+//	/autodel            show current state
+//	/autodel on | off   enable / disable
+//	/autodel <minutes>  set the delay (1–1440) and enable
+func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
+	return v.adminCmd(ctx, update, func() string {
+		arg := strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text)))
+		switch {
+		case arg == "":
+			if ttl, on := v.lookupAutoDelete(); on {
+				return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(ttl/time.Minute))
+			}
+			return "查询结果自动删除:已关闭。\n用法:/autodel on 开启;/autodel <分钟> 设定时间并开启。"
+		case arg == "off":
+			v.setLookupAutoDelete(0, false)
+			return "已关闭查询结果自动删除(/pkg、/use、/bug、/news、/wiki、/bbs、/distro 的回复将保留)。"
+		case arg == "on":
+			v.setLookupAutoDelete(0, true)
+			ttl, _ := v.lookupAutoDelete()
+			return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute))
+		default:
+			n, err := strconv.Atoi(arg)
+			if err != nil || n < 1 || n > 1440 {
+				return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。"
+			}
+			v.setLookupAutoDelete(time.Duration(n)*time.Minute, true)
+			return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", n)
+		}
+	})
+}
+
 // onHelp lists commands (admins also see the moderation/admin commands).
 func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -94,6 +128,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/start — 开启入群验证\n" +
 			"/stop — 关闭入群验证\n" +
 			"/rich — 开关富文本输出(/pkg /use)\n" +
+			"/autodel — 开关/调节查询结果自动删除(/autodel on|off|<分钟>,默认3分钟)\n" +
 			"/sb — 回复某消息:删消息并踢出(可再申请)\n" +
 			"/ban — 回复某消息:删消息并永久封禁\n" +
 			fmt.Sprintf("/warn — 回复某消息:警告用户(满 %d 次自动踢出)\n", v.cfg.WarnLimit) +

@@ -225,6 +225,7 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	if !found {
 		b.WriteString("\n\n没找到相关条目,换个关键词试试?")
 	}
-	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
+	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
+	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
 	return nil
 }

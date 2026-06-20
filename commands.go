@@ -33,6 +33,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "clearwarn", Description: "[管理] 回复消息:清除用户警告"},
 		{Command: "bc", Description: "[管理] 频道马甲封禁开关 / 白名单"},
 		{Command: "rich", Description: "[管理] 开关富文本输出(/pkg /use)"},
+		{Command: "autodel", Description: "[管理] 开关/调节查询结果自动删除(默认3分钟)"},
 	}, member...)
 
 	if err := bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{

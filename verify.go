@@ -70,6 +70,8 @@ type Verifier struct {
 	acWhite     map[int64]bool
 	chanAlert   map[int64]time.Time // required-channel -> last "bot can't access" alert (throttle), guarded by mu
 	dmLast      map[int64]time.Time // user -> last DM auto-reply time (throttle), guarded by mu
+	lookupOn    bool                // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
+	lookupTTL   time.Duration       // how long before that deletion, guarded by mu
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -110,7 +112,58 @@ func NewVerifier(cfg *Config) *Verifier {
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
 	}
+	// Lookup auto-delete: unset => on at 3 min; 0/negative => off; positive => that many seconds.
+	v.lookupTTL = 180 * time.Second
+	v.lookupOn = true
+	if cfg.LookupTTLSeconds != nil {
+		if *cfg.LookupTTLSeconds <= 0 {
+			v.lookupOn = false
+		} else {
+			v.lookupTTL = time.Duration(*cfg.LookupTTLSeconds) * time.Second
+		}
+	}
 	return v
+}
+
+// lookupAutoDelete reports the lookup-response auto-delete TTL and whether it's enabled.
+func (v *Verifier) lookupAutoDelete() (time.Duration, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.lookupTTL, v.lookupOn
+}
+
+// setLookupAutoDelete updates the toggle and, when ttl > 0, the duration (/autodel).
+func (v *Verifier) setLookupAutoDelete(ttl time.Duration, on bool) {
+	v.mu.Lock()
+	if ttl > 0 {
+		v.lookupTTL = ttl
+	}
+	v.lookupOn = on
+	v.mu.Unlock()
+}
+
+// scheduleLookupCleanup deletes a lookup command and its answer after the configured TTL,
+// when auto-delete is enabled — so the group doesn't fill up with query/answer pairs. Uses
+// a fresh context because the timer fires minutes after the request context is done.
+func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID, respMsgID int) {
+	ttl, on := v.lookupAutoDelete()
+	if !on || respMsgID == 0 {
+		return
+	}
+	time.AfterFunc(ttl, func() {
+		_ = bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: respMsgID})
+		if cmdMsgID != 0 {
+			_ = bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: cmdMsgID})
+		}
+	})
+}
+
+// msgID returns m's id, or 0 if m is nil.
+func msgID(m *telego.Message) int {
+	if m == nil {
+		return 0
+	}
+	return m.MessageID
 }
 
 func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }
@@ -241,6 +294,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onBbs, th.CommandEqual("bbs"))
 	bh.Handle(v.onDistro, th.CommandEqual("distro"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
+	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 

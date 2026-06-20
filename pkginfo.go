@@ -334,7 +334,8 @@ func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int
 		if rp != nil {
 			params = params.WithReplyParameters(rp)
 		}
-		if _, err := bot.SendRichMessage(c, params); err == nil {
+		if sent, err := bot.SendRichMessage(c, params); err == nil {
+			v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
 			return
 		}
 	}
@@ -342,7 +343,8 @@ func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int
 	if rp != nil {
 		m = m.WithReplyParameters(rp)
 	}
-	_, _ = bot.SendMessage(c, m)
+	sent, _ := bot.SendMessage(c, m)
+	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
 }
 
 // renderUseRich builds the Bot API 10.1 rich-message /use — no truncation, full flag
