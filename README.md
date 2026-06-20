@@ -14,6 +14,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Multiple groups.** Guard several groups with one bot instance.
 - **Auto-leaves unauthorized chats.** If the bot is added to any group/channel that isn't in its config (a guarded group, the required channel, a feed target, or the admin-log chat), it leaves immediately — so it can't be pulled into random groups. To add a new guarded group, put its id in `group_ids` first, then add the bot.
 - **DM auto-reply.** A direct message to the bot (outside the verification flow) gets a single unified reply pointing the user back to the group + commands, instead of silence. Customizable via `private_reply`.
+- **Channel sock-puppet block (optional).** With `block_channel_senders` on, a message posted in a guarded group *on behalf of a channel* (a common spam/ban-evasion trick) is deleted and that channel is banned from posting. Anonymous group admins and the linked discussion channel are left alone. **Requires the bot's privacy mode to be OFF** (BotFather → disable group privacy) so it can see these messages.
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban, `/warn` = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts), `/clearwarn` = clear a user's strikes.
 - **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/ping`, `/stats` (today's approved/declined), `/help`.
 - **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise.
@@ -80,6 +81,8 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `rich_messages` | render `/pkg` & `/use` as Bot API 10.1 rich messages (default `false`; also toggleable in-chat via `/rich`) |
 | `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
 | `private_reply` | the unified auto-reply for DMs outside the verify flow (empty → built-in default) |
+| `block_channel_senders` | delete + ban channel sock-puppet posts in the groups (default `false`; needs privacy mode OFF) |
+| `channel_whitelist` | channel ids allowed to post in the groups when the above is on |
 | `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
 | `questions` | quiz pool; one is picked at random, options shuffled |
 
