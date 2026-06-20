@@ -144,9 +144,10 @@ func formatBug(b recentBug, lang string) string {
 		}
 	}
 
-	status := b.Status
+	zh := !en // zh feed: translate the enum values too (en feed keeps them English)
+	status := zhVal(bugStatusZH, b.Status, zh)
 	if b.Resolution != "" {
-		status += " / " + b.Resolution
+		status += " / " + zhVal(bugResolutionZH, b.Resolution, zh)
 	}
 	line(pick("状态", "Status"), status)
 
@@ -155,7 +156,7 @@ func formatBug(b recentBug, lang string) string {
 		comp += " › " + b.Component
 	}
 	line(pick("组件", "Component"), comp)
-	line(pick("重要度", "Importance"), strings.Trim(b.Priority+" · "+b.Severity, " ·"))
+	line(pick("重要度", "Importance"), strings.Trim(zhVal(bugPriorityZH, b.Priority, zh)+" · "+zhVal(bugSeverityZH, b.Severity, zh), " ·"))
 	if len(b.Keywords) > 0 {
 		line(pick("关键词", "Keywords"), strings.Join(b.Keywords, ", "))
 	}

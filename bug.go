@@ -19,6 +19,38 @@ type bugInfo struct {
 	summary, status, resolution, product, component, severity string
 }
 
+// Bugzilla enum-value translations for Chinese output. The labels are already
+// localized; these turn the finite status / resolution / severity / priority *values*
+// into Chinese too. Component names, keywords and people stay as-is (official identifiers).
+var (
+	bugStatusZH = map[string]string{
+		"UNCONFIRMED": "未确认", "CONFIRMED": "已确认", "IN_PROGRESS": "处理中",
+		"RESOLVED": "已解决", "VERIFIED": "已验证",
+	}
+	bugResolutionZH = map[string]string{
+		"FIXED": "已修复", "WONTFIX": "不予修复", "CANTFIX": "无法修复", "DUPLICATE": "重复",
+		"INVALID": "无效", "WORKSFORME": "无法复现", "OBSOLETE": "已过时", "UPSTREAM": "上游",
+		"NEEDINFO": "需补充信息", "TEST-REQUEST": "待测试", "PENDING-UPSTREAM": "待上游",
+	}
+	bugSeverityZH = map[string]string{
+		"blocker": "阻断", "critical": "严重", "major": "重大", "normal": "普通",
+		"minor": "次要", "trivial": "轻微", "enhancement": "增强",
+	}
+	bugPriorityZH = map[string]string{
+		"Highest": "最高", "High": "高", "Normal": "普通", "Low": "低", "Lowest": "最低",
+	}
+)
+
+// zhVal returns v translated via m when zh is true and a translation exists; else v.
+func zhVal(m map[string]string, v string, zh bool) string {
+	if zh {
+		if t, ok := m[v]; ok {
+			return t
+		}
+	}
+	return v
+}
+
 // fetchBug queries the public Gentoo Bugzilla REST API. ok=false for missing,
 // restricted (both return 404), or any error — callers fall back to a bare link.
 func fetchBug(ctx context.Context, id string) (bugInfo, bool) {
@@ -69,13 +101,13 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "🐞 <a href=\"%s\">Bug %s</a>\n%s\n", link, id, html.EscapeString(info.summary))
-	status := info.status
+	status := zhVal(bugStatusZH, info.status, true)
 	if info.resolution != "" {
-		status += " / " + info.resolution
+		status += " / " + zhVal(bugResolutionZH, info.resolution, true)
 	}
 	fmt.Fprintf(&b, "状态:%s", html.EscapeString(status))
 	if info.severity != "" {
-		fmt.Fprintf(&b, " · 严重性:%s", html.EscapeString(info.severity))
+		fmt.Fprintf(&b, " · 严重性:%s", html.EscapeString(zhVal(bugSeverityZH, info.severity, true)))
 	}
 	if info.product != "" {
 		comp := info.product
