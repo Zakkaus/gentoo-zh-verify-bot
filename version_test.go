@@ -20,10 +20,35 @@ func TestVerLess(t *testing.T) {
 		{"2.0", "2.0", false},   // equal is not "less"
 		{"9.1.1652", "9.2.0670", true},
 		{"1.0.0", "1.0.0.0", true}, // more tokens (all-equal prefix) is newer
+		// Gentoo suffix ordering: _alpha < _beta < _pre < _rc < (release) < _p, and -rN newer.
+		{"1.0_rc1", "1.0", true},      // a release candidate is OLDER than the release
+		{"1.0", "1.0_rc1", false},     // ...and the release is newer
+		{"1.0_alpha1", "1.0", true},   // alpha is older
+		{"1.0_beta", "1.0_rc1", true}, // beta < rc
+		{"1.0_p1", "1.0", false},      // a patch level is NEWER than the release
+		{"1.0", "1.0_p1", true},
+		{"1.0_rc1", "1.0_rc2", true}, // rc1 < rc2
 	}
 	for _, c := range cases {
 		if got := verLess(c.a, c.b); got != c.want {
 			t.Errorf("verLess(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// TestCommandArg verifies the command argument is taken after the first run of whitespace,
+// so tab/newline-separated arguments (a pasted "/pkg\nvim") work, not just a single space.
+func TestCommandArg(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"/pkg vim", "vim"},
+		{"/pkg\nvim", "vim"},
+		{"/pkg\tvim", "vim"},
+		{"/pkg", ""},
+		{"/pkg  a  b", "a b"},
+		{"  /pkg  vim  ", "vim"},
+	} {
+		if got := commandArg(c.in); got != c.want {
+			t.Errorf("commandArg(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -51,10 +52,14 @@ func (f *FeedConfig) newsOn() bool { return f.News == nil || *f.News }
 
 // interval is the poll interval, defaulting to 5 min with a 60 s floor.
 func (f *FeedConfig) interval() time.Duration {
-	if f.IntervalSeconds >= 60 {
+	switch {
+	case f.IntervalSeconds <= 0:
+		return 5 * time.Minute // unset -> default
+	case f.IntervalSeconds < 60:
+		return 60 * time.Second // clamp a too-fast interval to the 60 s floor
+	default:
 		return time.Duration(f.IntervalSeconds) * time.Second
 	}
-	return 5 * time.Minute
 }
 
 // Config is loaded from a JSON file. The bot token comes from the BOT_TOKEN env var.
@@ -183,6 +188,19 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
 		c.Feeds = append(c.Feeds, *c.Feed)
 	}
+	// Drop duplicate feed targets: feed state is keyed by chat_id, so two feeds posting to
+	// the same chat would share one cursor and silently drop each other's items. Keep first.
+	seenFeed := map[int64]bool{}
+	deduped := c.Feeds[:0]
+	for _, f := range c.Feeds {
+		if f.ChatID != 0 && seenFeed[f.ChatID] {
+			log.Printf("config: duplicate feed for chat_id %d ignored (feed state is per chat)", f.ChatID)
+			continue
+		}
+		seenFeed[f.ChatID] = true
+		deduped = append(deduped, f)
+	}
+	c.Feeds = deduped
 	return &c, nil
 }
 

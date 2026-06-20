@@ -65,7 +65,7 @@ func (v *Verifier) onArm(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, "用法:/arm <包名>,例如 /arm firefox。查该包在 arm64 (aarch64) 上的 Gentoo keyword 状态。")
 		return nil
 	}
-	hc, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
 	atoms := searchMainTree(hc, name)
 	if len(atoms) == 0 {

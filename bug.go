@@ -89,7 +89,7 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 	}
 	link := "https://bugs.gentoo.org/" + id
 
-	hc, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
 	info, ok := fetchBug(hc, id)
 	if !ok {

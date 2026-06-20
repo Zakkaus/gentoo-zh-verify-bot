@@ -96,7 +96,7 @@ func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	items := getNews(hc)
 

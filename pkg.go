@@ -97,12 +97,50 @@ func splitVer(v string) []string {
 // verLess reports whether version a is older than b (best-effort; good enough to pick "latest").
 func verLess(a, b string) bool {
 	as, bs := splitVer(a), splitVer(b)
-	for i := 0; i < len(as) && i < len(bs); i++ {
+	n := len(as)
+	if len(bs) < n {
+		n = len(bs)
+	}
+	for i := 0; i < n; i++ {
 		if c := cmpToken(as[i], bs[i]); c != 0 {
 			return c < 0
 		}
 	}
-	return len(as) < len(bs)
+	if len(as) == len(bs) {
+		return false
+	}
+	// Equal up to the shorter length; the version with an extra trailing token is either a
+	// pre-release (_alpha/_beta/_pre/_rc — OLDER than the bare release) or a patch/revision/
+	// extra component (_p, -r, .N — NEWER). Decide by that token's Gentoo suffix weight.
+	aLonger := len(as) > len(bs)
+	var extra string // the first token only the longer side has (index n into it)
+	if aLonger {
+		extra = as[n]
+	} else {
+		extra = bs[n]
+	}
+	if suffixWeight(extra) < 0 { // longer side is a pre-release => it is the OLDER one
+		return aLonger
+	}
+	return !aLonger // longer side is a patch/revision/extra component => the NEWER one
+}
+
+// suffixWeight ranks a Gentoo version suffix token relative to the bare release (0):
+// negative for pre-releases (_alpha < _beta < _pre < _rc), positive for everything newer
+// (a patch _pN, a revision -rN, or an extra numeric component).
+func suffixWeight(tok string) int {
+	switch {
+	case strings.HasPrefix(tok, "alpha"):
+		return -4
+	case strings.HasPrefix(tok, "beta"):
+		return -3
+	case strings.HasPrefix(tok, "pre"):
+		return -2
+	case strings.HasPrefix(tok, "rc"):
+		return -1
+	default:
+		return 1
+	}
 }
 
 // cmpToken compares two version tokens with natural ordering: digit runs compare
@@ -441,11 +479,13 @@ func pkgRelevance(atom, q string) int {
 }
 
 func commandArg(text string) string {
-	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
-	if len(parts) < 2 {
+	// Split on the first run of whitespace so a tab/newline-separated argument (e.g. a
+	// pasted "/pkg\nvim") is handled, not just a single space.
+	fields := strings.Fields(text)
+	if len(fields) < 2 {
 		return ""
 	}
-	return strings.TrimSpace(parts[1])
+	return strings.TrimSpace(strings.Join(fields[1:], " "))
 }
 
 // onPkg handles /pkg <name> — searches the official tree + the configured overlays, with versions.
@@ -464,7 +504,7 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 	}
 	q = normalizeQuery(q)
 
-	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	pkgC.refresh(hc)
 	ovRes := pkgC.search(q)

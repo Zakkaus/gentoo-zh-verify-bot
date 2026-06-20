@@ -152,7 +152,7 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, "用法:/armpkgs <包名>,例如 /armpkgs htop。查该包在各发行版 arm64 (aarch64) 上的支持(Gentoo / Debian / Ubuntu / Fedora / Arch Linux ARM)。")
 		return nil
 	}
-	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	pe := neturl.PathEscape(name)
 

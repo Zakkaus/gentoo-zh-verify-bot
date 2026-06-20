@@ -189,7 +189,7 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, "用法:/wiki <关键词>,例如 /wiki systemd boot —— 搜索 Gentoo / Arch wiki(优先简体中文页)")
 		return nil
 	}
-	hc, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
 
 	titles := make([][]string, len(wikiSources))

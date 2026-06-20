@@ -274,7 +274,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, "用法:/distro <包名>,例如 /distro firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE)。")
 		return nil
 	}
-	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	proj, pkgs, alts, exact := fetchRepology(hc, name)
 	esc := html.EscapeString

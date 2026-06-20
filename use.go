@@ -517,7 +517,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	q = normalizeQuery(q)
-	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	pkgC.refresh(hc)
 

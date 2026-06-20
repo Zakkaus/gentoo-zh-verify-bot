@@ -69,7 +69,7 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, "用法:/bbs <关键词>,例如 /bbs nvidia 黑屏 —— 搜各大 Linux 论坛(中文优先)")
 		return nil
 	}
-	hc, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
 
 	var b strings.Builder
