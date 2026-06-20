@@ -358,13 +358,14 @@ func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedSta
 			switch {
 			case bugResolved(b):
 				delete(st.Tracked, idStr) // terminal — stop tracking
-			case wasUnconfirmed && strings.EqualFold(b.Status, "CONFIRMED") && !f.bugSilent(b):
-				// The UNCONFIRMED post was silent; now that it's CONFIRMED, send a fresh
-				// non-silent notice so subscribers get the ping the silent original never gave
-				// (the in-place edit above already corrected the original message). Advance our
-				// state only once the ping is delivered, so a transient send failure retries next
-				// cycle (the re-edit is then a harmless "message is not modified") — mirroring the
-				// edit's own retry semantics. A silent_bugs feed skips the ping entirely.
+			case wasUnconfirmed && !strings.EqualFold(b.Status, "UNCONFIRMED") && !f.bugSilent(b):
+				// The UNCONFIRMED post was silent; it has now moved OUT of UNCONFIRMED (CONFIRMED /
+				// IN_PROGRESS / …, but not resolved — handled above). Send the fresh non-silent
+				// notice the silent original never gave, for ANY such transition rather than only
+				// exactly CONFIRMED — so a bug that races past CONFIRMED to IN_PROGRESS before the
+				// ping lands still notifies. Advance state only once the ping is delivered, so a
+				// transient send failure retries next cycle (the re-edit is then a harmless "message
+				// is not modified"). A silent_bugs feed skips the ping entirely.
 				if _, ok := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false); ok {
 					tb.State = cur
 				}

@@ -208,7 +208,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 	}
 
 	t.Run("success syncs state and keeps tracking", func(t *testing.T) {
-		st := track("UNCONFIRMED|")
+		st := track("CONFIRMED|") // non-UNCONFIRMED origin: isolates edit-success without a confirm ping
 		fb := &fakeFeedBot{}
 		b := recentBug{ID: 500, Status: "IN_PROGRESS"}
 		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: b})
@@ -219,7 +219,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 			t.Errorf("state not synced after a successful edit: %+v", tb)
 		}
 		if fb.sends != 0 {
-			t.Errorf("a non-confirm transition must not ping, got %d sends", fb.sends)
+			t.Errorf("a non-UNCONFIRMED-origin transition must not ping, got %d sends", fb.sends)
 		}
 	})
 
@@ -316,6 +316,18 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 		}
 		if fb.sends != 0 {
 			t.Errorf("a transition not from UNCONFIRMED must not ping, got %d sends", fb.sends)
+		}
+	})
+
+	t.Run("UNCONFIRMED->IN_PROGRESS pings (raced past CONFIRMED)", func(t *testing.T) {
+		st := &feedState{Tracked: map[string]*trackedBug{"704": {MsgID: 9, State: "UNCONFIRMED|"}}}
+		fb := &fakeFeedBot{}
+		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{704: {ID: 704, Status: "IN_PROGRESS", Summary: "x"}})
+		if fb.edits != 1 || fb.sends != 1 {
+			t.Fatalf("a bug leaving UNCONFIRMED (even straight to IN_PROGRESS) must ping once: edits=%d sends=%d", fb.edits, fb.sends)
+		}
+		if fb.sentSilent[0] {
+			t.Error("the confirm ping must be non-silent")
 		}
 	})
 
