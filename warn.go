@@ -110,7 +110,7 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 	if target == nil {
 		return nil
 	}
-	limit := v.cfg.warnLimit()
+	limit := v.cfg.WarnLimit
 	v.mu.Lock()
 	v.warns[pkey{gid, target.ID}]++
 	n := v.warns[pkey{gid, target.ID}]
