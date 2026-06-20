@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -30,6 +31,24 @@ func (u bugUser) display() string {
 		return u.RealName
 	}
 	return u.Name
+}
+
+// link renders the user as an <a> to their Gentoo Bugzilla bug list in the given role
+// ("assigned_to" or "reporter"). Falls back to plain escaped text when there's no email,
+// and to "" when there's no name at all.
+func (u bugUser) link(role string) string {
+	disp := u.display()
+	if disp == "" {
+		return ""
+	}
+	if u.Name == "" {
+		return html.EscapeString(disp)
+	}
+	// Bugzilla redacts emails for anonymous API access (Name is just the local part,
+	// no @domain), so match by substring rather than equals.
+	href := "https://bugs.gentoo.org/buglist.cgi?query_format=advanced&emailtype1=substring&email1=" +
+		neturl.QueryEscape(u.Name) + "&email" + role + "1=1"
+	return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(href), html.EscapeString(disp))
 }
 
 type recentBug struct {
@@ -165,18 +184,14 @@ func formatBug(b recentBug, lang string) string {
 		line(pick("包", "Packages"), atoms)
 	}
 
-	var who []string
-	if a := b.AssignedTo.display(); a != "" {
-		who = append(who, pick("负责 ", "Assigned ")+a)
+	if a := b.AssignedTo.link("assigned_to"); a != "" {
+		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("负责", "Assigned"), sep, a)
 	}
-	if c := b.Creator.display(); c != "" {
-		who = append(who, pick("报告 ", "Reporter ")+c)
+	if c := b.Creator.link("reporter"); c != "" {
+		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("报告", "Reporter"), sep, c)
 	}
 	if d := dateOnly(b.CreationTime); d != "" {
-		who = append(who, d)
-	}
-	if len(who) > 0 {
-		fmt.Fprintf(&sb, "\n%s", esc(strings.Join(who, " · ")))
+		line(pick("日期", "Date"), d)
 	}
 	return sb.String()
 }

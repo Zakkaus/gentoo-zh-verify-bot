@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.4] - 2026-06-20
+
+### Changed
+- Feed bug footer is split into separate labelled lines (负责 / 报告 / 日期), and the
+  **assignee and reporter now link to their Gentoo Bugzilla bug list** (substring email
+  match, since Bugzilla redacts emails for anonymous API access).
+
 ## [1.5.3] - 2026-06-20
 
 ### Changed
@@ -121,6 +128,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.4
 [1.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.3
 [1.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.2
 [1.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.1
