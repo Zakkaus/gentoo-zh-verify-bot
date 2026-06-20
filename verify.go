@@ -197,6 +197,13 @@ func (v *Verifier) queryRateOK(userID int64) bool {
 	return true
 }
 
+// dmOrGroup reports whether msg is in a guarded group or a private chat — where the cheap,
+// no-external-request member commands (/help /ping /stats) are allowed WITHOUT a rate limit
+// (only the API-hitting lookups are throttled, via queryAllowed).
+func (v *Verifier) dmOrGroup(msg *telego.Message) bool {
+	return v.cfg.IsGroup(msg.Chat.ID) || msg.Chat.Type == "private"
+}
+
 // queryAllowed reports whether a lookup command may run for this message: unlimited in a
 // guarded group, rate-limited per user in a private chat (anti-abuse), and not elsewhere. It
 // sends the rate-limit notice itself when a DM user is over the limit.

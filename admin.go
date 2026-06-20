@@ -103,7 +103,7 @@ func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
 // onHelp lists commands (admins also see the moderation/admin commands).
 func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || msg.From == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil || !v.dmOrGroup(msg) { // /help is free (no external request)
 		return nil
 	}
 	bot := ctx.Bot()
@@ -145,12 +145,12 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-// memberCmd runs an informational command usable by ANY member: in a guarded group (the
-// result auto-deletes and the trigger is removed) or in a private chat (rate-limited via
-// queryAllowed, replied plainly). No admin check.
+// memberCmd runs a cheap informational command (no external request) usable by ANY member:
+// in a guarded group (the result auto-deletes and the trigger is removed) or in a private
+// chat (replied plainly). NOT rate-limited — only the API-hitting lookups are. No admin check.
 func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() string) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || !v.dmOrGroup(msg) {
 		return nil
 	}
 	bot := ctx.Bot()
