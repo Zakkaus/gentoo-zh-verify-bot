@@ -72,24 +72,24 @@ func repologyVersionsURL(proj string) string {
 	return "https://repology.org/project/" + neturl.PathEscape(proj) + "/versions"
 }
 
-// fetchRepology resolves a package via Repology. On an exact project match it returns the
-// project name + its rows. Otherwise it returns suggestions — the closest project names
-// that are actually packaged in the distros we show, ranked by distro coverage — so a
-// vague query ("kernel") offers real alternatives instead of a wrong silent pick.
-func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repologyPkg, suggestions []string) {
+// fetchRepology resolves a package via Repology. On an exact project match it returns that
+// project (exact=true). Otherwise it picks the closest project that is actually packaged in
+// the distros we show — ranked by distro coverage — as the result, plus a few alternatives,
+// so a near-miss / vague query still yields a real cross-distro table instead of nothing.
+func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repologyPkg, alts []string, exact bool) {
 	q := strings.ToLower(strings.TrimSpace(name))
 	if q == "" {
-		return "", nil, nil
+		return "", nil, nil, false
 	}
 	if err := httpGetJSON(ctx, "https://repology.org/api/v1/project/"+neturl.PathEscape(q), nil, &pkgs); err == nil && len(pkgs) > 0 {
-		return q, pkgs, nil
+		return q, pkgs, nil, true
 	}
 	var found map[string][]repologyPkg
 	if err := httpGetJSON(ctx, "https://repology.org/api/v1/projects/?search="+neturl.QueryEscape(q), nil, &found); err != nil {
-		return "", nil, nil
+		return "", nil, nil, false
 	}
 	if p, ok := found[q]; ok { // exact name surfaced by the search
-		return q, p, nil
+		return q, p, nil, true
 	}
 	type cand struct {
 		name string
@@ -98,7 +98,7 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 	cands := make([]cand, 0, len(found))
 	for n, ps := range found {
 		if strings.Contains(n, ":") {
-			continue // skip Repology's language-namespaced projects (go:…, haskell:…) in suggestions
+			continue // skip Repology's language-namespaced projects (go:…, haskell:…)
 		}
 		fset := map[string]bool{}
 		for _, p := range ps {
@@ -106,9 +106,12 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 				fset[f] = true
 			}
 		}
-		if len(fset) > 0 { // only suggest packages that exist in distros we show
+		if len(fset) > 0 { // only consider packages that exist in distros we show
 			cands = append(cands, cand{n, len(fset)})
 		}
+	}
+	if len(cands) == 0 {
+		return "", nil, nil, false
 	}
 	sort.Slice(cands, func(i, j int) bool {
 		if cands[i].fams != cands[j].fams {
@@ -116,10 +119,10 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 		}
 		return cands[i].name < cands[j].name
 	})
-	for i := 0; i < len(cands) && i < 6; i++ {
-		suggestions = append(suggestions, cands[i].name)
+	for i := 1; i < len(cands) && i <= 5; i++ {
+		alts = append(alts, cands[i].name)
 	}
-	return "", nil, suggestions
+	return cands[0].name, found[cands[0].name], alts, false
 }
 
 // onDistro handles /distro <pkg> — cross-distro package versions via Repology.
@@ -137,23 +140,10 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 	}
 	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	proj, pkgs, suggestions := fetchRepology(hc, name)
+	proj, pkgs, alts, exact := fetchRepology(hc, name)
 	esc := html.EscapeString
-
 	if len(pkgs) == 0 {
-		if len(suggestions) == 0 {
-			v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("❓ Repology 没找到「%s」。", name))
-			return nil
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "❓ 没找到精确匹配「%s」。相关包(点击查看):\n", esc(name))
-		for i, s := range suggestions {
-			if i > 0 {
-				b.WriteString(" · ")
-			}
-			fmt.Fprintf(&b, "<a href=\"%s\">%s</a>", esc(repologyVersionsURL(s)), esc(s))
-		}
-		_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()))
+		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name))
 		return nil
 	}
 
@@ -166,26 +156,40 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 			}
 		}
 	}
+	if len(best) == 0 {
+		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 AUR / Arch / Debian / Ubuntu / Nix / openSUSE / Fedora 里都没有打包(可能是某发行版专属)。", proj))
+		return nil
+	}
 
 	verURL, projEsc, qproj := esc(repologyVersionsURL(proj)), esc(proj), neturl.QueryEscape(proj)
+	head := fmt.Sprintf("📦 <a href=\"%s\">%s</a> 跨发行版版本", verURL, projEsc)
+	if !exact {
+		head += fmt.Sprintf(" <i>(「%s」最接近的匹配)</i>", esc(name))
+	}
 	var plain, rich strings.Builder
-	fmt.Fprintf(&plain, "📦 <a href=\"%s\">%s</a> 跨发行版版本:", verURL, projEsc)
-	fmt.Fprintf(&rich, "<h3>📦 <a href=\"%s\">%s</a> 跨发行版版本</h3><ul>", verURL, projEsc)
-	any := false
+	plain.WriteString(head + ":")
+	rich.WriteString("<h3>" + head + "</h3><ul>")
 	for _, f := range distroFamilies {
 		ver, ok := best[f.label]
 		if !ok {
 			continue
 		}
-		any = true
 		famLink := fmt.Sprintf("<a href=\"%s\">%s</a>", esc(fmt.Sprintf(f.search, qproj)), f.label)
 		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s", famLink, esc(ver))
 		fmt.Fprintf(&rich, "<li><b>%s</b>:%s</li>", famLink, esc(ver))
 	}
 	rich.WriteString("</ul>")
-	if !any {
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 AUR / Arch / Debian / Ubuntu / Nix / openSUSE / Fedora 里都没有打包(可能是某发行版专属)。", proj))
-		return nil
+	if len(alts) > 0 {
+		var al strings.Builder
+		for i, a := range alts {
+			if i > 0 {
+				al.WriteString(" · ")
+			}
+			fmt.Fprintf(&al, "<a href=\"%s\">%s</a>", esc(repologyVersionsURL(a)), esc(a))
+		}
+		fmt.Fprintf(&plain, "\n其它匹配:%s", al.String())
+		// collapsible in rich messages so the main table stays compact
+		fmt.Fprintf(&rich, "<details><summary>其它匹配 (%d)</summary>%s</details>", len(alts), al.String())
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, rich.String(), plain.String())
 	return nil

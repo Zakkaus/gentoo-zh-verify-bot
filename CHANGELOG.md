@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.8.1] - 2026-06-20
+
+### Changed
+- `/distro` with no exact match now shows the **closest cross-distro package's full version
+  table** (ranked by distro coverage) plus a collapsible (`<details>` in rich) list of other
+  matches, instead of a bare list of names — so near-misses and vague queries still return
+  real data. (The Linux kernel stays unresolvable cross-distro: each distro names it
+  differently and neither Repology nor pkgs.org exposes a clean unified entry.)
+
 ## [1.8.0] - 2026-06-20
 
 ### Changed
@@ -160,6 +169,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.8.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.1
 [1.8.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.0
 [1.7.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.7.1
 [1.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.7.0
