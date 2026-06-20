@@ -113,15 +113,17 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 	if target == nil {
 		return nil
 	}
-	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
-
+	// Ban FIRST; only delete the replied message once the ban succeeded — so a permission
+	// failure doesn't delete the offending message while leaving the user un-banned. (/sb's
+	// RevokeMessages=true already purges all the user's messages as part of the ban.)
 	secs := v.banDuration()
-	revoke := cmd == "/sb" // /sb purges all of the user's messages; /ban only the replied one (deleted above)
+	revoke := cmd == "/sb"
 	if err := v.applyBan(c, bot, gid, target.ID, secs, revoke); err != nil {
 		log.Printf("%s ban user=%d in %d: %v", cmd, target.ID, gid, err)
 		v.notify(c, bot, gid, "❌ 操作失败:bot 可能缺少「封禁用户」权限。")
 		return nil
 	}
+	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
 	verb := "封禁"
 	if cmd == "/sb" {
 		verb = "举报并封禁(已清除其全部消息)" // /sb is the report-and-ban variant + message purge

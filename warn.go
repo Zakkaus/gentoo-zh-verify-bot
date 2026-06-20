@@ -116,12 +116,20 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 			v.notify(c, bot, gid, "⚠️ 已达警告上限,但踢出失败:bot 可能缺少「封禁用户」权限。")
 			return nil
 		}
-		_ = bot.UnbanChatMember(c, &telego.UnbanChatMemberParams{ChatID: tu.ID(gid), UserID: target.ID, OnlyIfBanned: true})
+		rejoinable := true
+		if err := bot.UnbanChatMember(c, &telego.UnbanChatMemberParams{ChatID: tu.ID(gid), UserID: target.ID, OnlyIfBanned: true}); err != nil {
+			rejoinable = false // ban stuck: report honestly rather than claiming a re-joinable kick
+			log.Printf("/warn unban %d in %d: %v", target.ID, gid, err)
+		}
 		v.mu.Lock()
 		delete(v.warns, pkey{gid, target.ID})
 		v.mu.Unlock()
 		v.saveWarns()
-		v.notify(c, bot, gid, fmt.Sprintf("🚫 %s 已达 %d 次警告上限,已踢出(可重新申请入群)。操作人 %s。", displayName(target), limit, displayName(msg.From)))
+		outcome := "已踢出(可重新申请入群)"
+		if !rejoinable {
+			outcome = "已封禁,但解封失败(用户暂时无法重新加入),请手动解封"
+		}
+		v.notify(c, bot, gid, fmt.Sprintf("🚫 %s 已达 %d 次警告上限,%s。操作人 %s。", displayName(target), limit, outcome, displayName(msg.From)))
 		v.adminAlert(c, bot, fmt.Sprintf("warn-kick: 群 %d 目标 %d (%s) 操作人 %s", gid, target.ID, displayName(target), displayName(msg.From)))
 		log.Printf("/warn-kick user=%d group=%d by=%d", target.ID, gid, msg.From.ID)
 		return nil

@@ -895,7 +895,11 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot *telego.Bot, channe
 	}
 	v.chanAlert[channelID] = time.Now()
 	v.mu.Unlock()
-	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必关频道 %d 的成员(可能已不是该频道管理员)——关注门槛暂时无法核验,正在放行通过答题的用户。请把机器人重新设为该频道管理员。", channelID))
+	mode := "正在放行通过答题的用户(fail-open)" // matches the default
+	if !v.cfg.failOpenChannel() {
+		mode = "正在拦下这些申请、让用户稍后重试(fail-closed)"
+	}
+	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必关频道 %d 的成员(可能已不是该频道管理员)——关注门槛暂时无法核验,%s。请把机器人重新设为该频道管理员。", channelID, mode))
 }
 
 func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) bool {

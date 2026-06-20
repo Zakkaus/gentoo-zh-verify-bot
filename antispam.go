@@ -113,11 +113,17 @@ func (v *Verifier) antispam(ctx *th.Context, update telego.Update) error {
 			bot := ctx.Bot()
 			c := ctx.Context()
 			_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(msg.Chat.ID), MessageID: msg.MessageID})
+			banned := true
 			if err := bot.BanChatSenderChat(c, &telego.BanChatSenderChatParams{ChatID: tu.ID(msg.Chat.ID), SenderChatID: sc.ID}); err != nil {
+				banned = false
 				log.Printf("antispam: ban sender_chat %d in %d: %v", sc.ID, msg.Chat.ID, err)
 			}
-			v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除并封禁频道马甲「%s」(id %d,群 %d)。误封用 /bc allow %d 解封+白名单。", sc.Title, sc.ID, msg.Chat.ID, sc.ID))
-			log.Printf("antispam: banned channel sender %d (%q) in group %d", sc.ID, sc.Title, msg.Chat.ID)
+			if banned {
+				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除并封禁频道马甲「%s」(id %d,群 %d)。误封用 /bc allow %d 解封+白名单。", sc.Title, sc.ID, msg.Chat.ID, sc.ID))
+			} else { // honest feedback: don't claim a ban the API rejected
+				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除频道马甲「%s」的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", sc.Title, sc.ID, msg.Chat.ID))
+			}
+			log.Printf("antispam: channel sender %d (%q) in group %d deleted, banned=%v", sc.ID, sc.Title, msg.Chat.ID, banned)
 			return nil // blocked — don't run the normal handlers
 		}
 	}
