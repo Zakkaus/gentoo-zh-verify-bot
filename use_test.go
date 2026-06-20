@@ -52,3 +52,19 @@ func TestRenderUseIncludesExpand(t *testing.T) {
 		t.Error("a package with use_expand must not be reported as having no USE flags")
 	}
 }
+
+// TestRenderUseRichIncludesExpand covers the rich /use path (writeExpandFlagsRich): USE_EXPAND
+// groups go in a collapsible <details> block with the default marker and full descriptions.
+func TestRenderUseRichIncludesExpand(t *testing.T) {
+	info := pkgFullInfo{
+		atom:   "www-client/firefox",
+		expand: []useExpandGroup{{name: "llvm_slot", flags: []useFlag{{name: "20"}, {name: "21", desc: "Use LLVM 21.", def: true}}}},
+	}
+	out := renderUseRich(info, "", "https://packages.gentoo.org/packages/www-client/firefox", false, nil)
+	if !strings.Contains(out, "<details>") || !strings.Contains(out, "LLVM_SLOT") {
+		t.Errorf("renderUseRich should put USE_EXPAND in a <details> block, got %q", out)
+	}
+	if !strings.Contains(out, "+21") || !strings.Contains(out, "Use LLVM 21.") {
+		t.Errorf("rich USE_EXPAND should show the default marker + description, got %q", out)
+	}
+}
