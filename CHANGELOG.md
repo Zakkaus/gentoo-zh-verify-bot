@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.4.2] - 2026-06-21
+
+Hardening from a fourth external review (no P0/P1 found; all prior fixes re-verified). P3 polish:
+
+### Fixed
+- **Honest moderation feedback** when a Telegram call fails: `/bc` no longer claims a channel
+  was banned if `BanChatSenderChat` failed (says deleted-but-ban-failed); `/warn`'s limit-kick
+  reports "ban succeeded but unban failed" instead of "re-joinable" when the unban errors.
+- **`/ban` applies the ban before deleting** the replied message (like `/mute`) — a permission
+  failure no longer deletes the offending message while leaving the user un-banned.
+- **`/unmute`** restores the **group's default permissions** (via GetChat) instead of a blanket
+  allow, so a restrictive group isn't over-granted.
+- The fail-open admin alert now states the current mode (fail-open vs fail-closed).
+
+### Hardened
+- Quiz pick/shuffle use **crypto/rand** (Fisher–Yates) instead of `math/rand` — it's an
+  anti-automation control, and this closes the `gosec` G404 finding.
+- A **global outbound HTTP semaphore** (24 concurrent) bounds worst-case network/goroutine
+  pressure under group spam, **without** per-user group rate-limiting (keeps "群里不限次").
+
+### Internal
+- CI now runs **staticcheck**. Docs say **Go 1.26.4+** (was 1.25+, drifted after the toolchain
+  bump). Documented the anonymous-admin and multi-group-different-channel limitations.
+
 ## [3.4.1] - 2026-06-21
 
 ### Changed
@@ -517,6 +541,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.4.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.2
 [3.4.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.1
 [3.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.0
 [3.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.3.0

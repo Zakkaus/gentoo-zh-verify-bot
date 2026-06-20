@@ -20,6 +20,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
   - **`/ban`** = 封禁 (ban) — **removes** the user; deletes only the replied message; banned for `/bantime` (default permanent, or timed so they can rejoin after).
   - **`/sb`** = 举报并封禁 (report + ban) — like `/ban` but also **deletes all of the user's messages** (spam cleanup).
   - **`/warn`** = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts); **`/clearwarn`** = clear a user's strikes.
+  > **Notes:** admin commands must be sent **non-anonymously** — an anonymous-admin post appears as the group itself, not a user, so it can't pass the admin check. And if a user applies to several guarded groups with **different** required channels, the DM follow-prompt covers the first pending group's channel; sharing one required channel across groups gives the smoothest flow.
 - **Configurable ban duration** (`/bantime`, admins): `/bantime 0` = permanent (default), `/bantime 7d` / `12h` / `30m` / `3600` (seconds). Sets the duration used by `/ban`, `/sb` and the verification auto-ban. Seeded from `ban_seconds`; a runtime change resets to the config value on restart.
 - **Verification anti-spam.** A failed verification (wrong answer / timeout) **declines** the request (never an immediate permanent ban) and the applicant must wait `verify_retry_seconds` (default 180) before re-applying; after `verify_max_fails` failures (default 3) **within a few hours** they are **auto-banned** for the configured duration. Strikes persist across restarts, reset on a successful verification, and **age out** (so a genuine user's isolated mistakes don't accumulate). The auto-ban is only cleared if it actually succeeds — where the bot lacks ban rights, strikes are kept and admins keep getting alerted.
 - **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/autodel` (toggle/adjust auto-deletion of lookup answers; default 3 min), `/ping`, `/stats` (today's approved/declined), `/help`.
@@ -121,7 +122,7 @@ The optional **`feed`** object — or **`feeds`**, an array of these objects for
 
 ## Build & run
 
-Requires **Go 1.25+** (required by the telego library).
+Requires **Go 1.26.4+** (matches `go.mod`; the 1.26.4 toolchain carries security fixes).
 
 ```sh
 CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .

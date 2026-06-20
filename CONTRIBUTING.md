@@ -5,7 +5,7 @@ requests are welcome.
 
 ## Building
 
-Requires **Go 1.25+** (the only dependency is [telego](https://github.com/mymmrac/telego)).
+Requires **Go 1.26.4+** (per `go.mod`). The only dependency is [telego](https://github.com/mymmrac/telego).
 
 ```sh
 go build ./...
