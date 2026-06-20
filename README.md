@@ -13,7 +13,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Admin override buttons** on every request: **👮 直接通过** (approve now) and **🚫 举报并封禁** (decline + permanent ban).
 - **Multiple groups.** Guard several groups with one bot instance.
 - **Auto-leaves unauthorized chats.** If the bot is added to any group/channel that isn't in its config (a guarded group, the required channel, a feed target, or the admin-log chat), it leaves immediately — so it can't be pulled into random groups. To add a new guarded group, put its id in `group_ids` first, then add the bot.
-- **DM auto-reply.** A direct message to the bot (outside the verification flow) gets a single unified reply pointing the user back to the group + commands, instead of silence. Customizable via `private_reply`.
+- **Lookup commands in DM (rate-limited).** The read-only lookup commands (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`) also work in a **private chat with the bot**, capped at `private_query_per_min` per user per minute (default 3) to prevent abuse — guarded groups stay unlimited. Any other DM gets a unified auto-reply (customizable via `private_reply`).
 - **Channel sock-puppet block (optional, `/bc`).** A message posted in a guarded group *on behalf of a channel* (a common spam/ban-evasion trick) is deleted and that channel is banned from posting. Admins toggle it with `/bc`, and manage a whitelist with `/bc allow|deny <channel id>` (`allow` also un-bans) — the toggle and whitelist **persist across restarts**. Anonymous group admins and the linked discussion channel are exempt. **Requires the bot's privacy mode to be OFF** (BotFather → disable group privacy) so it can see these messages.
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban, `/warn` = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts), `/clearwarn` = clear a user's strikes.
 - **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/autodel` (toggle/adjust auto-deletion of lookup answers; default 3 min), `/ping`, `/stats` (today's approved/declined), `/help`.
@@ -82,6 +82,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `notify_ttl_seconds` | auto-delete the bot's group messages after N s (`0`→60, negative→never) |
 | `lookup_ttl_seconds` | auto-delete a lookup command (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/distro`) and its answer after N s (unset→180 = 3 min, on; `0`/negative→off). Admins toggle/adjust at runtime with `/autodel` |
 | `warn_limit` | `/warn` strikes before a user is auto-kicked (default 3) |
+| `private_query_per_min` | lookup queries a user may run per minute in a **private chat** (default 3; guarded groups are unlimited) |
 | `admin_log_chat_id` | optional chat that receives a line per moderation / failed-approve event |
 | `overlays` | `/pkg` GitHub overlays `[{name,repo,branch}]` (default: gentoo-zh + guru) |
 | `news_url` | `/news` source index URL (default: gentoo.org news-items) |

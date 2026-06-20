@@ -10,6 +10,7 @@
   "notify_ttl_seconds": 60,
   "lookup_ttl_seconds": 180,
   "warn_limit": 3,
+  "private_query_per_min": 3,
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",

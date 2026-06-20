@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] - 2026-06-20
+
+### Added
+- **Lookup commands now work in a private chat** with the bot (`/pkg` `/use` `/bug` `/news`
+  `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`), **rate-limited per user** to
+  `private_query_per_min` queries/minute (config, default 3) to prevent abuse — guarded
+  groups stay unlimited. Other DMs still get the unified auto-reply (now updated to mention
+  this). Auto-delete doesn't apply in DMs (nothing to keep tidy there).
+
 ## [3.0.0] - 2026-06-20
 
 A milestone release: the cross-distro `/pkgs` channel logic is now centred on each distro's
@@ -347,6 +356,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.0
 [3.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.0.0
 [2.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.7.0
 [2.6.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.6.1
