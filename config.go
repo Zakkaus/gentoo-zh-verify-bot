@@ -154,17 +154,6 @@ func (c *Config) IsGroup(id int64) bool {
 	return false
 }
 
-// channelAllowed reports whether a channel sender chat is explicitly whitelisted to
-// post in the guarded groups (so the channel-sock-puppet filter leaves it alone).
-func (c *Config) channelAllowed(id int64) bool {
-	for _, w := range c.ChannelWhitelist {
-		if w == id {
-			return true
-		}
-	}
-	return false
-}
-
 // IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded
 // group, the required channel, a feed target, or the admin-log chat. Any other
 // group/channel is unauthorized and the bot auto-leaves it.

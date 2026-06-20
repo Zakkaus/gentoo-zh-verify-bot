@@ -53,6 +53,7 @@ type Verifier struct {
 	botUsername string
 	statePath   string
 	warnPath    string
+	acPath      string
 	loc         *time.Location
 	startTime   time.Time
 	mu          sync.Mutex
@@ -63,6 +64,9 @@ type Verifier struct {
 	statDate    string
 	approved    int
 	declined    int
+	acMu        sync.RWMutex // guards the channel-sock-puppet filter's runtime state
+	acOn        bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
+	acWhite     map[int64]bool
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -85,8 +89,13 @@ func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
 // NewVerifier builds a Verifier from config: verification starts enabled, rich output
 // follows cfg.RichMessages, and the stats timezone is resolved (default UTC+8).
 func NewVerifier(cfg *Config) *Verifier {
-	return &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
-		pend: make(map[pkey]*pending), warns: make(map[pkey]int), enabled: true, rich: cfg.RichMessages}
+	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
+		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
+		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders}
+	for _, id := range cfg.ChannelWhitelist {
+		v.acWhite[id] = true
+	}
+	return v
 }
 
 func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }
@@ -204,6 +213,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onBan, th.CommandEqual("ban"))
 	bh.Handle(v.onWarn, th.CommandEqual("warn"))
 	bh.Handle(v.onClearWarn, th.CommandEqual("clearwarn"))
+	bh.Handle(v.onBc, th.CommandEqual("bc"))
 	bh.Handle(v.onPing, th.CommandEqual("ping"))
 	bh.Handle(v.onStart, th.CommandEqual("start"))
 	bh.Handle(v.onStop, th.CommandEqual("stop"))

@@ -70,6 +70,8 @@ func main() {
 		v.load(bot)
 		v.warnPath = sd + "/warns.json"
 		v.loadWarns()
+		v.acPath = sd + "/antispam.json"
+		v.loadAntispam()
 	}
 
 	var feeds []*FeedConfig // one shared poller fans new bugs + news out to all configured feeds
