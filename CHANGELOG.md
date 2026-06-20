@@ -4,6 +4,51 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.5.0] - 2026-06-21
+
+### Added
+- **`/use` now shows USE_EXPAND flags.** Grouped variables that packages.gentoo.org exposes
+  separately from local/global USE (e.g. `l10n`, `llvm_slot`) — previously omitted — are now
+  rendered: compact and truncated in plain text (a 100+-value group like `l10n` is capped with a
+  `…(共 N)` tail), and full inside a collapsible `<details>` block in rich mode.
+- **Feed confirm notification.** When a silently-posted **UNCONFIRMED** bug becomes **CONFIRMED**,
+  the feed still edits the original message in place *and* sends a one-off non-silent 🔔 notice —
+  the notification the silent original never produced. Suppressed when `silent_bugs` is set.
+- **Startup feed permission probe.** Before the first poll the bot checks it can actually post in
+  each feed target chat (channel admin + post right, or group membership) and logs loudly if not,
+  so a misconfigured `chat_id` or a missing right fails visibly at startup instead of at first send.
+
+### Fixed
+- **`/pkgs` no longer presents an ancient EOL release as a distro's current version.** Current
+  Ubuntu ships apps like Chromium/Firefox as Snap transitional debs (`1snap1`), so the old
+  "highest version wins" rule surfaced the last real deb from an end-of-life LTS (e.g. Chromium
+  `112` from 18.04). Snap transitional versions are now recognised (shown as `snap`) and EOL
+  releases are excluded using the live `eol` dates from distro-info-data — so Chromium/Firefox read
+  `snap (26.04 LTS)` while a normal package like `vim` correctly shows `9.1.2141 (26.04 LTS)`.
+  Nothing is hardcoded; release roles follow distro-info-data and update automatically.
+- **`/armpkgs` no longer presents an unreleased Ubuntu development series as current.** The madison
+  path skips a not-yet-released dev series (e.g. `stonking`) in favour of the newest released one,
+  flags it `(开发版)` when it's the only series shipping the package, and renders a Snap
+  transitional deb as `snap`.
+- **`/wiki` de-duplicates case-insensitively**, so capitalization variants of one topic (`NVIDIA`
+  vs `NVidia`) collapse to a single result (the simplified-Chinese page still preferred).
+
+### Changed
+- **Feed state load-time migration.** A pre-v3.4.3 state file that stored only a bug `status` is
+  folded into the current `status|resolution` state key on load, so the first poll after an upgrade
+  no longer fires a needless edit for every tracked bug.
+
+### Docs
+- README / README.zh-CN now document the full **state-persistence matrix** (what survives a restart
+  under `StateDirectory=` vs what is in-memory only) and the feed confirm-notification semantics.
+
+### Internal
+- A small `feedBot` interface seams the feed's send/edit calls so `refreshTracked`'s success /
+  not-modified / permanent-drop / transient-retry / confirm-ping branches and feed-state save→load
+  are now unit-tested with a fake bot (the review's biggest test gap). New tests also cover the
+  Snap/EOL `/pkgs` selection, `/armpkgs` suite picking, USE_EXPAND rendering, and `/wiki` dedupe.
+  Statement coverage 18.4% → 23.1%. `gofmt` / `vet` / `staticcheck` / `-race` / `govulncheck` clean.
+
 ## [3.4.3] - 2026-06-21
 
 ### Changed

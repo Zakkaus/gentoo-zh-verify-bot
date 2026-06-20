@@ -37,7 +37,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 | `/arm <pkg>` | a Gentoo package's arm64 keyword status |
 | `/armpkgs <pkg>` | cross-distro arm64 support (Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR) |
 
-**Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when its state changes** — an UNCONFIRMED bug becoming CONFIRMED, and on resolution 🐞→✅.
+**Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when its state changes** — an UNCONFIRMED bug becoming CONFIRMED (plus a one-off 🔔 notification, since the original UNCONFIRMED post is silent), and on resolution 🐞→✅.
 
 **Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; bot messages auto-delete after a TTL; optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/help`.
 
@@ -120,7 +120,7 @@ The optional **`feed`** object — or **`feeds`**, an array of these objects for
 | `news` | post new news items (default `true`) |
 | `bug_product` | only post bugs in this Bugzilla product, e.g. `"Gentoo Security"` (empty = all) |
 | `bug_component` | only post bugs in this component, e.g. `"Vulnerabilities"` (empty = all) |
-| `silent_bugs` | `true` forces every bug silent. When unset, **UNCONFIRMED bugs post silently** (a fresh report may be a false alarm) and confirmed bugs post with a notification |
+| `silent_bugs` | `true` forces every bug silent. When unset, **UNCONFIRMED bugs post silently** (a fresh report may be a false alarm) and confirmed bugs post with a notification; when a silent UNCONFIRMED bug later becomes CONFIRMED, a one-off 🔔 notice is sent (suppressed when `silent_bugs` is `true`) |
 
 ## Build & run
 
@@ -138,7 +138,17 @@ Uses long polling — no inbound port or reverse proxy needed.
 
 ## Notes / limitations
 
-- Daily **stats** are in-memory and reset on restart. In-progress **verifications are persisted** to `$STATE_DIRECTORY/pending.json` and resumed (timers re-armed) after a restart when run under systemd (`StateDirectory=`); if `STATE_DIRECTORY` is unset they are kept in memory only.
+- **State persistence.** Run under systemd (`StateDirectory=` sets `$STATE_DIRECTORY`), the bot persists the state below and reloads it on restart; with `STATE_DIRECTORY` unset, **nothing** is persisted — everything is in-memory only and lost on restart (a warning is logged).
+
+  | Persisted (`$STATE_DIRECTORY/…`) | What |
+  | --- | --- |
+  | `pending.json` | in-progress verifications (timers re-armed on restart) |
+  | `warns.json` | per-user `/warn` strike counters |
+  | `antispam.json` | `/bc` channel sock-puppet state + whitelist |
+  | `verifyfail.json` | verification failure strikes / cooldowns |
+  | `feed-<chat_id>.json` | feed dedup cursors + tracked bug message IDs |
+
+  **Not** persisted (reset on restart): daily `/stats`; the `/rich`, `/autodel` and `/bantime` runtime overrides; and the lookup / news / package caches.
 - The verification link relies on each group being **public**.
 - Admin commands must be sent **non-anonymously** — an anonymous-admin post appears as the group, not a user, so it won't pass the admin check.
 - Multi-group with **different** required channels: the DM follow-prompt covers the first pending group's channel — sharing one channel across groups is smoothest.

@@ -37,7 +37,7 @@
 | `/arm <包名>` | 某 Gentoo 包的 arm64 keyword 状态 |
 | `/armpkgs <包名>` | 跨发行版 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR) |
 
-**自动播报(可选)** —— 轮询 Gentoo Bugzilla + 新闻,把**新增**项发到一个或多个频道(`feed` / `feeds`),各有语言 + 过滤;去重、重启不丢,**bug 状态变化时就地编辑那条消息**(未确认→已确认,解决时 🐞→✅)。
+**自动播报(可选)** —— 轮询 Gentoo Bugzilla + 新闻,把**新增**项发到一个或多个频道(`feed` / `feeds`),各有语言 + 过滤;去重、重启不丢,**bug 状态变化时就地编辑那条消息**(未确认→已确认时就地编辑并补发一条 🔔 通知——因为未确认时的原消息是静默的;解决时 🐞→✅)。
 
 **其它**:守护多个群;自动退出未授权聊天;验证进度重启不丢;群消息按 TTL 自动删除;`/pkg` `/use` 可选富文本(`rich_messages` / `/rich`,默认关);`/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/help`。
 
@@ -105,7 +105,7 @@ GITHUB_TOKEN=ghp_xxx
 | `news` | 是否播报新新闻(默认 `true`) |
 | `bug_product` | 只播报该 Bugzilla 产品的 bug,如 `"Gentoo Security"`(空=全部) |
 | `bug_component` | 只播报该组件的 bug,如 `"Vulnerabilities"`(空=全部) |
-| `silent_bugs` | `true` 强制所有 bug 静默。不设时:**未确认(UNCONFIRMED)bug 静默推送**(可能误报),已确认 bug 带通知 |
+| `silent_bugs` | `true` 强制所有 bug 静默。不设时:**未确认(UNCONFIRMED)bug 静默推送**(可能误报),已确认 bug 带通知;静默的未确认 bug 之后变为已确认时,会补发一条 🔔 提示(`silent_bugs` 为 `true` 时不补发) |
 
 ### 4. 构建运行
 需要 **Go 1.26.4+**(与 `go.mod` 一致;1.26.4 含安全修复)。
@@ -121,7 +121,17 @@ journalctl -fu gentoo-zh-verify-bot
 采用长轮询(long polling),无需开放入站端口或反向代理。
 
 ## 说明 / 限制
-- 每日 `/stats` 统计在内存中,重启清零;**进行中的验证**会持久化到 `$STATE_DIRECTORY/pending.json`,在 systemd 下(unit 里的 `StateDirectory=`)重启后恢复定时器。
+- **状态持久化。** 在 systemd 下(unit 的 `StateDirectory=` 会设置 `$STATE_DIRECTORY`),机器人持久化下列状态并在重启后重新载入;若 `STATE_DIRECTORY` 未设置,则**一律不持久化**——全部仅存于内存,重启即丢(会打日志告警)。
+
+  | 持久化(`$STATE_DIRECTORY/…`) | 内容 |
+  | --- | --- |
+  | `pending.json` | 进行中的验证(重启后重新武装定时器) |
+  | `warns.json` | 每用户 `/warn` 警告计数 |
+  | `antispam.json` | `/bc` 频道马甲状态 + 白名单 |
+  | `verifyfail.json` | 验证失败 strike / 冷却 |
+  | `feed-<chat_id>.json` | 播报去重游标 + 已跟踪 bug 的消息 id |
+
+  **不**持久化(重启清零):每日 `/stats`;`/rich`、`/autodel`、`/bantime` 的运行时改动;以及查询 / 新闻 / 包缓存。
 - 验证链接依赖群为**公开群**。
 - 管理指令需**以个人身份**发送 —— 匿名管理员发言显示为「群」而非用户,过不了管理员校验。
 - 多个守护群若**必关频道不同**,私聊关注引导只覆盖第一个待处理群的频道;共用一个频道体验最顺。
