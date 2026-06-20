@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-06-20
+
+### Changed
+- The Chinese bug feed (and `/bug`) now localizes the Bugzilla **status, resolution,
+  severity and priority *values*** to Chinese (e.g. `RESOLVED / FIXED` → 已解决 / 已修复,
+  `Normal · normal` → 普通 · 普通), not just the field labels. The English (`lang:en`)
+  feed is unchanged. Component names, keywords and people stay as-is.
+
 ## [1.2.0] - 2026-06-20
 
 ### Added
