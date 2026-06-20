@@ -1,6 +1,6 @@
 module github.com/Zakkaus/gentoo-zh-verify-bot
 
-go 1.25.7
+go 1.26.4
 
 require github.com/mymmrac/telego v1.10.0
 
