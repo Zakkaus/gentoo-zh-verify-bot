@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] - 2026-06-20
+
+### Added
+- **`/armpkgs <pkg>`** — cross-distro arm64 (aarch64) support check across **Gentoo,
+  Debian, Ubuntu, Fedora and Arch Linux ARM**, each via its own per-architecture API
+  (Debian/Ubuntu madison arch-filtered, Fedora mdapi, ALARM package presence), queried
+  concurrently. Built for the case where Gentoo hasn't keyworded a package for arm64 but
+  other distros ship it.
+- **`/pkgs`** as a memorable alias for `/distro` (cross-distro version search).
+
 ## [2.3.0] - 2026-06-20
 
 ### Changed
@@ -240,6 +250,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.4.0
 [2.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.1.0
