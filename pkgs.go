@@ -206,8 +206,8 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 	return cands[0].name, found[cands[0].name], alts, false
 }
 
-// onDistro handles /distro <pkg> — cross-distro package versions via Repology.
-func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
+// onPkgs handles /pkgs (and its alias /distro) — cross-distro package versions via Repology.
+func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
 		return nil

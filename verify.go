@@ -292,8 +292,8 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onNews, th.CommandEqual("news"))
 	bh.Handle(v.onWiki, th.CommandEqual("wiki"))
 	bh.Handle(v.onBbs, th.CommandEqual("bbs"))
-	bh.Handle(v.onDistro, th.CommandEqual("distro"))
-	bh.Handle(v.onDistro, th.CommandEqual("pkgs")) // memorable alias for /distro
+	bh.Handle(v.onPkgs, th.CommandEqual("pkgs"))
+	bh.Handle(v.onPkgs, th.CommandEqual("distro")) // /distro kept as an alias
 	bh.Handle(v.onArm, th.CommandEqual("arm"))
 	bh.Handle(v.onArmpkgs, th.CommandEqual("armpkgs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))

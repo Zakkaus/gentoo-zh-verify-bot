@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.1] - 2026-06-20
+
+### Internal
+- Renamed `distro.go` → `pkgs.go` and the handler `onDistro` → `onPkgs` so the file
+  matches the now-primary `/pkgs` command (`/distro` stays an alias). No behaviour change.
+
 ## [2.5.0] - 2026-06-20
 
 ### Added
@@ -261,6 +267,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.1
 [2.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.0
 [2.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.4.0
 [2.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.3.0
