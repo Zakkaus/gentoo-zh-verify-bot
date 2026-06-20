@@ -8,6 +8,7 @@
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",
+  "private_reply": "",
   "feeds": [
     {"chat_id": 0, "lang": "en", "interval_seconds": 300, "bugs": true, "news": true, "bug_product": "", "bug_component": "", "silent_bugs": true},
     {"chat_id": 0, "lang": "zh", "interval_seconds": 300}

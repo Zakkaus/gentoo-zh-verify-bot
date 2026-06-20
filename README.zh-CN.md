@@ -13,6 +13,7 @@
 - **管理员一键操作**:每条申请都带「👮 直接通过」与「🚫 举报并封禁」按钮。
 - **多群守护**:一个实例可同时守护多个群。
 - **自动退出未授权聊天**:被加进任何不在配置里的群/频道(非守护群、非必关频道、非播报目标、非管理日志)时,机器人会立刻退出 —— 不会被人随便拉进群刷存在。要新增守护群,先把群 id 写进 `group_ids`,再把机器人加进去。
+- **私聊自动回复**:有人私聊机器人(非验证流程)时会收到一条**统一回复**,引导去群里使用命令,而不是没反应。可用 `private_reply` 自定义。
 - **管理命令**(回复目标消息,仅管理员):`/sb` 删消息 + 踢出(可再申请)、`/ban` 删消息 + 永久封禁、`/warn` 警告用户(满 `warn_limit` 次自动踢出,默认 3 次,计数重启不丢)、`/clearwarn` 清除某用户的警告。
 - **控制 / 信息**:`/start` `/stop`(开关验证)、`/rich`(开关富文本输出)、`/ping`、`/stats`(今日通过 / 拒绝数)、`/help`。
 - **包搜索**:`/pkg <名字>` 搜索官方树([packages.gentoo.org](https://packages.gentoo.org))与配置的 overlay(默认 `gentoo-zh` + `guru`),并显示版本——官方树包显示 **amd64 稳定版**,无稳定版则显示最新 `~` 测试版;overlay 包一律标 `~`。也支持完整 atom 查询(如 `/pkg sys-kernel/gentoo-kernel`)。
@@ -66,6 +67,7 @@ GITHUB_TOKEN=ghp_xxx
 | `stats_timezone` | `/stats` 每日清零所用 IANA 时区(默认 UTC+8) |
 | `rich_messages` | `/pkg`、`/use` 用 Bot API 10.1 富消息(默认 `false`;也可群内 `/rich` 开关) |
 | `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
+| `private_reply` | 私聊(非验证流程)的统一自动回复(空=内置默认) |
 | `feed` / `feeds` | 可选:自动播报——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天。`feed` 是单个目标;`feeds` 是它们的数组(每个有各自的聊天、语言、过滤)。见下;省略即关闭 |
 | `questions` | 题库;每次随机抽一题,选项顺序打乱 |
 

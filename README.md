@@ -13,6 +13,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Admin override buttons** on every request: **👮 直接通过** (approve now) and **🚫 举报并封禁** (decline + permanent ban).
 - **Multiple groups.** Guard several groups with one bot instance.
 - **Auto-leaves unauthorized chats.** If the bot is added to any group/channel that isn't in its config (a guarded group, the required channel, a feed target, or the admin-log chat), it leaves immediately — so it can't be pulled into random groups. To add a new guarded group, put its id in `group_ids` first, then add the bot.
+- **DM auto-reply.** A direct message to the bot (outside the verification flow) gets a single unified reply pointing the user back to the group + commands, instead of silence. Customizable via `private_reply`.
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban, `/warn` = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts), `/clearwarn` = clear a user's strikes.
 - **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/ping`, `/stats` (today's approved/declined), `/help`.
 - **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise.
@@ -78,6 +79,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `stats_timezone` | IANA tz for the daily /stats reset boundary (default: UTC+8) |
 | `rich_messages` | render `/pkg` & `/use` as Bot API 10.1 rich messages (default `false`; also toggleable in-chat via `/rich`) |
 | `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
+| `private_reply` | the unified auto-reply for DMs outside the verify flow (empty → built-in default) |
 | `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
 | `questions` | quiz pool; one is picked at random, options shuffled |
 
