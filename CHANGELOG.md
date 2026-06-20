@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.2.0] - 2026-06-20
+
+Auto-delete consistency pass + a third multi-dimension audit (7 fresh dimensions, each
+finding adversarially verified): 23 raised, 13 confirmed (0 critical/high), all fixed below.
+
+### Changed
+- **Auto-delete is now consistent across a lookup's whole interaction.** A lookup command's
+  usage hint / "not found" / disambiguation reply previously used a path that left the command
+  un-deleted and could fail to render; it now replies (reply-linked) and the command + reply
+  are removed together after `lookup_ttl`, exactly like a successful answer. Control/admin
+  commands keep deleting their trigger immediately; auto-delete still never runs in a DM.
+
+### Fixed
+- **`/pkgs` no longer shows a bare-date snapshot instead of the real version.** A package a
+  distro ships as a bare 8-digit `YYYYMMDD` (e.g. Debian's `gcc-snapshot`) was treated as a
+  huge real version and beat the actual release; it's now recognised as a date and ranked
+  below real releases (gcc Debian shows `16.1.0` / `14.2.0`, not the snapshot date).
+- **`/pkgs` Ubuntu line shows the current released release, not an in-development one.** An
+  unreleased Ubuntu series (e.g. `26.10` before its release date) and `proposed`/`backports`
+  pockets are now excluded from the stable line (derived live from distro-info-data release
+  dates, mirroring Debian) — so it shows e.g. `26.04 LTS`, not `26.10`.
+- **`private_reply`** (admin-supplied DM auto-reply, sent in HTML mode) now falls back to
+  plain text and logs the error if a stray `<`/`>`/`&` makes Telegram reject it — so a typo
+  in the config can't leave DMs silently unanswered.
+
+### Hardened
+- The private-chat query rate-limit map (`queryHits`) now has a hard upper bound (wholesale
+  clear, like `dmLast`) instead of only soft eviction — flood-proof under a pathological burst.
+- `ensureReleaseInfo` has an in-flight guard so a burst of `/pkgs` on a cold/expired cache
+  triggers one upstream distro-info fetch, not N.
+
+### Internal
+- Factored the duplicated lookup send+reply+cleanup tail into `replyLookupHTML`/`replyLookupPlain`
+  (used across all lookup handlers); factored `/autodel`'s argument parsing into a pure,
+  unit-tested `parseAutoDelArg`. Added tests for the bare-date detection, the Ubuntu exclusion,
+  and the `/autodel` parser. Fixed stale command lists (the `/autodel off` message, the
+  `lookup_ttl_seconds` docs and the `/armpkgs` help/menu omitted `/arm`·`/armpkgs`·AUR) and a
+  `/pkgs` "not found" message that under-listed distro families. Removed audit scratch files;
+  `dm_test.go` uses `context.TODO()` (staticcheck-clean).
+
 ## [3.1.3] - 2026-06-20
 
 ### Fixed
@@ -382,6 +422,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.2.0
 [3.1.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.3
 [3.1.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.2
 [3.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.1

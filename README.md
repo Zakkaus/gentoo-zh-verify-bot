@@ -80,7 +80,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `channel_invite_url` | **global default** explicit join link; required for a **private** channel (no `@handle`) |
 | `timeout_seconds` | time to finish verification (default 240, max 1800) |
 | `notify_ttl_seconds` | auto-delete the bot's group messages after N s (`0`→60, negative→never) |
-| `lookup_ttl_seconds` | auto-delete a lookup command (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/distro`) and its answer after N s (unset→180 = 3 min, on; `0`/negative→off). Admins toggle/adjust at runtime with `/autodel` |
+| `lookup_ttl_seconds` | auto-delete a lookup command (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`) and its answer after N s (unset→180 = 3 min, on; `0`/negative→off). Admins toggle/adjust at runtime with `/autodel` |
 | `warn_limit` | `/warn` strikes before a user is auto-kicked (default 3) |
 | `private_query_per_min` | lookup queries a user may run per minute in a **private chat** (default 3; guarded groups are unlimited) |
 | `admin_log_chat_id` | optional chat that receives a line per moderation / failed-approve event |

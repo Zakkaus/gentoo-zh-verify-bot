@@ -65,7 +65,7 @@ GITHUB_TOKEN=ghp_xxx
 | `channel_invite_url` | **全局默认**:频道邀请链接;**私有频道**(无 `@` 用户名)必填 |
 | `timeout_seconds` | 验证超时秒数(默认 240,上限 1800) |
 | `notify_ttl_seconds` | 机器人群消息 N 秒后自动删除(`0`→60,负数→不删) |
-| `lookup_ttl_seconds` | 查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/distro`)及其回复 N 秒后自动删除(不设→180=3 分钟、开;`0`/负数→关)。管理员用 `/autodel` 运行时开关/调节 |
+| `lookup_ttl_seconds` | 查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`)及其回复 N 秒后自动删除(不设→180=3 分钟、开;`0`/负数→关)。管理员用 `/autodel` 运行时开关/调节 |
 | `warn_limit` | `/warn` 多少次后自动踢出(默认 3) |
 | `private_query_per_min` | 私聊中每人每分钟可用的查询次数(默认 3;守护群不限次) |
 | `admin_log_chat_id` | 可选:接收每次管理操作 / 批准失败的日志 |
