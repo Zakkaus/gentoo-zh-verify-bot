@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-06-20
+
+### Changed
+- `/distro` now annotates each distro's version with the **release it comes from** —
+  e.g. `Debian 152.0.1 (unstable)`, `Fedora 152.0 (43)`, `Alpine … (edge)`,
+  `openSUSE Leap … (15.6)` — so you can tell whether a version is from a rolling/unstable
+  branch or an older stable release. Stays one line per distro (no per-release wall).
+
 ## [2.2.0] - 2026-06-20
 
 ### Added
@@ -232,6 +240,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.3.0
 [2.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.0.0
