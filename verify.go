@@ -169,9 +169,11 @@ func (v *Verifier) load(bot *telego.Bot) {
 		if delay < time.Second {
 			delay = time.Second
 		}
-		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, "timeout") })
 		v.mu.Lock()
 		v.pend[pkey{gid, uid}] = p
+		// arm the timer with the entry already in the map (mirrors onJoinRequest), so a
+		// near-immediate fire can't decline()->consume() before the entry exists
+		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, "timeout") })
 		v.mu.Unlock()
 	}
 	if len(recs) > 0 {
