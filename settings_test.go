@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // TestSettingsRoundTrip verifies a persisted /stop (verification disabled) survives a reload — the
 // point of settings.json (a maintenance pause shouldn't be undone by a restart) — that a later
@@ -28,5 +31,16 @@ func TestSettingsRoundTrip(t *testing.T) {
 	vn.setEnabled(false)
 	if vn.isEnabled() {
 		t.Error("setEnabled must still set the in-memory flag even without a persistence path")
+	}
+
+	// a settings.json missing the field ({}) must NOT pause verification — keep the seeded default.
+	emptyPath := t.TempDir() + "/settings.json"
+	if err := os.WriteFile(emptyPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vd := &Verifier{settingsPath: emptyPath, enabled: true}
+	vd.loadSettings()
+	if !vd.isEnabled() {
+		t.Error("a settings.json without the enabled field must keep the seeded default (enabled), not pause verification")
 	}
 }

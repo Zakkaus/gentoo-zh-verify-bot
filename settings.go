@@ -11,8 +11,10 @@ import (
 // should not be silently undone by a restart. The other runtime toggles (/rich, /autodel,
 // /bantime) intentionally reset to their config defaults on restart (documented in the README
 // persistence matrix); add them here if they ever need to persist too.
+// Enabled is a *bool so a settings.json that is missing the field (e.g. a hand-written {}) keeps
+// the seeded default rather than silently unmarshalling to false and pausing verification.
 type settingsState struct {
-	Enabled bool `json:"enabled"`
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // loadSettings overrides the NewVerifier-seeded runtime toggles with settings.json when present
@@ -30,9 +32,11 @@ func (v *Verifier) loadSettings() {
 		log.Printf("settings load %s: %v", v.settingsPath, err)
 		return
 	}
-	v.mu.Lock()
-	v.enabled = st.Enabled
-	v.mu.Unlock()
+	if st.Enabled != nil { // only override the seeded default when the field is actually present
+		v.mu.Lock()
+		v.enabled = *st.Enabled
+		v.mu.Unlock()
+	}
 }
 
 // saveSettings persists the current runtime toggles. A no-op when STATE_DIRECTORY is unset.
@@ -41,7 +45,7 @@ func (v *Verifier) saveSettings() {
 		return
 	}
 	v.mu.Lock()
-	st := settingsState{Enabled: v.enabled}
+	en := v.enabled
 	v.mu.Unlock()
-	writeJSONFile(v.settingsPath, st)
+	writeJSONFile(v.settingsPath, settingsState{Enabled: &en})
 }
