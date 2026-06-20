@@ -79,6 +79,9 @@ type Config struct {
 	RichMessages bool `json:"rich_messages"`
 	// UserAgent (optional): overrides the outbound HTTP User-Agent for /pkg /use /news /bug.
 	UserAgent string `json:"user_agent"`
+	// PrivateReply: the unified auto-reply sent when someone DMs the bot outside the
+	// verification flow (the commands only work in groups). Empty => a built-in default.
+	PrivateReply string `json:"private_reply"`
 	// Feeds (optional): one or more auto-feed destinations (see FeedConfig), each with its own
 	// chat, language and filters. The singular "feed" is also accepted and merged into Feeds.
 	Feeds     []FeedConfig `json:"feeds"`
@@ -126,6 +129,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.WarnLimit <= 0 {
 		c.WarnLimit = 3
+	}
+	if c.PrivateReply == "" {
+		c.PrivateReply = defaultPrivateReply
 	}
 	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
 		c.Feeds = append(c.Feeds, *c.Feed)

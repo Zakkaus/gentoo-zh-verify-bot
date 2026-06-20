@@ -211,6 +211,8 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onBbs, th.CommandEqual("bbs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
+	// last: any other DM gets the unified auto-reply (commands only work in groups)
+	bh.Handle(v.onPrivateDM, privateMessage)
 }
 
 // onMyChatMember auto-leaves any group or channel the bot is added to that isn't a
