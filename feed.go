@@ -16,9 +16,21 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// maxTracked bounds how many recently-posted open bugs a feed follows for #RESOLVED edits
-// (older ones drop off — resolution edits are best-effort for recent bugs).
+// maxTracked bounds how many recently-posted open bugs a feed follows for in-place state-change
+// edits (older ones drop off — these edits are best-effort for recent bugs).
 const maxTracked = 200
+
+// feedBot is the slice of the telego.Bot API the feed uses to post and edit messages. Threading
+// this interface (rather than *telego.Bot) through postFeed and refreshTracked lets the send/edit
+// success and error branches be unit-tested with a fake; *telego.Bot satisfies it.
+type feedBot interface {
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
+	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
+}
+
+// feedSendPause throttles bursts of feed sends (catch-up after downtime). A package var so tests
+// can zero it; production keeps the gentle 1s pacing.
+var feedSendPause = time.Second
 
 // feedState is the on-disk dedup cursor so a restart doesn't re-post or miss items. Tracked
 // records the message id of each recently-posted OPEN bug so the feed can edit it to show
@@ -30,14 +42,23 @@ type feedState struct {
 }
 
 type trackedBug struct {
-	MsgID int    `json:"msg_id"`
-	State string `json:"state"` // last-rendered state key (status|resolution); edit when it changes
+	MsgID  int    `json:"msg_id"`
+	State  string `json:"state"`            // last-rendered state key (status|resolution); edit when it changes
+	Status string `json:"status,omitempty"` // legacy pre-v3.4.3 field; folded into State by migrateFeedState on load
 }
 
 // bugStateKey captures a bug's *displayed* state (status + resolution) so the feed only edits a
 // tracked message when something visible actually changed — e.g. UNCONFIRMED -> CONFIRMED, or a
 // resolution being set.
 func bugStateKey(b recentBug) string { return b.Status + "|" + b.Resolution }
+
+// statusOf returns the status component of a "status|resolution" state key.
+func statusOf(stateKey string) string {
+	if i := strings.IndexByte(stateKey, '|'); i >= 0 {
+		return stateKey[:i]
+	}
+	return stateKey
+}
 
 // trackBug remembers the message posted for an OPEN bug so a later status change / resolution can
 // edit it in place. Resolved bugs aren't tracked (nothing left to update); the map is bounded by
@@ -111,7 +132,7 @@ type recentBug struct {
 }
 
 // bugFields is the Bugzilla include_fields list shared by the newest-bugs poll and the
-// re-poll of tracked bugs (for #RESOLVED edits), so both decode the same recentBug shape.
+// re-poll of tracked bugs (for in-place state-change edits), so both decode the same recentBug shape.
 const bugFields = "id,summary,status,resolution,product,component,priority,severity," +
 	"keywords,creation_time,cf_stabilisation_atoms,assigned_to_detail,creator_detail"
 
@@ -161,7 +182,24 @@ func loadFeedState(path string) feedState {
 			}
 		}
 	}
+	migrateFeedState(&st)
 	return st
+}
+
+// migrateFeedState upgrades state written by a pre-v3.4.3 binary: tracked bugs then stored only
+// the bug `status` (no resolution), so fold it into the current `state` key (status|resolution).
+// Without this, the first poll after an upgrade sees every tracked bug as "changed" and fires a
+// needless edit. A no-op for already-current files (legacy Status empty).
+func migrateFeedState(st *feedState) {
+	for _, tb := range st.Tracked {
+		if tb == nil {
+			continue
+		}
+		if tb.State == "" && tb.Status != "" {
+			tb.State = tb.Status + "|" // tracked bugs are open, so resolution was empty
+		}
+		tb.Status = "" // drop the legacy field so it isn't re-serialized
+	}
 }
 
 func saveFeedState(path string, st feedState) {
@@ -174,7 +212,7 @@ func saveFeedState(path string, st feedState) {
 // postFeed sends one feed item and returns the sent message id (0 on failure) plus ok. ok is
 // false on a send failure so the caller won't advance the dedup cursor past an item that was
 // never delivered (a transient error, a Telegram rate-limit, or shutdown-cancelled context).
-func postFeed(ctx context.Context, bot *telego.Bot, chatID int64, text string, silent bool) (int, bool) {
+func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silent bool) (int, bool) {
 	m := htmlMessage(chatID, text)
 	if silent {
 		m = m.WithDisableNotification()
@@ -184,7 +222,7 @@ func postFeed(ctx context.Context, bot *telego.Bot, chatID int64, text string, s
 		log.Printf("feed: post to %d: %v", chatID, err)
 		return 0, false
 	}
-	time.Sleep(time.Second) // gentle pacing for catch-up bursts
+	time.Sleep(feedSendPause) // gentle pacing for catch-up bursts
 	return msgID(sent), true
 }
 
@@ -287,7 +325,7 @@ func formatBugResolved(b recentBug, lang string) string {
 // or a resolution (🐞 -> ✅, after which the bug is untracked). Runs per feed, in the feed's own
 // language. Best-effort: a transient edit failure keeps the bug tracked for a retry; a permanent
 // one (message deleted / uneditable) drops it.
-func refreshTracked(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feedState, byID map[int]recentBug) {
+func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedState, byID map[int]recentBug) {
 	for idStr, tb := range st.Tracked {
 		id, err := strconv.Atoi(idStr)
 		if err != nil || tb == nil { // bad id or a null entry (e.g. hand-edited state) — drop it
@@ -302,6 +340,7 @@ func refreshTracked(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *fee
 		if cur == tb.State {
 			continue // nothing visible changed
 		}
+		wasUnconfirmed := strings.EqualFold(statusOf(tb.State), "UNCONFIRMED")
 		text := formatBug(b, f.Lang)
 		if bugResolved(b) {
 			text = formatBugResolved(b, f.Lang) // 🐞 -> ✅
@@ -316,9 +355,21 @@ func refreshTracked(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *fee
 		})
 		switch {
 		case eerr == nil || isNotModified(eerr): // edited (or already current) — sync our state
-			tb.State = cur
-			if bugResolved(b) {
+			switch {
+			case bugResolved(b):
 				delete(st.Tracked, idStr) // terminal — stop tracking
+			case wasUnconfirmed && strings.EqualFold(b.Status, "CONFIRMED") && !f.bugSilent(b):
+				// The UNCONFIRMED post was silent; now that it's CONFIRMED, send a fresh
+				// non-silent notice so subscribers get the ping the silent original never gave
+				// (the in-place edit above already corrected the original message). Advance our
+				// state only once the ping is delivered, so a transient send failure retries next
+				// cycle (the re-edit is then a harmless "message is not modified") — mirroring the
+				// edit's own retry semantics. A silent_bugs feed skips the ping entirely.
+				if _, ok := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false); ok {
+					tb.State = cur
+				}
+			default:
+				tb.State = cur
 			}
 		case permanentEditErr(eerr):
 			log.Printf("feed: drop tracked bug %d in %d (uneditable): %v", id, f.ChatID, eerr)
@@ -348,6 +399,18 @@ func permanentEditErr(err error) bool {
 func formatNews(n newsItem) string {
 	return fmt.Sprintf("📰 <a href=\"%s\">%s — %s</a>",
 		html.EscapeString(n.url), n.date, html.EscapeString(html.UnescapeString(n.title)))
+}
+
+// confirmNotice is the brief, non-silent message sent when a previously-UNCONFIRMED bug (which
+// was posted silently) becomes CONFIRMED — the notification the silent original never produced.
+// 🔔 (not ✅, which marks resolution) signals a confirmation; rendered in the feed's own language.
+func confirmNotice(b recentBug, lang string) string {
+	label := "已确认"
+	if strings.EqualFold(lang, "en") {
+		label = "confirmed"
+	}
+	return fmt.Sprintf("🔔 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a> %s\n%s",
+		b.ID, b.ID, label, html.EscapeString(capRunes(b.Summary, 600)))
 }
 
 // bugSilent reports whether a feed bug should be posted WITHOUT a notification:
@@ -398,7 +461,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 					break
 				}
 				st.LastBugID = nb[i].ID
-				st.trackBug(nb[i], mid) // follow this open bug for a later #RESOLVED edit
+				st.trackBug(nb[i], mid) // follow this open bug for a later state-change edit (confirm / resolve)
 			}
 			if delivered && bugs[0].ID > st.LastBugID {
 				st.LastBugID = bugs[0].ID // all sent -> advance FORWARD past newest seen (incl. filtered-out)
@@ -503,6 +566,72 @@ func pollAll(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, states m
 	}
 }
 
+// probeFeedPerms checks, at startup, that the bot can actually post in each feed's target chat,
+// so a misconfigured chat_id or a missing admin/post right is logged loudly here instead of
+// surfacing only when the first send/edit fails. Best-effort: any probe error is logged, never
+// fatal, and never blocks the feed loop.
+func probeFeedPerms(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig) {
+	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	me, err := bot.GetMe(pctx)
+	if err != nil {
+		log.Printf("feed: startup permission probe skipped (GetMe: %v)", err)
+		return
+	}
+	for _, f := range feeds {
+		chat, err := bot.GetChat(pctx, &telego.GetChatParams{ChatID: tu.ID(f.ChatID)})
+		if err != nil {
+			log.Printf("feed: WARNING target chat %d unreachable at startup (GetChat: %v) — posts will fail; check chat_id and that the bot was added", f.ChatID, err)
+			continue
+		}
+		member, err := bot.GetChatMember(pctx, &telego.GetChatMemberParams{ChatID: tu.ID(f.ChatID), UserID: me.ID})
+		if err != nil {
+			log.Printf("feed: WARNING cannot read bot membership in chat %d (%s) at startup (%v) — post rights unverified", f.ChatID, chat.Type, err)
+			continue
+		}
+		if reason := feedPostBlocked(chat.Type, member); reason != "" {
+			log.Printf("feed: WARNING bot cannot post in target chat %d (%s): %s — make the bot an admin with post rights", f.ChatID, chat.Type, reason)
+		} else {
+			log.Printf("feed: target chat %d (%s) post permission OK", f.ChatID, chat.Type)
+		}
+	}
+}
+
+// feedPostBlocked returns a human-readable reason the bot can't post to a chat of chatType given
+// its membership there, or "" if posting should work. A channel requires admin rights with
+// can_post_messages; a group/supergroup only requires that the bot isn't left, banned, or muted.
+func feedPostBlocked(chatType string, m telego.ChatMember) string {
+	isChannel := chatType == "channel"
+	switch mm := m.(type) {
+	case *telego.ChatMemberOwner:
+		return ""
+	case *telego.ChatMemberAdministrator:
+		if isChannel && !mm.CanPostMessages {
+			return "admin without can_post_messages right"
+		}
+		return ""
+	case *telego.ChatMemberMember:
+		if isChannel {
+			return "not an admin (a channel needs admin post rights)"
+		}
+		return ""
+	case *telego.ChatMemberRestricted:
+		if isChannel {
+			return "not an admin (a channel needs admin post rights)"
+		}
+		if !mm.CanSendMessages {
+			return "restricted: can't send messages"
+		}
+		return ""
+	case *telego.ChatMemberLeft:
+		return "bot is not a member of the chat"
+	case *telego.ChatMemberBanned:
+		return "bot is banned from the chat"
+	default:
+		return "" // unknown member type — don't cry wolf
+	}
+}
+
 // runFeeds drives the feeds: it ticks at the smallest configured interval (so the fastest feed
 // is timely) but each feed only posts when its OWN interval has elapsed (per-feed nextDue). The
 // shared bug/news fetch happens once per due cycle. The first poll records a baseline per feed.
@@ -529,6 +658,7 @@ func runFeeds(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, stateDi
 		pollAll(ctx, bot, feeds, states, stateDir, time.Now(), nextDue)
 	}
 	log.Printf("feed: %d destination(s), tick %s, per-feed interval honoured (shared fetch)", len(feeds), tick)
+	probeFeedPerms(ctx, bot, feeds)
 	safePoll()
 	t := time.NewTicker(tick)
 	defer t.Stop()
