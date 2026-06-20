@@ -80,6 +80,9 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 	info.local = toUseFlags(pj.Use.Local)
 	info.global = toUseFlags(pj.Use.Global)
 	infoC.mu.Lock()
+	if len(infoC.m) >= pkgCacheMax {
+		infoC.m = map[string]pkgFullInfo{}
+	}
 	infoC.m[atom] = info
 	infoC.mu.Unlock()
 	return info, true
@@ -322,16 +325,24 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 // upgraded clients), and falls back to a plain HTML message if rich is off or the
 // server rejects it (e.g. Bot API < 10.1). Client-side render failures can't be
 // detected here — that's the accepted trade-off, kept off the verification path.
-func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, richHTML, plainHTML string) {
+func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, richHTML, plainHTML string) {
+	rp := replyParams(replyTo)
 	if v.isRichEnabled() && richHTML != "" {
 		params := (&telego.SendRichMessageParams{}).
 			WithChatID(tu.ID(chatID)).
 			WithRichMessage(*(&telego.InputRichMessage{}).WithHTML(richHTML).WithSkipEntityDetection())
+		if rp != nil {
+			params = params.WithReplyParameters(rp)
+		}
 		if _, err := bot.SendRichMessage(c, params); err == nil {
 			return
 		}
 	}
-	_, _ = bot.SendMessage(c, htmlMessage(chatID, plainHTML))
+	m := htmlMessage(chatID, plainHTML)
+	if rp != nil {
+		m = m.WithReplyParameters(rp)
+	}
+	_, _ = bot.SendMessage(c, m)
 }
 
 // renderUseRich builds the Bot API 10.1 rich-message /use — no truncation, full flag
@@ -562,6 +573,6 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("暂时取不到 %s 的信息,稍后再试。", atom))
 		return nil
 	}
-	v.sendRichOrHTML(c, bot, msg.Chat.ID, outRich, out)
+	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, outRich, out)
 	return nil
 }

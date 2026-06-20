@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +59,11 @@ func configurePkg(cfg *Config) {
 const pkgCacheTTL = 6 * time.Hour
 const verCacheTTL = 6 * time.Hour
 const maxHitsPerSource = 8
+
+// pkgCacheMax bounds the version/info caches (keyed by user-supplied atoms): at the limit
+// the cache is dropped wholesale rather than grown unboundedly. Far above the realistic
+// query universe, so it essentially never triggers in normal use.
+const pkgCacheMax = 2000
 const pkgRetryFloor = 3 * time.Minute // throttle refresh retries after a failure (avoids GitHub rate-limit storms)
 
 var httpClient = &http.Client{Timeout: 25 * time.Second}
@@ -150,17 +154,69 @@ func splitVer(v string) []string {
 func verLess(a, b string) bool {
 	as, bs := splitVer(a), splitVer(b)
 	for i := 0; i < len(as) && i < len(bs); i++ {
-		nx, ex := strconv.Atoi(as[i])
-		ny, ey := strconv.Atoi(bs[i])
-		if ex == nil && ey == nil {
-			if nx != ny {
-				return nx < ny
-			}
-		} else if as[i] != bs[i] {
-			return as[i] < bs[i]
+		if c := cmpToken(as[i], bs[i]); c != 0 {
+			return c < 0
 		}
 	}
 	return len(as) < len(bs)
+}
+
+// cmpToken compares two version tokens with natural ordering: digit runs compare
+// numerically (so "r10" > "r2", not the string order where "r10" < "r2"), other runs
+// compare byte-wise. Returns -1, 0 or 1.
+func cmpToken(a, b string) int {
+	ai, bi := 0, 0
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	for ai < len(a) && bi < len(b) {
+		if isDigit(a[ai]) && isDigit(b[bi]) {
+			aj, bj := ai, bi
+			for aj < len(a) && isDigit(a[aj]) {
+				aj++
+			}
+			for bj < len(b) && isDigit(b[bj]) {
+				bj++
+			}
+			if c := cmpNum(a[ai:aj], b[bi:bj]); c != 0 {
+				return c
+			}
+			ai, bi = aj, bj
+		} else {
+			if a[ai] != b[bi] {
+				if a[ai] < b[bi] {
+					return -1
+				}
+				return 1
+			}
+			ai++
+			bi++
+		}
+	}
+	switch { // the token with more left is "greater" (e.g. "r" < "r2")
+	case len(a)-ai < len(b)-bi:
+		return -1
+	case len(a)-ai > len(b)-bi:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// cmpNum compares two digit strings as numbers, without integer overflow. Returns -1/0/1.
+func cmpNum(a, b string) int {
+	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+	switch {
+	case len(a) != len(b):
+		if len(a) < len(b) {
+			return -1
+		}
+		return 1
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // ebuildAtomVer extracts ("cat/pkg", "version") from an ebuild blob path "cat/pkg/pkg-VER.ebuild".
@@ -363,6 +419,9 @@ func pkgVersion(ctx context.Context, atom string) (string, string) {
 	}
 	stable, latest := pickStableLatest(pj.Versions)
 	verC.mu.Lock()
+	if len(verC.m) >= pkgCacheMax {
+		verC.m = map[string]verInfo{}
+	}
 	verC.m[atom] = verInfo{stable: stable, latest: latest, fetched: time.Now()}
 	verC.mu.Unlock()
 	return stable, latest
@@ -490,7 +549,7 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 	if v.isRichEnabled() {
 		rich = renderPkgRich(q, mainRes, vm, ovRes)
 	}
-	v.sendRichOrHTML(c, bot, msg.Chat.ID, rich, plain)
+	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, rich, plain)
 	return nil
 }
 

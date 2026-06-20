@@ -127,6 +127,6 @@ func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 			b.WriteString("\n没找到匹配的新闻。")
 		}
 	}
-	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()))
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
 	return nil
 }

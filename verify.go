@@ -51,6 +51,7 @@ type pendingRec struct {
 type Verifier struct {
 	cfg         *Config
 	botUsername string
+	botID       int64
 	statePath   string
 	warnPath    string
 	acPath      string
@@ -67,6 +68,8 @@ type Verifier struct {
 	acMu        sync.RWMutex // guards the channel-sock-puppet filter's runtime state
 	acOn        bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
 	acWhite     map[int64]bool
+	chanAlert   map[int64]time.Time // required-channel -> last "bot can't access" alert (throttle), guarded by mu
+	dmLast      map[int64]time.Time // user -> last DM auto-reply time (throttle), guarded by mu
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -86,11 +89,23 @@ func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
 		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})
 }
 
+// replyParams binds a response to the user's command message. The lookup commands hit
+// slow external APIs, so when several are in flight at once their free-floating answers
+// could be mistaken for one another — replying to the trigger ties each answer to its
+// question. A zero msgID yields nil (no binding).
+func replyParams(msgID int) *telego.ReplyParameters {
+	if msgID == 0 {
+		return nil
+	}
+	return &telego.ReplyParameters{MessageID: msgID}
+}
+
 // NewVerifier builds a Verifier from config: verification starts enabled, rich output
 // follows cfg.RichMessages, and the stats timezone is resolved (default UTC+8).
 func NewVerifier(cfg *Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
+		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{},
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders}
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
@@ -546,6 +561,17 @@ func (v *Verifier) isChannelMember(c context.Context, bot *telego.Bot, gid, user
 	}
 	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: userID})
 	if err != nil {
+		// Distinguish "the bot itself can't read this channel" (a misconfiguration — the bot
+		// isn't an admin there) from a per-user/transient error. If the bot can't even see its
+		// OWN membership, the requirement is unenforceable, so fail OPEN — a permission slip
+		// must NOT lock every applicant out — and alert admins instead of silently blocking.
+		if v.botID != 0 {
+			if _, e2 := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: v.botID}); e2 != nil {
+				log.Printf("isChannelMember: bot cannot access required channel %d (%v) — passing applicant %d through; make the bot an admin of that channel", rc, e2, userID)
+				v.channelAccessAlert(c, bot, rc)
+				return true
+			}
+		}
 		log.Printf("getChatMember(channel=%d user=%d): %v", rc, userID, err)
 		return false
 	}
@@ -606,8 +632,24 @@ func (v *Verifier) deleteChallenge(c context.Context, bot *telego.Bot, gid int64
 
 func (v *Verifier) adminAlert(c context.Context, bot *telego.Bot, text string) {
 	if v.cfg.AdminLogChatID != 0 {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(v.cfg.AdminLogChatID), text))
+		if _, err := bot.SendMessage(c, tu.Message(tu.ID(v.cfg.AdminLogChatID), text)); err != nil {
+			log.Printf("adminAlert to %d failed (check admin_log_chat_id / bot membership): %v", v.cfg.AdminLogChatID, err)
+		}
 	}
+}
+
+// channelAccessAlert warns admins that the bot can't read a required channel (so the
+// follow-gate can't be enforced and applicants are being passed through). Throttled to at
+// most once per 10 minutes per channel so a busy join queue doesn't flood the admin log.
+func (v *Verifier) channelAccessAlert(c context.Context, bot *telego.Bot, channelID int64) {
+	v.mu.Lock()
+	if last, ok := v.chanAlert[channelID]; ok && time.Since(last) < 10*time.Minute {
+		v.mu.Unlock()
+		return
+	}
+	v.chanAlert[channelID] = time.Now()
+	v.mu.Unlock()
+	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必关频道 %d 的成员(可能已不是该频道管理员)——关注门槛暂时无法核验,正在放行通过答题的用户。请把机器人重新设为该频道管理员。", channelID))
 }
 
 func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) bool {

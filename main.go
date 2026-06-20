@@ -60,6 +60,7 @@ func main() {
 		log.Fatalf("GetMe failed (required for the verification deep link): %v", err)
 	}
 	v.botUsername = me.Username
+	v.botID = me.ID
 	log.Printf("verify bot @%s started — groups=%d timeout=%ds", me.Username, len(cfg.Groups), cfg.TimeoutSeconds)
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
@@ -76,12 +77,16 @@ func main() {
 		v.loadWarns()
 		v.acPath = sd + "/antispam.json"
 		v.loadAntispam()
+	} else {
+		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: pending verifications, warn counts, the /bc state and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
 	}
 
 	var feeds []*FeedConfig // one shared poller fans new bugs + news out to all configured feeds
 	for i := range cfg.Feeds {
 		if cfg.Feeds[i].ChatID != 0 {
 			feeds = append(feeds, &cfg.Feeds[i])
+		} else {
+			log.Printf("WARNING: a feed entry has chat_id=0 (missing/invalid) — it is disabled; set its chat_id to the target channel")
 		}
 	}
 	if len(feeds) > 0 {

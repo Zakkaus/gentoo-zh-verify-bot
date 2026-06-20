@@ -92,6 +92,8 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 		}
 		rows = append(rows, row)
 	}
-	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyMarkup(tu.InlineKeyboard(rows...)))
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).
+		WithReplyMarkup(tu.InlineKeyboard(rows...)).
+		WithReplyParameters(replyParams(msg.MessageID)))
 	return nil
 }

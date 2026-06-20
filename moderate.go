@@ -49,6 +49,21 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot *telego.Bot, selfID int6
 			log.Printf("group %d: bot is NOT admin — join verification inactive until it's granted admin (approve members / ban / delete)", gid)
 		}
 	}
+	// Probe each distinct required channel: if the bot can't read its own membership there,
+	// the follow-gate can't be enforced (applicants would be wrongly blocked) — surface it now.
+	seen := map[int64]bool{}
+	for i := range v.cfg.Groups {
+		rc := v.cfg.requiredChannel(v.cfg.Groups[i].ID)
+		if rc == 0 || seen[rc] {
+			continue
+		}
+		seen[rc] = true
+		if _, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: selfID}); err != nil {
+			log.Printf("required channel %d: bot CANNOT read membership (%v) — the follow-gate can't be enforced; make the bot an admin of this channel", rc, err)
+		} else {
+			log.Printf("required channel %d: bot can read membership ✓", rc)
+		}
+	}
 }
 
 // notify sends a transient message to chatID and auto-deletes it after NotifyTTLSeconds.

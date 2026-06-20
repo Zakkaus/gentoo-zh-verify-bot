@@ -116,6 +116,6 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 		}
 		fmt.Fprintf(&b, "\n产品:%s", html.EscapeString(comp))
 	}
-	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()))
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
 	return nil
 }

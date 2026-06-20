@@ -270,6 +270,6 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 		// collapsible in rich messages so the main table stays compact
 		fmt.Fprintf(&rich, "<details><summary>其它匹配 (%d)</summary>%s</details>", len(alts), al.String())
 	}
-	v.sendRichOrHTML(c, bot, msg.Chat.ID, rich.String(), plain.String())
+	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, rich.String(), plain.String())
 	return nil
 }
