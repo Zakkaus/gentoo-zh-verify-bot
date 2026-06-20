@@ -17,35 +17,43 @@ import (
 const relInfoTTL = 24 * time.Hour
 
 var relInfo = struct {
-	mu      sync.Mutex
-	debian  map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
-	ubuntu  map[string]bool   // Ubuntu version ("24.04") -> is it an LTS?
-	fetched time.Time
+	mu         sync.Mutex
+	debian     map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
+	ubuntu     map[string]bool   // Ubuntu version ("24.04") -> is it an LTS?
+	ubuntuRel  map[string]bool   // Ubuntu version ("24.04") -> already released (date in the past)?
+	fetched    time.Time
+	refreshing bool // a fetch is in flight (so concurrent /pkgs don't all hit upstream)
 }{}
 
 // ensureReleaseInfo refreshes the Debian/Ubuntu release-status caches if stale. Best-effort:
 // a fetch failure leaves the previous (or empty) data, and the relabel helpers fall back to
-// the raw version, so /pkgs still works without this enrichment.
+// the raw version, so /pkgs still works without this enrichment. A `refreshing` guard means a
+// burst of concurrent /pkgs on a cold/expired cache triggers ONE upstream fetch, not N.
 func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	relInfo.mu.Lock()
 	fresh := relInfo.debian != nil && now.Sub(relInfo.fetched) < relInfoTTL
-	relInfo.mu.Unlock()
-	if fresh {
-		return
+	if fresh || relInfo.refreshing {
+		relInfo.mu.Unlock()
+		return // already fresh, or someone else is fetching — fall back to current data
 	}
+	relInfo.refreshing = true
+	relInfo.mu.Unlock()
+
 	deb := fetchDebianStatus(ctx, now)
-	ubu := fetchUbuntuLTS(ctx)
+	ubu, ubuRel := fetchUbuntu(ctx, now)
+
 	relInfo.mu.Lock()
 	if deb != nil {
 		relInfo.debian = deb
 	}
 	if ubu != nil {
-		relInfo.ubuntu = ubu
+		relInfo.ubuntu, relInfo.ubuntuRel = ubu, ubuRel
 	}
 	if relInfo.debian == nil {
 		relInfo.debian = map[string]string{} // mark attempted so we don't refetch every call
 	}
 	relInfo.fetched = now
+	relInfo.refreshing = false
 	relInfo.mu.Unlock()
 }
 
@@ -123,21 +131,32 @@ func deriveDebianStatus(body string, now time.Time) map[string]string {
 	return out
 }
 
-func fetchUbuntuLTS(ctx context.Context) map[string]bool {
+// fetchUbuntu returns, per Ubuntu version, whether it's an LTS and whether it's already
+// released (release date in the past) — the latter so /pkgs can exclude an in-development
+// series (e.g. 26.10 before its release date) from the "current stable" line.
+func fetchUbuntu(ctx context.Context, now time.Time) (lts, released map[string]bool) {
 	body, err := httpGetBody(ctx, "https://debian.pages.debian.net/distro-info-data/ubuntu.csv", 1<<20)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	out := map[string]bool{}
+	lts, released = map[string]bool{}, map[string]bool{}
 	for _, c := range parseDistroInfo(string(body)) {
 		if len(c) < 1 || c[0] == "" {
 			continue
 		}
-		ver, isLTS := c[0], strings.Contains(c[0], "LTS")
-		ver = strings.TrimSpace(strings.TrimSuffix(ver, "LTS"))
-		out[ver] = isLTS
+		ver := strings.TrimSpace(strings.TrimSuffix(c[0], "LTS"))
+		lts[ver] = strings.Contains(c[0], "LTS")
+		// Record released status for EVERY series (true/false), so an unreleased series is
+		// known-and-false (excluded) rather than merely absent (treated as unknown).
+		rel := false
+		if len(c) >= 5 {
+			if t, perr := time.Parse("2006-01-02", c[4]); perr == nil && !t.After(now) {
+				rel = true
+			}
+		}
+		released[ver] = rel
 	}
-	return out
+	return lts, released
 }
 
 // debianRelabel maps a raw Debian release label to its role; "unstable" and unknowns pass
@@ -162,4 +181,19 @@ func ubuntuRelabel(raw string) string {
 		return raw + " LTS"
 	}
 	return raw
+}
+
+// ubuntuTesting reports whether an Ubuntu release label should be excluded from the "current
+// stable" line: a pre-release pocket (proposed/backports), or a series whose release date is
+// still in the future per distro-info-data (e.g. 26.10 before it ships). Unknown or clean
+// released series are NOT excluded, so before the CSV loads /pkgs falls back to showing the
+// highest numbered series. Mirrors debianTesting (which excludes the numbered testing series).
+func ubuntuTesting(label string) bool {
+	if strings.Contains(label, "proposed") || strings.Contains(label, "backport") {
+		return true
+	}
+	relInfo.mu.Lock()
+	defer relInfo.mu.Unlock()
+	released, known := relInfo.ubuntuRel[label]
+	return known && !released
 }

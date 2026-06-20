@@ -37,3 +37,21 @@ func TestDeriveDebianStatus(t *testing.T) {
 		t.Errorf("after Forky release: 14=%q 13=%q, want stable/oldstable", g["14"], g["13"])
 	}
 }
+
+// TestUbuntuTesting verifies the stable-line exclusion: an unreleased series (future date) and
+// proposed/backports pockets are excluded; released series and unknown labels are not.
+func TestUbuntuTesting(t *testing.T) {
+	relInfo.mu.Lock()
+	relInfo.ubuntuRel = map[string]bool{"24.04": true, "26.04": true, "26.10": false}
+	relInfo.mu.Unlock()
+	defer func() { relInfo.mu.Lock(); relInfo.ubuntuRel = nil; relInfo.mu.Unlock() }()
+
+	for label, want := range map[string]bool{
+		"26.10": true, "24.04": false, "26.04": false,
+		"26.10.proposed": true, "24.04.backports": true, "99.99": false,
+	} {
+		if got := ubuntuTesting(label); got != want {
+			t.Errorf("ubuntuTesting(%q) = %v, want %v", label, got, want)
+		}
+	}
+}

@@ -60,11 +60,15 @@ func famOf(repo string) string {
 	return ""
 }
 
-// dateSnapshot reports whether v starts with a YYYY-MM-DD or YYYY.MM.DD date (a git/
-// snapshot ebuild rather than a release), so it isn't ranked above real versions by numeric
-// compare. betterVer only deprioritizes it when a non-date version exists in the same
-// family, so genuine calendar-versioned projects (yt-dlp, etc.) still compare correctly.
+// dateSnapshot reports whether v is a YYYY-MM-DD / YYYY.MM.DD or a bare YYYYMMDD date (a git/
+// snapshot package like Debian's gcc-snapshot "20250315" rather than a release), so it isn't
+// ranked above real versions by numeric compare. betterVer only deprioritizes it when a
+// non-date version exists in the same family, so genuine calendar-versioned projects (yt-dlp,
+// etc.) still compare correctly.
 func dateSnapshot(v string) bool {
+	if bareDate(v) { // bare 8-digit YYYYMMDD, e.g. gcc-snapshot
+		return true
+	}
 	if len(v) < 10 {
 		return false
 	}
@@ -81,6 +85,25 @@ func dateSnapshot(v string) bool {
 		}
 	}
 	return true
+}
+
+// bareDate reports whether v is a bare 8-digit YYYYMMDD with a plausible year/month/day. A
+// distro snapshot package (gcc-snapshot ships "20250315") would otherwise be a huge integer
+// that beats the real version under numeric compare; treating it as a date deprioritizes it
+// below a real release. The month/day bounds exclude non-date 8-digit versions (e.g. 99999999).
+func bareDate(v string) bool {
+	if len(v) != 8 {
+		return false
+	}
+	for i := 0; i < 8; i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return false
+		}
+	}
+	y := int(v[0]-'0')*1000 + int(v[1]-'0')*100 + int(v[2]-'0')*10 + int(v[3]-'0')
+	m := int(v[4]-'0')*10 + int(v[5]-'0')
+	d := int(v[6]-'0')*10 + int(v[7]-'0')
+	return y >= 1990 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31
 }
 
 // allNines reports whether v is a Gentoo live ebuild version (9999 / 9999.9999 …),
@@ -187,10 +210,24 @@ func familyChannels(rows []repologyPkg, prefixes []string, isTesting func(string
 	if len(rows) == 0 {
 		return nil
 	}
-	nv, _ := newestRow(rows) // newest across all channels (incl. rolling/testing)
+	excluded := func(lbl string) bool { return isTesting != nil && isTesting(lbl) }
+	isStable := func(lbl string) bool { return !rollingRelease(lbl) && !excluded(lbl) }
 
-	isStable := func(lbl string) bool {
-		return !rollingRelease(lbl) && (isTesting == nil || !isTesting(lbl))
+	// nv = newest version we'd surface as the top line: a rolling/dev or released channel, but
+	// NOT an excluded pre-release series (Debian forky, an unreleased Ubuntu series, a proposed
+	// pocket) — those must not appear as a version line. Fall back to the raw newest if every
+	// channel is excluded, so we still show something.
+	nv := ""
+	for _, p := range rows {
+		if excluded(releaseLabel(p.Repo, prefixes)) {
+			continue
+		}
+		if nv == "" || betterVer(nv, p.Version) {
+			nv = p.Version
+		}
+	}
+	if nv == "" {
+		nv, _ = newestRow(rows)
 	}
 	stableVer, stableLabel := "", ""
 	for _, p := range rows {
@@ -313,7 +350,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/pkgs <包名>,例如 /pkgs firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / CentOS Stream / openSUSE 等),Debian 等标注稳定/测试通道,RHEL 取自 AlmaLinux/Rocky 重建。")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/pkgs <包名>,例如 /pkgs firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / CentOS Stream / openSUSE 等),Debian 等标注稳定/测试通道,RHEL 取自 AlmaLinux/Rocky 重建。")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
@@ -322,7 +359,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	proj, pkgs, alts, exact := fetchRepology(hc, name)
 	esc := html.EscapeString
 	if len(pkgs) == 0 {
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name))
 		return nil
 	}
 
@@ -373,8 +410,11 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		// Debian sid + stable), one line each. The relabel hook turns a raw release number
 		// into its live role (Debian "13" -> "13 stable", Ubuntu "24.04" -> "24.04 LTS").
 		var isTesting func(string) bool
-		if f.label == "Debian" { // only Debian numbers a testing series above stable
+		switch f.label {
+		case "Debian": // Debian numbers a testing series (forky/14) above stable
 			isTesting = debianTesting
+		case "Ubuntu": // exclude an unreleased series + proposed/backports pockets
+			isTesting = ubuntuTesting
 		}
 		url := fmt.Sprintf(f.search, qproj)
 		for _, ch := range familyChannels(rows, f.prefixes, isTesting) {
@@ -386,7 +426,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if len(lines) == 0 {
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE 里都没有打包(可能是某发行版专属)。", proj))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / CentOS Stream / EPEL / openSUSE 等里都没有打包(可能是某发行版专属)。", proj))
 		return nil
 	}
 

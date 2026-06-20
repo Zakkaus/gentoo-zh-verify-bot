@@ -133,3 +133,31 @@ func TestFamOf(t *testing.T) {
 		}
 	}
 }
+
+// TestBareDateSnapshot verifies a bare YYYYMMDD snapshot (e.g. Debian gcc-snapshot) is
+// treated as a date and never beats / displaces the real release.
+func TestBareDateSnapshot(t *testing.T) {
+	for _, v := range []string{"20250315", "20260327", "20210106"} {
+		if !bareDate(v) {
+			t.Errorf("%q should be a bare date", v)
+		}
+	}
+	for _, v := range []string{"99999999", "16100000", "12345678", "9999", "1234567", "2025031a"} {
+		if bareDate(v) {
+			t.Errorf("%q should NOT be a bare date", v)
+		}
+	}
+	if betterVer("14.2.0", "20250315") {
+		t.Error("snapshot 20250315 must not beat real 14.2.0")
+	}
+	// gcc-like Debian rows: real versions must win, snapshots excluded from the output.
+	rows := []repologyPkg{
+		{"debian_unstable", "16.1.0"}, {"debian_unstable", "20260327"},
+		{"debian_13", "14.2.0"}, {"debian_13", "20250315"},
+	}
+	for _, ch := range familyChannels(rows, []string{"debian_"}, func(string) bool { return false }) {
+		if ch.ver == "20260327" || ch.ver == "20250315" {
+			t.Errorf("snapshot leaked into /pkgs output: %+v", ch)
+		}
+	}
+}
