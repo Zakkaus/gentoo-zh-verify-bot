@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.2] - 2026-06-20
+
+### Fixed
+- The per-minute private-chat rate limit now applies **only to the commands that make an
+  external request** (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`).
+  The cheap local commands `/help`, `/ping`, `/stats` are no longer counted against it, so
+  they always respond in a DM (previously `/help` could be blocked after a few queries).
+
 ## [3.1.1] - 2026-06-20
 
 ### Fixed
@@ -365,6 +373,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.1.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.2
 [3.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.1
 [3.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.0
 [3.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.0.0
