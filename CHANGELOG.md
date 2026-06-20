@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-06-20
+
+### Added
+- **`/bc`** — admin command to toggle the channel sock-puppet filter on/off at runtime,
+  plus `/bc allow|deny <channel id>` to manage its whitelist (`allow` also un-bans the
+  channel). The toggle and whitelist are now **persisted** (`antispam.json`), so they
+  survive restarts; `block_channel_senders` / `channel_whitelist` seed the initial state.
+
 ## [1.4.0] - 2026-06-20
 
 ### Added
@@ -92,6 +100,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.0
 [1.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.4.0
 [1.3.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.3.1
 [1.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.3.0
