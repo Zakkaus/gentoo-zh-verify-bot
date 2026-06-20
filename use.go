@@ -21,6 +21,14 @@ type useFlag struct {
 	def  bool // default-enabled (+ prefix)
 }
 
+// useExpandGroup is one USE_EXPAND variable (e.g. l10n, llvm_slot) and its values, taken from
+// packages.gentoo.org's grouped top-level use_expand. Keeping them grouped (and bounded) avoids
+// flattening 100+ l10n_* entries into the local-flag list.
+type useExpandGroup struct {
+	name  string
+	flags []useFlag
+}
+
 type pkgFullInfo struct {
 	atom        string
 	description string
@@ -29,6 +37,7 @@ type pkgFullInfo struct {
 	latest      string
 	local       []useFlag
 	global      []useFlag
+	expand      []useExpandGroup
 	fetched     time.Time
 }
 
@@ -71,6 +80,12 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 			Local  []useEntry `json:"local"`
 			Global []useEntry `json:"global"`
 		} `json:"use"`
+		// use_expand is a sibling of use: USE_EXPAND variables grouped with their values
+		// (e.g. l10n -> [ach, af, …], llvm_slot -> [20, +21, 22]).
+		UseExpand []struct {
+			Name  string     `json:"name"`
+			Flags []useEntry `json:"flags"`
+		} `json:"use_expand"`
 	}
 	if err := httpGetJSON(ctx, "https://packages.gentoo.org/packages/"+atom+".json", nil, &pj); err != nil {
 		return pkgFullInfo{}, false
@@ -79,6 +94,11 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 	info.stable, info.latest = pickStableLatest(pj.Versions)
 	info.local = toUseFlags(pj.Use.Local)
 	info.global = toUseFlags(pj.Use.Global)
+	for _, g := range pj.UseExpand {
+		if fl := toUseFlags(g.Flags); len(fl) > 0 {
+			info.expand = append(info.expand, useExpandGroup{name: g.Name, flags: fl})
+		}
+	}
 	infoC.mu.Lock()
 	if len(infoC.m) >= pkgCacheMax {
 		infoC.m = map[string]pkgFullInfo{}
@@ -255,6 +275,33 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
 }
 
+// expandCap bounds how many values of a single USE_EXPAND group the compact /use lists before
+// truncating with a "…(共 N)" tail — l10n alone can carry 100+ language codes.
+const expandCap = 16
+
+// writeExpandFlags lists USE_EXPAND groups (l10n, llvm_slot, …) one compact line each: the group
+// name, its value count, and up to expandCap values (name-only, + marks a default-on value) so a
+// huge group can't flood the plain-text message. Full descriptions live in the rich view.
+func writeExpandFlags(b *strings.Builder, groups []useExpandGroup) {
+	for _, g := range groups {
+		if len(g.flags) == 0 {
+			continue
+		}
+		names := make([]string, 0, expandCap)
+		for i, f := range g.flags {
+			if i >= expandCap {
+				break
+			}
+			names = append(names, flagMark(f)+html.EscapeString(f.name))
+		}
+		more := ""
+		if len(g.flags) > expandCap {
+			more = fmt.Sprintf(" …(共 %d)", len(g.flags))
+		}
+		fmt.Fprintf(b, "\n<b>%s</b>(%d):%s%s", html.EscapeString(strings.ToUpper(g.name)), len(g.flags), strings.Join(names, " "), more)
+	}
+}
+
 // overlayByName looks up a configured overlay by its display name.
 func overlayByName(name string) (overlay, bool) {
 	for _, o := range overlays {
@@ -307,7 +354,8 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	}
 	writeLocalFlags(&b, info.local)
 	writeGlobalFlags(&b, info.global)
-	if len(info.local) == 0 && len(info.global) == 0 {
+	writeExpandFlags(&b, info.expand)
+	if len(info.local) == 0 && len(info.global) == 0 && len(info.expand) == 0 {
 		b.WriteString("\n(该包无 USE 标志)")
 	}
 	if len(alsoIn) > 0 {
@@ -383,7 +431,8 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 	}
 	writeFlagsRich(&b, "本地 USE", info.local, false)
 	writeFlagsRich(&b, "全局 USE", info.global, true)
-	if len(info.local) == 0 && len(info.global) == 0 {
+	writeExpandFlagsRich(&b, info.expand)
+	if len(info.local) == 0 && len(info.global) == 0 && len(info.expand) == 0 {
 		b.WriteString("<p>(该包无 USE 标志)</p>")
 	}
 	if len(alsoIn) > 0 {
@@ -419,6 +468,25 @@ func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse 
 	b.WriteString("</ul>")
 	if collapse {
 		b.WriteString("</details>")
+	}
+}
+
+// writeExpandFlagsRich renders USE_EXPAND groups for rich messages: each group is its own
+// collapsible <details> (they can be large, e.g. l10n) listing every value with its description.
+func writeExpandFlagsRich(b *strings.Builder, groups []useExpandGroup) {
+	for _, g := range groups {
+		if len(g.flags) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "<details><summary><b>%s</b>(%d)</summary><ul>", html.EscapeString(strings.ToUpper(g.name)), len(g.flags))
+		for _, f := range g.flags {
+			if f.desc != "" {
+				fmt.Fprintf(b, "<li>%s%s — %s</li>", flagMark(f), html.EscapeString(f.name), html.EscapeString(f.desc))
+			} else {
+				fmt.Fprintf(b, "<li>%s%s</li>", flagMark(f), html.EscapeString(f.name))
+			}
+		}
+		b.WriteString("</ul></details>")
 	}
 }
 
