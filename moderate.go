@@ -33,6 +33,24 @@ func (v *Verifier) isGroupAdmin(c context.Context, bot *telego.Bot, chatID, user
 	return ok
 }
 
+// logGroupAdmin logs (non-fatally) whether the bot is an admin in each guarded group, so
+// a group it hasn't been granted admin in yet is visible in the logs rather than silently
+// inert. Telegram only delivers join requests to admins, so a non-admin group is harmless
+// — the bot just can't verify there until granted admin. Safe to run in the background.
+func (v *Verifier) logGroupAdmin(c context.Context, bot *telego.Bot, selfID int64) {
+	for i := range v.cfg.Groups {
+		gid := v.cfg.Groups[i].ID
+		switch ok, err := v.adminStatus(c, bot, gid, selfID); {
+		case err != nil:
+			log.Printf("group %d: cannot read bot membership yet (%v) — verification stays inactive until the bot is added as admin", gid, err)
+		case ok:
+			log.Printf("group %d: bot is admin ✓", gid)
+		default:
+			log.Printf("group %d: bot is NOT admin — join verification inactive until it's granted admin (approve members / ban / delete)", gid)
+		}
+	}
+}
+
 // notify sends a transient message to chatID and auto-deletes it after NotifyTTLSeconds.
 func (v *Verifier) notify(c context.Context, bot *telego.Bot, chatID int64, text string) {
 	m, err := bot.SendMessage(c, tu.Message(tu.ID(chatID), text))

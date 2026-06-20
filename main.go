@@ -65,6 +65,7 @@ func main() {
 		g := &cfg.Groups[i]
 		log.Printf("  group %d: required_channel=%d questions=%d", g.ID, cfg.requiredChannel(g.ID), len(cfg.questions(g.ID)))
 	}
+	go v.logGroupAdmin(ctx, bot, me.ID) // non-fatal: report which groups the bot can actually moderate
 	v.register(bh)
 	setupCommands(ctx, bot, cfg.WarnLimit)
 	sd := os.Getenv("STATE_DIRECTORY")
