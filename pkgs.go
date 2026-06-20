@@ -133,6 +133,61 @@ func newestRow(rows []repologyPkg) (ver, repo string) {
 	return ver, repo
 }
 
+// rollingRelease reports whether a release label names a rolling/development channel
+// (sid, rawhide, edge, a label-less rolling repo) rather than a numbered stable release.
+func rollingRelease(label string) bool {
+	switch label {
+	case "", "unstable", "testing", "rawhide", "edge", "sid", "devel", "cauldron", "current":
+		return true
+	}
+	return false
+}
+
+type channelLine struct{ ver, label string }
+
+// familyChannels returns the versions to show for one distro family: the newest version
+// (its channel), plus the newest STABLE release when that differs — so e.g. Debian shows
+// both unstable and the current stable, while a package at the same version everywhere
+// stays a single line. The stable version's label is the highest-numbered release that
+// actually ships it (so Debian's stable shows "13"/trixie, not the higher "14"/forky that
+// carries a different version).
+func familyChannels(rows []repologyPkg, prefixes []string) []channelLine {
+	if len(rows) == 0 {
+		return nil
+	}
+	nv, nr := newestRow(rows)
+	nLabel := releaseLabel(nr, prefixes)
+	// If a rolling/dev channel also carries the newest version, label the line with it
+	// (e.g. "unstable" rather than an arbitrary numbered release that happens to tie).
+	for _, p := range rows {
+		if p.Version == nv {
+			if lbl := releaseLabel(p.Repo, prefixes); rollingRelease(lbl) {
+				nLabel = lbl
+				break
+			}
+		}
+	}
+	out := []channelLine{{nv, nLabel}}
+	stable := ""                 // highest version among numbered (non-rolling) releases
+	label := map[string]string{} // version -> highest-numbered release label that has it
+	for _, p := range rows {
+		lbl := releaseLabel(p.Repo, prefixes)
+		if rollingRelease(lbl) {
+			continue
+		}
+		if stable == "" || betterVer(stable, p.Version) {
+			stable = p.Version
+		}
+		if cur, ok := label[p.Version]; !ok || verLess(cur, lbl) {
+			label[p.Version] = lbl
+		}
+	}
+	if stable != "" && stable != nv {
+		out = append(out, channelLine{stable, label[stable]})
+	}
+	return out
+}
+
 // releaseLabel turns the Repology repo id of a family's winning version into a short
 // release name shown in parentheses — so e.g. debian_unstable -> "unstable" (sid),
 // ubuntu_25_04 -> "25.04", fedora_rawhide -> "rawhide", alpine_3_21 -> "3.21". A rolling
@@ -271,11 +326,12 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		if len(rows) == 0 {
 			continue
 		}
-		// One line per distro: the newest version + the release it's from. (Repology numbers
-		// releases inconsistently across distros — e.g. Debian's highest number is testing,
-		// Fedora's is stable — so we don't try to auto-label a "stable channel" from them.)
-		nv, nr := newestRow(rows)
-		lines = append(lines, distroLine{f.label, nv, releaseLabel(nr, f.prefixes), fmt.Sprintf(f.search, qproj)})
+		// Show the newest version + the current stable when they differ (e.g. Debian
+		// unstable + stable), one line each. The label is each version's actual release.
+		url := fmt.Sprintf(f.search, qproj)
+		for _, ch := range familyChannels(rows, f.prefixes) {
+			lines = append(lines, distroLine{f.label, ch.ver, ch.label, url})
+		}
 	}
 	if len(lines) == 0 {
 		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE 里都没有打包(可能是某发行版专属)。", proj))

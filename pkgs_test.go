@@ -2,6 +2,38 @@ package main
 
 import "testing"
 
+// TestFamilyChannels verifies the per-distro channel display: a rolling/dev channel plus
+// the current stable when they differ, with the stable labelled by the highest-numbered
+// release that actually ships that version (Debian → "13"/trixie, not the higher "14"/forky
+// that carries a different version); a package at one version everywhere stays one line.
+func TestFamilyChannels(t *testing.T) {
+	deb := []string{"debian_"}
+	// firefox-like: unstable newest; 11/12/13 share the stable version; 14 (forky) is lower.
+	got := familyChannels([]repologyPkg{
+		{"debian_unstable", "152.0.1"},
+		{"debian_11", "140.12.0"},
+		{"debian_12", "140.12.0"},
+		{"debian_13", "140.12.0"},
+		{"debian_14", "140.11.0"},
+	}, deb)
+	want := []channelLine{{"152.0.1", "unstable"}, {"140.12.0", "13"}}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("firefox-like = %v, want %v", got, want)
+	}
+	// htop-like: same version in unstable and the releases -> one line, prefer the rolling label.
+	if g := familyChannels([]repologyPkg{
+		{"debian_unstable", "3.5.1"}, {"debian_13", "3.5.1"}, {"debian_14", "3.5.1"},
+	}, deb); len(g) != 1 || g[0] != (channelLine{"3.5.1", "unstable"}) {
+		t.Errorf("htop-like = %v, want one line {3.5.1, unstable}", g)
+	}
+	// no rolling channel (Ubuntu-like, all numbered) -> one line, no phantom stable.
+	if g := familyChannels([]repologyPkg{
+		{"ubuntu_24_04", "1.0"}, {"ubuntu_22_04", "0.9"},
+	}, []string{"ubuntu_"}); len(g) != 1 {
+		t.Errorf("ubuntu-like = %v, want one line", g)
+	}
+}
+
 // TestVerTier verifies the /distro per-distro version preference: a real release (tier 0)
 // beats a date/CalVer (tier 1) beats a Gentoo 9999 live ebuild (tier 2), so a family shows
 // its actual packaged version rather than a live-ebuild placeholder.
