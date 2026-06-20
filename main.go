@@ -63,7 +63,7 @@ func main() {
 	log.Printf("verify bot @%s started — groups=%d channel=%d timeout=%ds questions=%d",
 		me.Username, len(cfg.GroupIDs), cfg.RequiredChannelID, cfg.TimeoutSeconds, len(cfg.Questions))
 	v.register(bh)
-	setupCommands(ctx, bot)
+	setupCommands(ctx, bot, cfg.WarnLimit)
 	sd := os.Getenv("STATE_DIRECTORY")
 	if sd != "" {
 		v.statePath = sd + "/pending.json"

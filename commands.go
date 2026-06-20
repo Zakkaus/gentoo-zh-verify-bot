@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/mymmrac/telego"
@@ -10,7 +11,7 @@ import (
 // setupCommands registers the bot's command list with Telegram so that typing
 // "/" in the chat shows an autocomplete menu. Member commands are visible to
 // everyone; the admin commands are only shown to chat administrators.
-func setupCommands(ctx context.Context, bot *telego.Bot) {
+func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 	member := []telego.BotCommand{
 		{Command: "help", Description: "查看可用指令"},
 		{Command: "pkg", Description: "搜索 Gentoo 包(官方树 / gentoo-zh / guru)"},
@@ -26,7 +27,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot) {
 		{Command: "stop", Description: "[管理] 关闭入群验证"},
 		{Command: "sb", Description: "[管理] 回复消息:删消息并踢出(可再申请)"},
 		{Command: "ban", Description: "[管理] 回复消息:删消息并永久封禁"},
-		{Command: "warn", Description: "[管理] 回复消息:警告用户(满 N 次自动踢出)"},
+		{Command: "warn", Description: fmt.Sprintf("[管理] 回复消息:警告用户(满 %d 次自动踢出)", warnLimit)},
 		{Command: "clearwarn", Description: "[管理] 回复消息:清除用户警告"},
 		{Command: "rich", Description: "[管理] 开关富文本输出(/pkg /use)"},
 	}, member...)

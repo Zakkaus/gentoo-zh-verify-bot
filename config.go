@@ -124,6 +124,9 @@ func LoadConfig(path string) (*Config, error) {
 	if c.NotifyTTLSeconds == 0 {
 		c.NotifyTTLSeconds = 60
 	}
+	if c.WarnLimit <= 0 {
+		c.WarnLimit = 3
+	}
 	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
 		c.Feeds = append(c.Feeds, *c.Feed)
 	}
@@ -138,14 +141,6 @@ func (c *Config) IsGroup(id int64) bool {
 		}
 	}
 	return false
-}
-
-// warnLimit is the number of /warn strikes before an auto-kick (default 3).
-func (c *Config) warnLimit() int {
-	if c.WarnLimit > 0 {
-		return c.WarnLimit
-	}
-	return 3
 }
 
 // IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded

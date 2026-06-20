@@ -94,7 +94,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/rich — 开关富文本输出(/pkg /use)\n" +
 			"/sb — 回复某消息:删消息并踢出(可再申请)\n" +
 			"/ban — 回复某消息:删消息并永久封禁\n" +
-			"/warn — 回复某消息:警告用户(满 N 次自动踢出)\n" +
+			fmt.Sprintf("/warn — 回复某消息:警告用户(满 %d 次自动踢出)\n", v.cfg.WarnLimit) +
 			"/clearwarn — 回复某消息:清除用户警告"
 	}
 	v.notify(c, bot, gid, help)
