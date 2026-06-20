@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.3] - 2026-06-20
+
+### Fixed
+- **`/help` in a private chat now actually outputs.** Its DM reply was sent in HTML parse
+  mode, but the help text contains literal `<包名>` / `<编号>` placeholders that Telegram
+  rejects as malformed HTML ("can't parse entities") — and the send error was discarded, so
+  nothing appeared. It (and `/ping` / `/stats` in DM) now send as plain text, matching the
+  group path. Verified against the live Bot API.
+
 ## [3.1.2] - 2026-06-20
 
 ### Fixed
@@ -373,6 +382,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.1.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.3
 [3.1.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.2
 [3.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.1
 [3.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.0
