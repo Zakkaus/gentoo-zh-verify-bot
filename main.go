@@ -68,6 +68,8 @@ func main() {
 	if sd != "" {
 		v.statePath = sd + "/pending.json"
 		v.load(bot)
+		v.warnPath = sd + "/warns.json"
+		v.loadWarns()
 	}
 
 	var feeds []*FeedConfig // one shared poller fans new bugs + news out to all configured feeds

@@ -52,10 +52,12 @@ type Verifier struct {
 	cfg         *Config
 	botUsername string
 	statePath   string
+	warnPath    string
 	loc         *time.Location
 	startTime   time.Time
 	mu          sync.Mutex
 	pend        map[pkey]*pending
+	warns       map[pkey]int // group+user -> warning count (persisted)
 	enabled     bool
 	rich        bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
 	statDate    string
@@ -84,7 +86,7 @@ func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
 // follows cfg.RichMessages, and the stats timezone is resolved (default UTC+8).
 func NewVerifier(cfg *Config) *Verifier {
 	return &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
-		pend: make(map[pkey]*pending), enabled: true, rich: cfg.RichMessages}
+		pend: make(map[pkey]*pending), warns: make(map[pkey]int), enabled: true, rich: cfg.RichMessages}
 }
 
 func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }
@@ -195,6 +197,8 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onMyChatMember, th.AnyMyChatMember())
 	bh.Handle(v.onSb, th.CommandEqual("sb"))
 	bh.Handle(v.onBan, th.CommandEqual("ban"))
+	bh.Handle(v.onWarn, th.CommandEqual("warn"))
+	bh.Handle(v.onClearWarn, th.CommandEqual("clearwarn"))
 	bh.Handle(v.onPing, th.CommandEqual("ping"))
 	bh.Handle(v.onStart, th.CommandEqual("start"))
 	bh.Handle(v.onStop, th.CommandEqual("stop"))

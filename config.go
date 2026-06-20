@@ -66,6 +66,8 @@ type Config struct {
 	// NotifyTTLSeconds: auto-delete the bot's own in-group messages after N seconds
 	// (0 => default 60; negative => never delete).
 	NotifyTTLSeconds int `json:"notify_ttl_seconds"`
+	// WarnLimit: number of /warn strikes before the user is auto-kicked (default 3).
+	WarnLimit int `json:"warn_limit"`
 	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).
 	Overlays []OverlayCfg `json:"overlays"`
 	// NewsURL: the Gentoo news-items index for /news (defaults to gentoo.org when empty).
@@ -136,6 +138,14 @@ func (c *Config) IsGroup(id int64) bool {
 		}
 	}
 	return false
+}
+
+// warnLimit is the number of /warn strikes before an auto-kick (default 3).
+func (c *Config) warnLimit() int {
+	if c.WarnLimit > 0 {
+		return c.WarnLimit
+	}
+	return 3
 }
 
 // IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded
