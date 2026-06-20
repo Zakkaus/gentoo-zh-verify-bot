@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.1] - 2026-06-20
+
+### Fixed
+- `/help`, `/ping` and `/stats` now also work **in a private chat** (they previously got the
+  generic auto-reply). And `/ping` / `/stats` — which are in the member command menu — are
+  now usable by any member, not just admins (they were incorrectly admin-gated). All member
+  commands are now consistent: usable in a guarded group (unlimited) and in a DM (rate-limited);
+  admin/moderation commands stay group-only.
+
 ## [3.1.0] - 2026-06-20
 
 ### Added
@@ -356,6 +365,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.1
 [3.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.0
 [3.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.0.0
 [2.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.7.0
