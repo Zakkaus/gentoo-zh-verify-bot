@@ -23,7 +23,7 @@ func (v *Verifier) stateText() string {
 }
 
 func (v *Verifier) onPing(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
+	return v.memberCmd(ctx, update, func() string {
 		return fmt.Sprintf("🏓 pong | %s | 运行 %s | 验证:%s", version, uptimeStr(v.startTime), v.stateText())
 	})
 }
@@ -51,7 +51,7 @@ func (v *Verifier) onStop(ctx *th.Context, update telego.Update) error {
 }
 
 func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
+	return v.memberCmd(ctx, update, func() string {
 		date, ap, de := v.stats()
 		return fmt.Sprintf("📊 今日(%s)\n✅ 通过:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
 			date, ap, de, v.stateText(), uptimeStr(v.startTime))
@@ -103,15 +103,13 @@ func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
 // onHelp lists commands (admins also see the moderation/admin commands).
 func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || msg.From == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	gid := msg.Chat.ID
-	defer func() {
-		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
-	}()
+	chatID := msg.Chat.ID
+	inGroup := v.cfg.IsGroup(chatID)
 	help := "🤖 可用指令:\n" +
 		"/pkg <包名> — 搜索 Gentoo 包(官方树/gentoo-zh/guru)\n" +
 		"/use <包名> — 某个包的 USE 标志 + 信息\n" +
@@ -125,7 +123,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		"/ping — 机器人状态 / 运行时长\n" +
 		"/stats — 今日通过 / 拒绝人数\n" +
 		"/help — 显示本帮助"
-	if v.isGroupAdmin(c, bot, gid, msg.From.ID) {
+	if inGroup && v.isGroupAdmin(c, bot, chatID, msg.From.ID) {
 		help += "\n\n👮 管理员:\n" +
 			"/start — 开启入群验证\n" +
 			"/stop — 关闭入群验证\n" +
@@ -137,7 +135,32 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/clearwarn — 回复某消息:清除用户警告\n" +
 			"/bc — 频道马甲封禁开关;/bc allow|deny <频道id> 管白名单"
 	}
-	v.notify(c, bot, gid, help)
+	if inGroup {
+		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: msg.MessageID})
+		v.notify(c, bot, chatID, help)
+		return nil
+	}
+	help += "\n\n(以上查询命令私聊也能用,每分钟限次;审核/管理命令仅在群里有效。)"
+	_, _ = bot.SendMessage(c, htmlMessage(chatID, help))
+	return nil
+}
+
+// memberCmd runs an informational command usable by ANY member: in a guarded group (the
+// result auto-deletes and the trigger is removed) or in a private chat (rate-limited via
+// queryAllowed, replied plainly). No admin check.
+func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() string) error {
+	msg := update.Message
+	if msg == nil || !v.queryAllowed(ctx, msg) {
+		return nil
+	}
+	bot := ctx.Bot()
+	c := ctx.Context()
+	if v.cfg.IsGroup(msg.Chat.ID) {
+		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(msg.Chat.ID), MessageID: msg.MessageID})
+		v.notify(c, bot, msg.Chat.ID, fn())
+		return nil
+	}
+	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, fn())) // DM: reply plainly, no delete
 	return nil
 }
 

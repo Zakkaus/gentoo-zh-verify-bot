@@ -25,16 +25,18 @@ const defaultPrivateReply = "👋 这是 Gentoo 中文社区的入群验证 + Ge
 	"• 查询命令(/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs)私聊也能直接用(每分钟有限次,防滥用;群里不限次)。\n" +
 	"• 审核/管理命令仅在群里有效。"
 
-// queryCommands are the read-only lookup commands allowed in a private chat (rate-limited
-// per user). Everything else in a DM gets the unified auto-reply.
-var queryCommands = map[string]bool{
-	"pkg": true, "use": true, "bug": true, "news": true, "wiki": true,
-	"bbs": true, "distro": true, "pkgs": true, "arm": true, "armpkgs": true,
+// dmCommands are the member commands usable in a private chat (rate-limited per user):
+// the read-only lookups plus the informational /help, /ping, /stats. Everything else in a
+// DM (admin/moderation commands, plain text) gets the unified auto-reply.
+var dmCommands = map[string]bool{
+	"pkg": true, "use": true, "bug": true, "news": true, "wiki": true, "bbs": true,
+	"distro": true, "pkgs": true, "arm": true, "armpkgs": true,
+	"help": true, "ping": true, "stats": true,
 }
 
 // privateNonStart matches a private-chat message that should get the unified auto-reply:
-// anything EXCEPT the /start verification deep link and the lookup query commands (which are
-// allowed in DM and handled — rate-limited — by their own handlers registered after this).
+// anything EXCEPT the /start verification deep link and the dmCommands (which are allowed in
+// DM and handled — rate-limited — by their own handlers registered after this).
 func privateNonStart(_ context.Context, update telego.Update) bool {
 	m := update.Message
 	if m == nil || m.Chat.Type != "private" {
@@ -48,8 +50,8 @@ func privateNonStart(_ context.Context, update telego.Update) bool {
 		if cmd == "/start" {
 			return false
 		}
-		if strings.HasPrefix(cmd, "/") && queryCommands[cmd[1:]] {
-			return false // a lookup command — let its (rate-limited) handler run
+		if strings.HasPrefix(cmd, "/") && dmCommands[cmd[1:]] {
+			return false // a member command usable in DM — let its (rate-limited) handler run
 		}
 	}
 	return true
