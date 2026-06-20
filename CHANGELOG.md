@@ -4,6 +4,35 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.0] - 2026-06-21
+
+### Added
+- **`/bc allow|deny` accepts both channel-id forms.** The full Bot API form (`-1001234567890`) and
+  the bare internal id (`1234567890`, e.g. copied from a `t.me/c/<id>/…` link without the `-100`
+  prefix) both work now — the bare form is normalised to the canonical `-100…` id.
+- **Verification pause (`/start` · `/stop`) now persists** across restarts via a small
+  `settings.json` under `STATE_DIRECTORY`, so a `/stop` during maintenance is no longer silently
+  undone by a service restart. (The other runtime toggles — `/rich`, `/autodel`, `/bantime` — still
+  reset to config on restart, as documented in the persistence matrix.)
+
+### Fixed
+- **`/bc allow` reports an unban failure honestly** instead of always claiming the channel was
+  un-banned — the whitelist update still happens, but a failed `UnbanChatSenderChat` is logged and
+  surfaced (matching the bot's other honest-feedback paths).
+- **Release-info no longer caches a failed fetch as fresh for 24h.** `ensureReleaseInfo` treats the
+  Debian/Ubuntu distro-info-data as fresh for the full day only when both fetches succeed; if a
+  source fails it retries within ~10 min, so `/pkgs`/`/armpkgs` EOL/dev labels can't silently
+  degrade for a whole day after a transient cold-start network blip.
+- **`/unmute` no longer silently over-grants** in a restrictive group: if it can't read the group's
+  default permissions (`GetChat` failed) it still lifts the mute with a generic allow but says so,
+  so an admin can double-check the member's permissions rather than assume the group default was
+  restored.
+
+### Internal
+- New unit tests for `/bc` id parsing, the release-info freshness window, settings save/load, and
+  the rich USE_EXPAND render (previously 0% covered). Coverage 23.2% → 25.0%.
+  `gofmt` / `vet` / `staticcheck` / `-race` / `govulncheck` all clean.
+
 ## [3.5.0] - 2026-06-21
 
 ### Added

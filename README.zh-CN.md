@@ -130,6 +130,7 @@ journalctl -fu gentoo-zh-verify-bot
   | `antispam.json` | `/bc` 频道马甲状态 + 白名单 |
   | `verifyfail.json` | 验证失败 strike / 冷却 |
   | `feed-<chat_id>.json` | 播报去重游标 + 已跟踪 bug 的消息 id |
+  | `settings.json` | 验证开关状态(`/start` · `/stop`)—— `/stop` 暂停验证可跨重启保留 |
 
   **不**持久化(重启清零):每日 `/stats`;`/rich`、`/autodel`、`/bantime` 的运行时改动;以及查询 / 新闻 / 包缓存。
 - 验证链接依赖群为**公开群**。

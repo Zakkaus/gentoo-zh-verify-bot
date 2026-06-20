@@ -147,6 +147,7 @@ Uses long polling — no inbound port or reverse proxy needed.
   | `antispam.json` | `/bc` channel sock-puppet state + whitelist |
   | `verifyfail.json` | verification failure strikes / cooldowns |
   | `feed-<chat_id>.json` | feed dedup cursors + tracked bug message IDs |
+  | `settings.json` | verification enabled/paused state (`/start` · `/stop`) — a `/stop` survives a restart |
 
   **Not** persisted (reset on restart): daily `/stats`; the `/rich`, `/autodel` and `/bantime` runtime overrides; and the lookup / news / package caches.
 - The verification link relies on each group being **public**.
