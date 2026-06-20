@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/mymmrac/telego"
@@ -79,6 +80,15 @@ func main() {
 			// Don't crash — persistence just won't work; the save helpers log each failure too.
 			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
 		}
+		// Reclaim any leftover atomic-write temp files orphaned by a prior hard kill: writeJSONFile
+		// creates ".<name>.tmp-*" and only removes it on its own error paths, so a SIGKILL between
+		// create and rename leaks one. Cheap, bounded, and safe — real state uses atomic rename.
+		if leftover, _ := filepath.Glob(filepath.Join(sd, ".*.tmp-*")); len(leftover) > 0 {
+			for _, f := range leftover {
+				_ = os.Remove(f)
+			}
+			log.Printf("swept %d leftover state temp file(s) in %s", len(leftover), sd)
+		}
 		v.statePath = sd + "/pending.json"
 		v.load(bot)
 		v.warnPath = sd + "/warns.json"
@@ -110,4 +120,10 @@ func main() {
 	if err := bh.Start(); err != nil {
 		log.Fatalf("handler stopped: %v", err)
 	}
+	// Graceful shutdown (SIGINT/SIGTERM): stop handlers, then flush the latest in-memory state so a
+	// decline/timeout AfterFunc that updated the maps but whose own save() was cut short still lands
+	// on disk — keeping pending.json / verifyfail.json consistent with the action already taken.
+	_ = bh.Stop()
+	v.save()
+	v.saveVerifyFails()
 }
