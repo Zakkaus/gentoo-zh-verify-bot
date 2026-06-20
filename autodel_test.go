@@ -39,3 +39,21 @@ func TestLookupAutoDelete(t *testing.T) {
 		t.Errorf("after off = (%v, %v), want (5m, false)", ttl, on)
 	}
 }
+
+// TestParseAutoDelArg covers the /autodel argument parser: show/on/off, the 1–1440 minute
+// range, and rejection of out-of-range / garbage.
+func TestParseAutoDelArg(t *testing.T) {
+	cases := []struct {
+		arg, action string
+		ttl         time.Duration
+	}{
+		{"", "show", 0}, {"off", "off", 0}, {"on", "on", 0},
+		{"5", "set", 5 * time.Minute}, {"1", "set", time.Minute}, {"1440", "set", 1440 * time.Minute},
+		{"0", "", 0}, {"1441", "", 0}, {"-3", "", 0}, {"abc", "", 0}, {"5x", "", 0},
+	}
+	for _, c := range cases {
+		if a, ttl := parseAutoDelArg(c.arg); a != c.action || ttl != c.ttl {
+			t.Errorf("parseAutoDelArg(%q) = (%q,%v), want (%q,%v)", c.arg, a, ttl, c.action, c.ttl)
+		}
+	}
+}

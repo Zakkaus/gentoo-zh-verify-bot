@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // dmReplyCooldown throttles the DM auto-reply per user, so a message flood in the bot's DM
@@ -74,6 +76,12 @@ func (v *Verifier) onPrivateDM(ctx *th.Context, update telego.Update) error {
 	}
 	v.dmLast[msg.From.ID] = time.Now()
 	v.mu.Unlock()
-	_, _ = ctx.Bot().SendMessage(ctx.Context(), htmlMessage(msg.Chat.ID, v.cfg.PrivateReply))
+	// private_reply is admin-supplied and sent in HTML mode; if a stray <, > or & makes
+	// Telegram reject it ("can't parse entities"), fall back to plain text so the user still
+	// gets a reply, and log it so the misconfiguration is diagnosable.
+	if _, err := ctx.Bot().SendMessage(ctx.Context(), htmlMessage(msg.Chat.ID, v.cfg.PrivateReply)); err != nil {
+		log.Printf("private_reply HTML send failed (%v); retrying as plain text", err)
+		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(msg.Chat.ID), v.cfg.PrivateReply))
+	}
 	return nil
 }

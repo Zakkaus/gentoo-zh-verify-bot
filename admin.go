@@ -68,34 +68,47 @@ func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// onAutoDel handles /autodel — toggle/adjust auto-deletion of lookup commands + answers.
-//
-//	/autodel            show current state
-//	/autodel on | off   enable / disable
-//	/autodel <minutes>  set the delay (1–1440) and enable
+// parseAutoDelArg interprets an /autodel argument (already trimmed + lower-cased) into an
+// action: "show" (empty), "off", "on", "set" (with a ttl of 1–1440 minutes), or "" for an
+// invalid argument. Pure (no state) so it's unit-tested directly.
+func parseAutoDelArg(arg string) (action string, ttl time.Duration) {
+	switch arg {
+	case "":
+		return "show", 0
+	case "off":
+		return "off", 0
+	case "on":
+		return "on", 0
+	}
+	if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= 1440 {
+		return "set", time.Duration(n) * time.Minute
+	}
+	return "", 0 // invalid
+}
+
+// onAutoDel handles /autodel — toggle/adjust auto-deletion of lookup commands + answers:
+// no arg shows the state, "on"/"off" enable/disable, "<minutes>" sets the delay (1–1440).
 func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
-		arg := strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text)))
-		switch {
-		case arg == "":
-			if ttl, on := v.lookupAutoDelete(); on {
-				return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(ttl/time.Minute))
+		action, ttl := parseAutoDelArg(strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text))))
+		switch action {
+		case "show":
+			if cur, on := v.lookupAutoDelete(); on {
+				return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(cur/time.Minute))
 			}
 			return "查询结果自动删除:已关闭。\n用法:/autodel on 开启;/autodel <分钟> 设定时间并开启。"
-		case arg == "off":
+		case "off":
 			v.setLookupAutoDelete(0, false)
-			return "已关闭查询结果自动删除(/pkg、/use、/bug、/news、/wiki、/bbs、/distro 的回复将保留)。"
-		case arg == "on":
+			return "已关闭查询结果自动删除(查询命令 /pkg、/use、/bug、/news、/wiki、/bbs、/pkgs、/arm、/armpkgs 的回复将保留)。"
+		case "on":
 			v.setLookupAutoDelete(0, true)
-			ttl, _ := v.lookupAutoDelete()
-			return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute))
+			cur, _ := v.lookupAutoDelete()
+			return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(cur/time.Minute))
+		case "set":
+			v.setLookupAutoDelete(ttl, true)
+			return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute))
 		default:
-			n, err := strconv.Atoi(arg)
-			if err != nil || n < 1 || n > 1440 {
-				return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。"
-			}
-			v.setLookupAutoDelete(time.Duration(n)*time.Minute, true)
-			return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", n)
+			return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。"
 		}
 	})
 }
@@ -119,7 +132,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		"/bbs <关键词> — 搜各大 Linux 论坛(中文优先)\n" +
 		"/pkgs <包名> — 跨发行版查版本(= /distro;Gentoo/AUR/Arch/Alpine/Debian/Ubuntu/Nix/Fedora/RHEL/openSUSE Leap+风滚草)\n" +
 		"/arm <包名> — 查该包在 arm64 (aarch64) 上的 Gentoo keyword 状态\n" +
-		"/armpkgs <包名> — 跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch Linux ARM)\n" +
+		"/armpkgs <包名> — 跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch Linux ARM/AUR)\n" +
 		"/ping — 机器人状态 / 运行时长\n" +
 		"/stats — 今日通过 / 拒绝人数\n" +
 		"/help — 显示本帮助"

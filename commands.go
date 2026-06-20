@@ -22,7 +22,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "bbs", Description: "搜各大 Linux 论坛(中文优先)"},
 		{Command: "pkgs", Description: "跨发行版查包版本(Gentoo/AUR/Arch/Alpine/Debian/Ubuntu/Nix/Fedora/RHEL/openSUSE)"},
 		{Command: "arm", Description: "查包在 arm64 上的 Gentoo keyword 状态"},
-		{Command: "armpkgs", Description: "跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM)"},
+		{Command: "armpkgs", Description: "跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR)"},
 		{Command: "ping", Description: "查看机器人状态 / 运行时长"},
 		{Command: "stats", Description: "今日通过 / 拒绝人数"},
 	}
