@@ -20,24 +20,26 @@ import (
 // complements /arm (Gentoo only), since Gentoo's arm64 keywording is sometimes incomplete
 // while a package may well be available on other ARM distros.
 
-// gentooArmStatus resolves a Gentoo atom and reports its arm64 keyword status.
-func (v *Verifier) gentooArmStatus(ctx context.Context, name string) string {
+// gentooArmStatus resolves a Gentoo atom and reports its arm64 keyword status plus a link
+// to the package's packages.gentoo.org page (a search link if the atom doesn't resolve).
+func (v *Verifier) gentooArmStatus(ctx context.Context, name string) (status, url string) {
 	atoms := searchMainTree(ctx, name)
 	if len(atoms) == 0 {
-		return "❌ 不在 Gentoo 官方树"
+		return "❌ 不在官方树", "https://packages.gentoo.org/packages/search?q=" + neturl.QueryEscape(name)
 	}
+	url = "https://packages.gentoo.org/packages/" + atoms[0]
 	stable, testing, ok := armStatus(ctx, atoms[0])
 	switch {
 	case !ok:
-		return "⚠️ 查询失败"
+		return "⚠️ 查询失败", url
 	case stable != "" && testing != "":
-		return fmt.Sprintf("✅ 稳定 %s · 🧪 ~%s", stable, testing)
+		return fmt.Sprintf("✅ 稳定 %s · 🧪 ~%s", stable, testing), url
 	case stable != "":
-		return "✅ 稳定 " + stable
+		return "✅ 稳定 " + stable, url
 	case testing != "":
-		return "🧪 仅 ~arm64 " + testing
+		return "🧪 仅 ~arm64 " + testing, url
 	default:
-		return "❌ 未 keyword arm64"
+		return "❌ 未 keyword arm64", url
 	}
 }
 
@@ -70,8 +72,8 @@ func parseMadison(body string) []madEntry {
 	return ordered
 }
 
-// madisonArmStatus queries a madison endpoint (arch-filtered to arm64) and summarises the
-// newest few suites that ship the package on arm64.
+// madisonArmStatus queries a madison endpoint (arch-filtered to arm64) and reports the
+// newest suite that ships the package on arm64.
 func madisonArmStatus(ctx context.Context, madisonURL, pkg string) string {
 	body, err := httpGetBody(ctx, madisonURL+neturl.QueryEscape(pkg)+"&text=on&a=arm64", 1<<20)
 	if err != nil {
@@ -81,12 +83,8 @@ func madisonArmStatus(ctx context.Context, madisonURL, pkg string) string {
 	if len(entries) == 0 {
 		return "❌ 无 arm64 包"
 	}
-	// newest first, at most 3
-	var parts []string
-	for i := len(entries) - 1; i >= 0 && len(parts) < 3; i-- {
-		parts = append(parts, entries[i].suite+" "+entries[i].ver)
-	}
-	return "✅ " + strings.Join(parts, " · ")
+	e := entries[len(entries)-1] // madison lists oldest-first, so the last is the newest suite
+	return fmt.Sprintf("✅ %s %s", e.suite, e.ver)
 }
 
 // fedoraArmStatus checks Fedora rawhide via mdapi. aarch64 is a Fedora primary arch, so a
@@ -94,12 +92,11 @@ func madisonArmStatus(ctx context.Context, madisonURL, pkg string) string {
 func fedoraArmStatus(ctx context.Context, pkg string) string {
 	var r struct {
 		Version string `json:"version"`
-		Release string `json:"release"`
 	}
 	if err := httpGetJSON(ctx, "https://mdapi.fedoraproject.org/rawhide/pkg/"+neturl.PathEscape(pkg), nil, &r); err != nil || r.Version == "" {
-		return "❌ 未找到(Fedora rawhide)"
+		return "❌ 不在 Fedora"
 	}
-	return fmt.Sprintf("✅ rawhide %s(aarch64 主架构)", r.Version)
+	return "✅ rawhide " + r.Version
 }
 
 var aurArchRe = regexp.MustCompile(`(?i)arch=\(([^)]*)\)`)
@@ -157,40 +154,48 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	}
 	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
+	pe := neturl.PathEscape(name)
 
-	// Each source is independent — query them concurrently.
-	type srcResult struct{ label, status string }
+	// Each source is independent — query them concurrently. fn returns (status, link).
 	sources := []struct {
 		label string
-		fn    func() string
+		fn    func() (string, string)
 	}{
-		{"Gentoo", func() string { return v.gentooArmStatus(hc, name) }},
-		{"Debian", func() string { return madisonArmStatus(hc, "https://qa.debian.org/madison.php?package=", name) }},
-		{"Ubuntu", func() string {
-			return madisonArmStatus(hc, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name)
+		{"Gentoo", func() (string, string) { return v.gentooArmStatus(hc, name) }},
+		{"Debian", func() (string, string) {
+			return madisonArmStatus(hc, "https://qa.debian.org/madison.php?package=", name), "https://tracker.debian.org/pkg/" + pe
 		}},
-		{"Fedora", func() string { return fedoraArmStatus(hc, name) }},
-		{"Arch Linux ARM", func() string { return alarmArmStatus(hc, name) }},
-		{"AUR", func() string { return v.aurArmStatus(hc, name) }},
+		{"Ubuntu", func() (string, string) {
+			return madisonArmStatus(hc, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name), "https://launchpad.net/ubuntu/+source/" + pe
+		}},
+		{"Fedora", func() (string, string) {
+			return fedoraArmStatus(hc, name), "https://packages.fedoraproject.org/pkgs/" + pe + "/"
+		}},
+		{"Arch Linux ARM", func() (string, string) {
+			return alarmArmStatus(hc, name), "https://archlinuxarm.org/packages/aarch64/" + pe
+		}},
+		{"AUR", func() (string, string) { return v.aurArmStatus(hc, name), "https://aur.archlinux.org/packages/" + pe }},
 	}
+	type srcResult struct{ label, status, url string }
 	results := make([]srcResult, len(sources))
 	var wg sync.WaitGroup
 	for i, s := range sources {
 		wg.Add(1)
-		go func(i int, label string, fn func() string) {
+		go func(i int, label string, fn func() (string, string)) {
 			defer wg.Done()
-			results[i] = srcResult{label, fn()}
+			status, url := fn()
+			results[i] = srcResult{label, status, url}
 		}(i, s.label, s.fn)
 	}
 	wg.Wait()
 
 	esc := html.EscapeString
 	var b strings.Builder
-	fmt.Fprintf(&b, "🦾 <b>%s</b> 的 ARM (aarch64) 跨发行版支持:", esc(name))
+	fmt.Fprintf(&b, "🦾 <b>%s</b> · arm64 (aarch64) 跨发行版支持", esc(name))
 	for _, r := range results {
-		fmt.Fprintf(&b, "\n • <b>%s</b>:%s", esc(r.label), esc(r.status))
+		fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>:%s", esc(r.url), esc(r.label), esc(r.status))
 	}
-	b.WriteString("\n<i>提示:若 Gentoo 未 keyword arm64 但其它发行版已支持,通常意味着实际可用 —— 可 ACCEPT_KEYWORDS=\"~arm64\" 强制开启自行编译。各发行版按各自包名查询;AUR 显示 PKGBUILD 声明的架构(未声明 aarch64 也常能从源码构建)。</i>")
+	b.WriteString("\n<i>Gentoo 未标但其它发行版支持 → 多半实际可用,可 ACCEPT_KEYWORDS=\"~arm64\" 自行编译。</i>")
 	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
 	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
 	return nil
