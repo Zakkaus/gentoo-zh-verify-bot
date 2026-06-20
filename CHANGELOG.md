@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-06-20
+
+### Changed
+- `/distro` now also covers **Gentoo and Alpine**, and lists ecosystem variants on
+  separate lines (Fedora vs RHEL/EPEL, openSUSE Leap vs Tumbleweed). Per-distro version
+  picking now prefers a real release over a date/CalVer over a Gentoo `9999` live ebuild,
+  so each family shows its actual packaged version (a date-only project like yt-dlp still
+  shows its newest date).
+
 ## [1.8.1] - 2026-06-20
 
 ### Changed
@@ -169,6 +178,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.9.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.0
 [1.8.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.1
 [1.8.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.0
 [1.7.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.7.1

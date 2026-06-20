@@ -20,32 +20,49 @@ type repologyPkg struct {
 }
 
 // distroFamilies maps Repology repo ids to the families /distro surfaces (a repo belongs
-// to a family if it equals the prefix or starts with it, e.g. debian_12). search is a
-// printf template (%s = url-escaped project) to that distro's package page, so the family
-// label is clickable.
-var distroFamilies = []struct{ label, prefix, search string }{
-	{"AUR", "aur", "https://aur.archlinux.org/packages?K=%s"},
-	{"Arch", "arch", "https://archlinux.org/packages/?q=%s"},
-	{"Debian", "debian_", "https://packages.debian.org/search?keywords=%s"},
-	{"Ubuntu", "ubuntu_", "https://packages.ubuntu.com/search?keywords=%s"},
-	{"Nixpkgs", "nix_", "https://search.nixos.org/packages?query=%s"},
-	{"openSUSE", "opensuse_", "https://software.opensuse.org/search?q=%s"},
-	{"Fedora", "fedora_", "https://packages.fedoraproject.org/pkgs/%s/"},
+// to a family if it equals one of its prefixes or starts with one, e.g. debian_12).
+// Variants of one ecosystem are listed separately (Fedora vs RHEL/EPEL, openSUSE Leap vs
+// Tumbleweed) since their versions differ a lot. search is a printf template
+// (%s = url-escaped project) to that distro's package page, so the label is clickable.
+var distroFamilies = []struct {
+	label    string
+	prefixes []string
+	search   string
+}{
+	{"Gentoo", []string{"gentoo"}, "https://packages.gentoo.org/packages/search?q=%s"},
+	{"AUR", []string{"aur"}, "https://aur.archlinux.org/packages?K=%s"},
+	{"Arch", []string{"arch"}, "https://archlinux.org/packages/?q=%s"},
+	{"Alpine", []string{"alpine_"}, "https://pkgs.alpinelinux.org/packages?name=%s"},
+	{"Debian", []string{"debian_"}, "https://packages.debian.org/search?keywords=%s"},
+	{"Ubuntu", []string{"ubuntu_"}, "https://packages.ubuntu.com/search?keywords=%s"},
+	{"Nixpkgs", []string{"nix_"}, "https://search.nixos.org/packages?query=%s"},
+	{"Fedora", []string{"fedora_"}, "https://packages.fedoraproject.org/pkgs/%s/"},
+	{"RHEL/EPEL", []string{"epel_", "centos_", "almalinux_", "rockylinux_", "rhel_"}, "https://packages.fedoraproject.org/pkgs/%s/"},
+	{"openSUSE Leap", []string{"opensuse_leap"}, "https://software.opensuse.org/search?q=%s"},
+	{"openSUSE Tumbleweed", []string{"opensuse_tumbleweed"}, "https://software.opensuse.org/search?q=%s"},
 }
 
 func famOf(repo string) string {
 	for _, f := range distroFamilies {
-		if repo == f.prefix || strings.HasPrefix(repo, f.prefix) {
-			return f.label
+		for _, p := range f.prefixes {
+			if repo == p || strings.HasPrefix(repo, p) {
+				return f.label
+			}
 		}
 	}
 	return ""
 }
 
-// dateSnapshot reports whether v starts with a YYYY-MM-DD date (a git/rolling snapshot
-// rather than a release), so it isn't ranked above real versions by numeric compare.
+// dateSnapshot reports whether v starts with a YYYY-MM-DD or YYYY.MM.DD date (a git/
+// snapshot ebuild rather than a release), so it isn't ranked above real versions by numeric
+// compare. betterVer only deprioritizes it when a non-date version exists in the same
+// family, so genuine calendar-versioned projects (yt-dlp, etc.) still compare correctly.
 func dateSnapshot(v string) bool {
-	if len(v) < 10 || v[4] != '-' || v[7] != '-' {
+	if len(v) < 10 {
+		return false
+	}
+	sep := v[4]
+	if (sep != '-' && sep != '.') || v[7] != sep {
 		return false
 	}
 	for i := 0; i < 10; i++ {
@@ -59,11 +76,43 @@ func dateSnapshot(v string) bool {
 	return true
 }
 
-// betterVer reports whether cand should replace cur as a family's shown version: a real
-// release always beats a date snapshot; otherwise the higher version (verLess) wins.
+// allNines reports whether v is a Gentoo live ebuild version (9999 / 9999.9999 …),
+// which tracks git HEAD rather than a real release.
+func allNines(v string) bool {
+	nine := false
+	for i := 0; i < len(v); i++ {
+		switch {
+		case v[i] == '9':
+			nine = true
+		case v[i] == '.':
+		default:
+			return false
+		}
+	}
+	return nine
+}
+
+// verTier ranks a version so a family shows its real packaged version: 0 = real release,
+// 1 = a date / CalVer (could be a snapshot OR a genuine version like yt-dlp's), 2 = a
+// Gentoo 9999 live ebuild (tracks git HEAD). Lower is preferred.
+func verTier(v string) int {
+	switch {
+	case allNines(v):
+		return 2
+	case dateSnapshot(v):
+		return 1
+	default:
+		return 0
+	}
+}
+
+// betterVer reports whether cand should replace cur as a family's shown version: a better
+// (lower) tier wins — real release > date > 9999 live ebuild — otherwise, within the same
+// tier, the higher version (verLess) wins. So a real release isn't masked by a live ebuild,
+// but a project that only has date versions still shows its newest date.
 func betterVer(cur, cand string) bool {
-	if cs, ds := dateSnapshot(cur), dateSnapshot(cand); cs != ds {
-		return cs // cur is a snapshot and cand isn't -> cand is better
+	if ct, nt := verTier(cur), verTier(cand); ct != nt {
+		return nt < ct
 	}
 	return verLess(cur, cand)
 }
@@ -135,7 +184,7 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/distro <包名>,例如 /distro firefox。跨发行版查版本(AUR / Arch / Debian / Ubuntu / Nix / openSUSE / Fedora)。")
+		v.notify(c, bot, msg.Chat.ID, "用法:/distro <包名>,例如 /distro firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE)。")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -157,7 +206,7 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if len(best) == 0 {
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 AUR / Arch / Debian / Ubuntu / Nix / openSUSE / Fedora 里都没有打包(可能是某发行版专属)。", proj))
+		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE 里都没有打包(可能是某发行版专属)。", proj))
 		return nil
 	}
 
