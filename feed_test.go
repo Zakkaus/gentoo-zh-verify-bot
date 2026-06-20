@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 // TestBugSilent verifies status-aware notifications: UNCONFIRMED bugs post silently (a
 // fresh report may be a false alarm), confirmed bugs notify, and silent_bugs=true forces
@@ -77,5 +82,60 @@ func TestBugCursorForwardOnly(t *testing.T) {
 	}
 	if got := advance(100, 105); got != 105 {
 		t.Errorf("cursor should advance to 105, got %d", got)
+	}
+}
+
+// TestBugTracking covers the #RESOLVED tracking: open bugs are tracked with their message id,
+// resolved bugs aren't, and the tracked map is bounded (oldest id dropped).
+func TestBugTracking(t *testing.T) {
+	if bugResolved(recentBug{Status: "CONFIRMED"}) {
+		t.Error("open bug (no resolution) should not be 'resolved'")
+	}
+	if !bugResolved(recentBug{Status: "RESOLVED", Resolution: "FIXED"}) {
+		t.Error("bug with a resolution should be 'resolved'")
+	}
+
+	var st feedState
+	st.trackBug(recentBug{ID: 100, Status: "CONFIRMED"}, 5001)                     // open -> tracked
+	st.trackBug(recentBug{ID: 101, Status: "RESOLVED", Resolution: "FIXED"}, 5002) // resolved -> not tracked
+	st.trackBug(recentBug{ID: 102, Status: "CONFIRMED"}, 0)                        // no msg id -> not tracked
+	if len(st.Tracked) != 1 || st.Tracked["100"] == nil || st.Tracked["100"].MsgID != 5001 {
+		t.Fatalf("tracked = %+v, want only bug 100 -> msg 5001", st.Tracked)
+	}
+
+	// cap: fill past maxTracked, the lowest id must be evicted
+	for i := 0; i < maxTracked+5; i++ {
+		st.trackBug(recentBug{ID: 1000 + i, Status: "CONFIRMED"}, 6000+i)
+	}
+	if len(st.Tracked) > maxTracked {
+		t.Errorf("tracked grew to %d, want <= %d", len(st.Tracked), maxTracked)
+	}
+	if st.Tracked["100"] != nil {
+		t.Error("oldest tracked bug (100) should have been evicted past the cap")
+	}
+
+	// formatBugResolved swaps the bug marker for a check so the closure is obvious
+	got := formatBugResolved(recentBug{ID: 7, Summary: "x", Status: "RESOLVED", Resolution: "FIXED"}, "en")
+	if !strings.HasPrefix(got, "✅") || strings.Contains(got, "🐞") {
+		t.Errorf("formatBugResolved should swap 🐞 -> ✅, got prefix %q", got[:12])
+	}
+}
+
+// TestCapRunesAndNilTracked covers the rune-safe truncation and the nil-tracked-entry guard
+// (a hand-edited state file with a null entry must not crash resolveTracked).
+func TestCapRunesAndNilTracked(t *testing.T) {
+	if got := capRunes("abcdef", 4); got != "abc…" {
+		t.Errorf("capRunes(abcdef,4) = %q, want abc…", got)
+	}
+	if got := capRunes("ab", 4); got != "ab" {
+		t.Errorf("capRunes short = %q, want ab", got)
+	}
+	if got := capRunes(strings.Repeat("包", 10), 4); !utf8.ValidString(got) {
+		t.Errorf("capRunes produced invalid UTF-8: %q", got)
+	}
+	st := &feedState{Tracked: map[string]*trackedBug{"100": nil}}
+	resolveTracked(context.Background(), nil, &FeedConfig{ChatID: -1, Lang: "en"}, st, map[int]recentBug{100: {Status: "CONFIRMED"}})
+	if _, ok := st.Tracked["100"]; ok {
+		t.Error("a nil tracked entry should be dropped (not panic)")
 	}
 }
