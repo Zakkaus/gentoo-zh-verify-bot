@@ -62,3 +62,23 @@ func TestUbuntuExcluded(t *testing.T) {
 		}
 	}
 }
+
+// TestRelInfoNextFetched verifies the freshness marker: both-sources-OK is fresh for the full TTL,
+// while a failed fetch is only fresh for relInfoRetryTTL (so it self-heals soon, not in 24h).
+func TestRelInfoNextFetched(t *testing.T) {
+	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
+	if got := relInfoNextFetched(now, true); !got.Equal(now) {
+		t.Errorf("bothOK should mark fresh at now, got %v", got)
+	}
+	marker := relInfoNextFetched(now, false)
+	// the freshness gate is now.Sub(fetched) < relInfoTTL; the failure window must equal retryTTL.
+	if window := relInfoTTL - now.Sub(marker); window != relInfoRetryTTL {
+		t.Errorf("failure freshness window = %v, want %v", window, relInfoRetryTTL)
+	}
+	if now.Add(relInfoRetryTTL-time.Minute).Sub(marker) >= relInfoTTL {
+		t.Error("should still be fresh just before the retry TTL elapses")
+	}
+	if now.Add(relInfoRetryTTL+time.Minute).Sub(marker) < relInfoTTL {
+		t.Error("should be stale just after the retry TTL elapses (triggering a refetch)")
+	}
+}

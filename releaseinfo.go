@@ -16,6 +16,10 @@ import (
 
 const relInfoTTL = 24 * time.Hour
 
+// relInfoRetryTTL is the short freshness window used after a fetch fails, so degraded/empty
+// release metadata is retried within minutes instead of being cached for the full relInfoTTL.
+const relInfoRetryTTL = 10 * time.Minute
+
 var relInfo = struct {
 	mu         sync.Mutex
 	debian     map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
@@ -59,10 +63,23 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 		relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = ubu, ubuRel, ubuEOL, ubuSer
 	}
 	if relInfo.debian == nil {
-		relInfo.debian = map[string]string{} // mark attempted so we don't refetch every call
+		relInfo.debian = map[string]string{} // mark attempted so the freshness gate can hold (no per-call refetch)
 	}
-	relInfo.fetched = now
+	// Only treat the data fresh for the full TTL when BOTH sources succeeded this round; otherwise
+	// keep it fresh only briefly (relInfoRetryTTL) so a transiently-failed source self-heals soon
+	// instead of serving degraded EOL/dev labels for 24h.
+	relInfo.fetched = relInfoNextFetched(now, deb != nil && ubu != nil)
 	relInfo.mu.Unlock()
+}
+
+// relInfoNextFetched returns the `fetched` marker to store after a refresh round: now (full-TTL
+// freshness) when both sources succeeded, else a back-dated marker giving only relInfoRetryTTL of
+// freshness so ensureReleaseInfo retries soon rather than caching a partial/empty result for 24h.
+func relInfoNextFetched(now time.Time, bothOK bool) time.Time {
+	if bothOK {
+		return now
+	}
+	return now.Add(relInfoRetryTTL - relInfoTTL)
 }
 
 // distroInfoCSV columns: version,codename,series,created,release,eol[,eol-lts,...]. A row
