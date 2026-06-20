@@ -192,6 +192,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onAdminAction, th.CallbackDataPrefix(adminPrefix))
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))
 	bh.Handle(v.onJoinRequest, th.AnyChatJoinRequest())
+	bh.Handle(v.onMyChatMember, th.AnyMyChatMember())
 	bh.Handle(v.onSb, th.CommandEqual("sb"))
 	bh.Handle(v.onBan, th.CommandEqual("ban"))
 	bh.Handle(v.onPing, th.CommandEqual("ping"))
@@ -204,6 +205,33 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onNews, th.CommandEqual("news"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
+}
+
+// onMyChatMember auto-leaves any group or channel the bot is added to that isn't a
+// configured chat (guarded group / required channel / feed target / admin-log). So
+// being pulled into a random group is a no-op and the bot removes itself instead of
+// lingering. To add a NEW guarded group, put its id in the config first, then add the bot.
+func (v *Verifier) onMyChatMember(ctx *th.Context, update telego.Update) error {
+	cm := update.MyChatMember
+	if cm == nil || cm.Chat.Type == "private" {
+		return nil
+	}
+	switch cm.NewChatMember.MemberStatus() {
+	case "left", "kicked": // the bot was removed — nothing to do
+		return nil
+	}
+	if v.cfg.IsKnownChat(cm.Chat.ID) {
+		return nil
+	}
+	bot := ctx.Bot()
+	c := ctx.Context()
+	log.Printf("auto-leave: leaving unauthorized chat %d (%q, %s)", cm.Chat.ID, cm.Chat.Title, cm.Chat.Type)
+	if err := bot.LeaveChat(c, &telego.LeaveChatParams{ChatID: tu.ID(cm.Chat.ID)}); err != nil {
+		log.Printf("auto-leave: failed to leave %d: %v", cm.Chat.ID, err)
+		return nil
+	}
+	v.adminAlert(c, bot, fmt.Sprintf("🚪 已自动退出未授权聊天:%s(id %d,%s)", cm.Chat.Title, cm.Chat.ID, cm.Chat.Type))
+	return nil
 }
 
 func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {

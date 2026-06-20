@@ -137,3 +137,20 @@ func (c *Config) IsGroup(id int64) bool {
 	}
 	return false
 }
+
+// IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded
+// group, the required channel, a feed target, or the admin-log chat. Any other
+// group/channel is unauthorized and the bot auto-leaves it.
+func (c *Config) IsKnownChat(id int64) bool {
+	if c.IsGroup(id) ||
+		(c.RequiredChannelID != 0 && id == c.RequiredChannelID) ||
+		(c.AdminLogChatID != 0 && id == c.AdminLogChatID) {
+		return true
+	}
+	for i := range c.Feeds {
+		if c.Feeds[i].ChatID == id {
+			return true
+		}
+	}
+	return false
+}

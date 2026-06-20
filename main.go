@@ -42,7 +42,7 @@ func main() {
 
 	updates, err := bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 		Timeout:        30,
-		AllowedUpdates: []string{"chat_join_request", "callback_query", "message"},
+		AllowedUpdates: []string{"chat_join_request", "callback_query", "message", "my_chat_member"},
 	})
 	if err != nil {
 		log.Fatalf("start long polling: %v", err)
