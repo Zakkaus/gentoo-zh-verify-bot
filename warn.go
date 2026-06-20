@@ -66,8 +66,8 @@ func (v *Verifier) saveWarns() {
 }
 
 // warnPrecheck shares the admin-gate + reply-target resolution of /warn and /clearwarn.
-// It deletes the command message on return and returns the target user, or nil if the
-// caller should stop (already replied to the user with the reason).
+// It returns the target user, or nil if the caller should stop (it has already replied
+// with the reason). The invoking command message is removed by the caller's defer.
 func (v *Verifier) warnPrecheck(ctx *th.Context, msg *telego.Message, cmd string, checkTargetAdmin bool) *telego.User {
 	bot := ctx.Bot()
 	c := ctx.Context()
