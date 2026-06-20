@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-06-20
+
+### Added
+- **`/bbs <query>`** — Linux forum search. Inline results from the Arch Linux CN
+  forum (Chinese, via its Discourse API), plus one-tap site-search buttons for the
+  major English forums (Gentoo, Arch BBS, Ubuntu, Debian) — Chinese first, English
+  as backup.
+
 ## [1.1.1] - 2026-06-20
 
 ### Changed
@@ -53,6 +61,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.2.0
 [1.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.1.0
 [1.0.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.0.1
