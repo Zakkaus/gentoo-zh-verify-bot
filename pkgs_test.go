@@ -119,8 +119,11 @@ func TestFamOf(t *testing.T) {
 		{"alpine_3_20", "Alpine"},
 		{"debian_12", "Debian"},
 		{"fedora_41", "Fedora"},
-		{"epel_9", "RHEL/EPEL"},
-		{"almalinux_9", "RHEL/EPEL"},
+		{"almalinux_9", "RHEL"}, // RHEL rebuild
+		{"rocky_9", "RHEL"},     // RHEL rebuild
+		{"centos_stream_10", "CentOS Stream"},
+		{"epel_9", "EPEL"},
+		{"centos_8", ""}, // old CentOS Linux (EOL) — deliberately not surfaced
 		{"opensuse_leap_15_6", "openSUSE Leap"},
 		{"opensuse_tumbleweed", "openSUSE Tumbleweed"},
 		{"freebsd", ""}, // not a family we surface

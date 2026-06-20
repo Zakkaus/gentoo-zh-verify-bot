@@ -24,22 +24,32 @@ type repologyPkg struct {
 // Variants of one ecosystem are listed separately (Fedora vs RHEL/EPEL, openSUSE Leap vs
 // Tumbleweed) since their versions differ a lot. search is a printf template
 // (%s = url-escaped project) to that distro's package page, so the label is clickable.
+// A distro family shown by /pkgs. A repo belongs to it if its id equals a prefix or starts
+// with "<prefix>_". search is a printf template (%s = url-escaped project) to the family's
+// package page. relabel (optional) maps a raw release label to a friendlier one — used to
+// turn Debian/Ubuntu version numbers into their live role (stable/testing/LTS) so the labels
+// aren't hardcoded. The RHEL ecosystem is split: RHEL (the AlmaLinux/Rocky 1:1 rebuilds =
+// the actual RHEL versions), CentOS Stream (the rolling upstream), and EPEL — kept separate
+// because they are genuinely different products with different version numbers.
 var distroFamilies = []struct {
 	label    string
 	prefixes []string
 	search   string
+	relabel  func(string) string
 }{
-	{"Gentoo", []string{"gentoo"}, "https://packages.gentoo.org/packages/search?q=%s"},
-	{"AUR", []string{"aur"}, "https://aur.archlinux.org/packages?K=%s"},
-	{"Arch", []string{"arch"}, "https://archlinux.org/packages/?q=%s"},
-	{"Alpine", []string{"alpine_"}, "https://pkgs.alpinelinux.org/packages?name=%s"},
-	{"Debian", []string{"debian_"}, "https://tracker.debian.org/pkg/%s"},
-	{"Ubuntu", []string{"ubuntu_"}, "https://launchpad.net/ubuntu/+source/%s"},
-	{"Nixpkgs", []string{"nix_"}, "https://search.nixos.org/packages?query=%s"},
-	{"Fedora", []string{"fedora_"}, "https://packages.fedoraproject.org/pkgs/%s/"},
-	{"RHEL/EPEL", []string{"epel_", "centos_", "almalinux_", "rockylinux_", "rhel_"}, "https://packages.fedoraproject.org/pkgs/%s/"},
-	{"openSUSE Leap", []string{"opensuse_leap"}, "https://software.opensuse.org/search?q=%s"},
-	{"openSUSE Tumbleweed", []string{"opensuse_tumbleweed"}, "https://software.opensuse.org/search?q=%s"},
+	{"Gentoo", []string{"gentoo"}, "https://packages.gentoo.org/packages/search?q=%s", nil},
+	{"AUR", []string{"aur"}, "https://aur.archlinux.org/packages?K=%s", nil},
+	{"Arch", []string{"arch"}, "https://archlinux.org/packages/?q=%s", nil},
+	{"Alpine", []string{"alpine_"}, "https://pkgs.alpinelinux.org/packages?name=%s", nil},
+	{"Debian", []string{"debian_"}, "https://tracker.debian.org/pkg/%s", debianRelabel},
+	{"Ubuntu", []string{"ubuntu_"}, "https://launchpad.net/ubuntu/+source/%s", ubuntuRelabel},
+	{"Nixpkgs", []string{"nix_"}, "https://search.nixos.org/packages?query=%s", nil},
+	{"Fedora", []string{"fedora_"}, "https://packages.fedoraproject.org/pkgs/%s/", nil},
+	{"RHEL", []string{"almalinux_", "rocky_"}, "https://repology.org/project/%s/versions", nil},
+	{"CentOS Stream", []string{"centos_stream_"}, "https://repology.org/project/%s/versions", nil},
+	{"EPEL", []string{"epel_"}, "https://packages.fedoraproject.org/pkgs/%s/", nil},
+	{"openSUSE Leap", []string{"opensuse_leap"}, "https://software.opensuse.org/search?q=%s", nil},
+	{"openSUSE Tumbleweed", []string{"opensuse_tumbleweed"}, "https://software.opensuse.org/search?q=%s", nil},
 }
 
 func famOf(repo string) string {
@@ -286,11 +296,12 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/distro <包名>,例如 /distro firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / openSUSE)。")
+		v.notify(c, bot, msg.Chat.ID, "用法:/pkgs <包名>,例如 /pkgs firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / CentOS Stream / openSUSE 等),Debian 等标注稳定/测试通道,RHEL 取自 AlmaLinux/Rocky 重建。")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
+	ensureReleaseInfo(hc, time.Now()) // refresh Debian/Ubuntu stable/testing labels (cached, non-hardcoded)
 	proj, pkgs, alts, exact := fetchRepology(hc, name)
 	esc := html.EscapeString
 	if len(pkgs) == 0 {
@@ -342,10 +353,15 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 			continue
 		}
 		// Show the newest version + the current stable when they differ (e.g. Debian
-		// unstable + stable), one line each. The label is each version's actual release.
+		// unstable + stable), one line each. The relabel hook turns a raw release number into
+		// its live role (Debian "13" -> "13 stable", Ubuntu "24.04" -> "24.04 LTS").
 		url := fmt.Sprintf(f.search, qproj)
 		for _, ch := range familyChannels(rows, f.prefixes) {
-			lines = append(lines, distroLine{f.label, ch.ver, ch.label, url})
+			label := ch.label
+			if f.relabel != nil {
+				label = f.relabel(ch.label)
+			}
+			lines = append(lines, distroLine{f.label, ch.ver, label, url})
 		}
 	}
 	if len(lines) == 0 {
