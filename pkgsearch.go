@@ -92,14 +92,18 @@ func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, 
 	return resp, nil
 }
 
-// httpGetJSON GETs url and decodes a 200 JSON response into dst (streamed, no size cap).
+// maxJSONBytes caps JSON response bodies: large enough for the biggest overlay's
+// recursive GitHub tree (a few MB), small enough to bound memory on a hostile body.
+const maxJSONBytes = 32 << 20
+
+// httpGetJSON GETs url and decodes a 200 JSON response into dst (capped at maxJSONBytes).
 func httpGetJSON(ctx context.Context, url string, hdr http.Header, dst any) error {
 	resp, err := httpGet(ctx, url, hdr)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(dst)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxJSONBytes)).Decode(dst)
 }
 
 // httpGetBody GETs url and returns up to limit bytes of a 200 response (for HTML/text scraping).
