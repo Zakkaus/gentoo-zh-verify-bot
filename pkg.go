@@ -499,7 +499,7 @@ func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/pkg <包名>,例如 /pkg vim,或粘贴链接 /pkg https://packages.gentoo.org/packages/app-editors/vim")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/pkg <包名>,例如 /pkg vim,或粘贴链接 /pkg https://packages.gentoo.org/packages/app-editors/vim")
 		return nil
 	}
 	q = normalizeQuery(q)

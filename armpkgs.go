@@ -16,8 +16,8 @@ import (
 
 // /armpkgs checks arm64 (aarch64) support for a package across distros that expose a clean
 // per-architecture API: Gentoo (keywords), Debian + Ubuntu (madison, arch-filtered),
-// Fedora (mdapi; aarch64 is a primary arch) and Arch Linux ARM (package presence). This
-// complements /arm (Gentoo only), since Gentoo's arm64 keywording is sometimes incomplete
+// Fedora (mdapi; aarch64 is a primary arch), Arch Linux ARM (package presence) and AUR
+// (PKGBUILD arch=()). This complements /arm (Gentoo only), since Gentoo's arm64 keywording is sometimes incomplete
 // while a package may well be available on other ARM distros.
 
 // gentooArmStatus resolves a Gentoo atom and reports its arm64 keyword status plus a link
@@ -149,7 +149,7 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/armpkgs <包名>,例如 /armpkgs htop。查该包在各发行版 arm64 (aarch64) 上的支持(Gentoo / Debian / Ubuntu / Fedora / Arch Linux ARM)。")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/armpkgs <包名>,例如 /armpkgs htop。查该包在各发行版 arm64 (aarch64) 上的支持(Gentoo / Debian / Ubuntu / Fedora / Arch Linux ARM / AUR)。")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
@@ -196,7 +196,6 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 		fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>:%s", esc(r.url), esc(r.label), esc(r.status))
 	}
 	b.WriteString("\n<i>Gentoo 未标但其它发行版支持 → 多半实际可用,可 ACCEPT_KEYWORDS=\"~arm64\" 自行编译。</i>")
-	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
-	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
+	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }

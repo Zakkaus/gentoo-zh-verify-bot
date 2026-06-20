@@ -62,14 +62,14 @@ func (v *Verifier) onArm(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/arm <包名>,例如 /arm firefox。查该包在 arm64 (aarch64) 上的 Gentoo keyword 状态。")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/arm <包名>,例如 /arm firefox。查该包在 arm64 (aarch64) 上的 Gentoo keyword 状态。")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
 	atoms := searchMainTree(hc, name)
 	if len(atoms) == 0 {
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("❓ Gentoo 官方树里没找到「%s」。", name))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("❓ Gentoo 官方树里没找到「%s」。", name))
 		return nil
 	}
 	atom := atoms[0]
@@ -91,7 +91,6 @@ func (v *Verifier) onArm(ctx *th.Context, update telego.Update) error {
 	default:
 		b.WriteString("\n❌ 未在 arm64 上 keyword —— Gentoo 官方树未对该包标注 aarch64(可能尚不支持/未测试)。")
 	}
-	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
-	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
+	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }

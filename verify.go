@@ -167,6 +167,33 @@ func msgID(m *telego.Message) int {
 	return m.MessageID
 }
 
+// replyLookupPlain sends a PLAIN-text reply to a lookup command (a usage hint, "not found",
+// disambiguation, or transient error) and schedules the same timed cleanup as a real answer,
+// so the command and this reply are removed together after lookup_ttl instead of the command
+// lingering. Plain text — not HTML — because these messages carry literal <包名> placeholders
+// that HTML parse mode would reject. Mirrors sendRichOrHTML's reply+cleanup for the success path.
+func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID int64, replyTo int, text string) {
+	m := tu.Message(tu.ID(chatID), text)
+	if rp := replyParams(replyTo); rp != nil {
+		m = m.WithReplyParameters(rp)
+	}
+	sent, _ := bot.SendMessage(c, m)
+	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
+}
+
+// replyLookupHTML sends an HTML-formatted reply to a lookup command and schedules the timed
+// cleanup — the HTML sibling of replyLookupPlain / sendRichOrHTML. The caller is responsible
+// for html-escaping any dynamic content in htmlText. Returns the sent message (may be nil).
+func (v *Verifier) replyLookupHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, htmlText string) *telego.Message {
+	m := htmlMessage(chatID, htmlText)
+	if rp := replyParams(replyTo); rp != nil {
+		m = m.WithReplyParameters(rp)
+	}
+	sent, _ := bot.SendMessage(c, m)
+	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
+	return sent
+}
+
 const privateQueryWindow = time.Minute
 
 // queryRateOK records a private-chat lookup for userID and reports whether it is within the
@@ -192,6 +219,9 @@ func (v *Verifier) queryRateOK(userID int64) bool {
 			if len(ts) == 0 || !ts[len(ts)-1].After(cutoff) {
 				delete(v.queryHits, u)
 			}
+		}
+		if len(v.queryHits) > dmMapMax { // still over (all live) — hard-clear like dmLast
+			v.queryHits = map[int64][]time.Time{}
 		}
 	}
 	return true

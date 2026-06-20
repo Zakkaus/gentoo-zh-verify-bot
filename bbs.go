@@ -66,7 +66,7 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/bbs <关键词>,例如 /bbs nvidia 黑屏 —— 搜各大 Linux 论坛(中文优先)")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/bbs <关键词>,例如 /bbs nvidia 黑屏 —— 搜各大 Linux 论坛(中文优先)")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)

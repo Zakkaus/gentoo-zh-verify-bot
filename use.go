@@ -513,7 +513,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/use <包名>,例如 /use vim、/use app-editors/vim,或粘贴 packages.gentoo.org 链接")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/use <包名>,例如 /use vim、/use app-editors/vim,或粘贴 packages.gentoo.org 链接")
 		return nil
 	}
 	q = normalizeQuery(q)
@@ -525,7 +525,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 
 	switch len(srcs) {
 	case 0:
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q))
 		return nil
 	case 1:
 		// fall through below
@@ -540,7 +540,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		for _, a := range atoms {
 			fmt.Fprintf(&b, "\n • /use %s", a)
 		}
-		v.notify(c, bot, msg.Chat.ID, b.String())
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 		return nil
 	}
 
@@ -572,7 +572,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if out == "" {
-		v.notify(c, bot, msg.Chat.ID, fmt.Sprintf("暂时取不到 %s 的信息,稍后再试。", atom))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("暂时取不到 %s 的信息,稍后再试。", atom))
 		return nil
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, outRich, out)

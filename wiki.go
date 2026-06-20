@@ -186,7 +186,7 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.notify(c, bot, msg.Chat.ID, "用法:/wiki <关键词>,例如 /wiki systemd boot —— 搜索 Gentoo / Arch wiki(优先简体中文页)")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/wiki <关键词>,例如 /wiki systemd boot —— 搜索 Gentoo / Arch wiki(优先简体中文页)")
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)
@@ -225,7 +225,6 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	if !found {
 		b.WriteString("\n\n没找到相关条目,换个关键词试试?")
 	}
-	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
-	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
+	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }
