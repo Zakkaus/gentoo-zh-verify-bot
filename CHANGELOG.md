@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.6.1] - 2026-06-20
+
+### Fixed
+- `/pkgs` labels each version by the **newest release that actually ships it**, not whichever
+  repo was scanned first — so e.g. RHEL/EPEL firefox `140.11.0`, present in AlmaLinux 8/9 and
+  CentOS Stream 9/10, now shows `(stream.10)` instead of the misleading `(8)`.
+
 ## [2.6.0] - 2026-06-20
 
 Hardening from a second full multi-dimension audit (each finding adversarially verified).
@@ -309,6 +316,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.6.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.6.1
 [2.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.6.0
 [2.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.3
 [2.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.2
