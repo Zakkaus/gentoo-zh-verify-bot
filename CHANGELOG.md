@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-06-20
+
+### Changed
+- `/distro` now links **each distro to its package page** (clickable), honors the
+  rich-message toggle (`rich_messages` / `/rich`) like `/pkg` and `/use`, and — when
+  there's no exact match — suggests the closest packages that **actually exist across
+  distros** (ranked by coverage, language-namespaced entries filtered) instead of
+  silently picking a wrong or unpackaged project (e.g. `kernel` no longer → `genkernel`).
+
 ## [1.7.1] - 2026-06-20
 
 ### Added
@@ -151,6 +160,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.8.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.0
 [1.7.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.7.1
 [1.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.7.0
 [1.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.6.0
