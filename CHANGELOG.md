@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-06-20
+
+### Changed
+- `/wiki` now shows each page's **Chinese display title** for Gentoo `/zh-cn` pages
+  (e.g. "Kernel/Gentoo 内核配置指南" instead of the English "…/zh-cn" title), filters
+  out foreign-language pages that aren't tagged as translations, and widens the
+  search window to surface more simplified-Chinese pages.
+- `/help` and the command menu now show the actual configured `warn_limit` (was a
+  literal "N").
+
 ## [1.1.0] - 2026-06-20
 
 ### Added
@@ -43,6 +53,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.1.0
 [1.0.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.0.0
