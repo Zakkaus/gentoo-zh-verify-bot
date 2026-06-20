@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-06-20
+
+### Added
+- **`/arm <pkg>`** — show a Gentoo package's **arm64 (aarch64) keyword status** (stable
+  version, newest `~arm64` testing version, or "not keyworded"), so ARM users can quickly
+  see whether a package is available/tested for their arch.
+
 ## [2.1.0] - 2026-06-20
 
 ### Added
@@ -225,6 +232,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.2.0
 [2.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.0.0
 [1.9.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.1

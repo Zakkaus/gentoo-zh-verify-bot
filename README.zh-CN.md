@@ -23,6 +23,7 @@
 - **新闻**:`/news [关键词]` 列出 / 搜索 [Gentoo 新闻条目](https://www.gentoo.org/support/news-items/)。
 - **Wiki 搜索**:`/wiki <关键词>` 搜索 [Gentoo](https://wiki.gentoo.org) 与 [Arch](https://wiki.archlinux.org) wiki(MediaWiki),**优先返回简体中文页**,没有则回落到默认页;其它语言的页面会被过滤掉。
 - **论坛搜索**:`/bbs <关键词>` 内联返回 [Arch Linux CN](https://forum.archlinuxcn.org) 论坛(中文,走 Discourse API)的结果,并附各大英文论坛(Gentoo、Arch BBS、Ubuntu、Debian)的一键站内搜索按钮 —— 中文优先,英文备用。
+- **arm64 状态**:`/arm <包名>` 显示一个 Gentoo 包在 **arm64 (aarch64) 上的 keyword 状态** —— 稳定、~测试、还是未 keyword —— ARM 用户一眼就能看出该包在自己架构上能不能用。
 - **跨发行版查包**:`/distro <包名>` 一条消息显示一个包在 **Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL/EPEL、openSUSE(Leap + 风滚草)** 各自的当前版本(走 [Repology](https://repology.org) API),同生态的变体单独列行。每个发行版都链到其软件包页面;查不到精确匹配时给出最接近包的版本表 + 可折叠的其它匹配。支持 `rich_messages` / `/rich` 富文本开关(对齐 `/pkg`、`/use`)。
 - **自动播报(可选)**:配置 `feed`(或用 `feeds` 数组配多个目标)后,机器人每隔 `interval_seconds`(默认 300 秒)轮询 Gentoo Bugzilla + 新闻,把**新增的** bug / 新闻发到该频道(机器人需是该频道管理员且有发帖权)。每个 feed 有各自的语言(`lang`)与过滤,所有 feed 每周期共享一次抓取。去重 + 重启不丢;首次运行只记录基线,不补发历史。
 - **重启不丢**:进行中的验证会持久化到磁盘,重启后恢复(systemd 下,见 unit 里的 `StateDirectory=`)。
