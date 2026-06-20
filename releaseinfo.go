@@ -143,6 +143,9 @@ func fetchUbuntuLTS(ctx context.Context) map[string]bool {
 // debianRelabel maps a raw Debian release label to its role; "unstable" and unknowns pass
 // through, so labels stay meaningful even before the CSV is loaded.
 func debianRelabel(raw string) string {
+	if raw == "unstable" {
+		return "unstable/sid" // the rolling unstable channel is codenamed sid
+	}
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
 	if s, ok := relInfo.debian[raw]; ok {

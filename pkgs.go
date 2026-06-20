@@ -188,29 +188,57 @@ func bestLabel(rows []repologyPkg, prefixes []string, version string, preferRoll
 	return rolling
 }
 
-// familyChannels returns the versions to show for one distro family: the newest version
-// (preferring its rolling/dev channel label), plus the current stable when that differs —
-// so e.g. Debian shows both unstable and stable, while a package at one version everywhere
-// stays a single line. Each version is labelled by the newest release that actually ships it.
-func familyChannels(rows []repologyPkg, prefixes []string) []channelLine {
+// familyChannels returns the versions to show for one distro family. It centres on the
+// current STABLE release (so Fedora shows 44, not just rawhide) and adds the newest
+// rolling/dev channel above it when that's ahead (so Debian shows sid AND stable). A package
+// at one version everywhere stays a single line. isTesting (optional, Debian only) excludes a
+// pre-release numbered series — Debian's highest number is testing/forky, not stable — so the
+// stable line is the real stable (trixie/13), derived live rather than "highest number".
+func familyChannels(rows []repologyPkg, prefixes []string, isTesting func(string) bool) []channelLine {
 	if len(rows) == 0 {
 		return nil
 	}
-	nv, _ := newestRow(rows)
-	out := []channelLine{{nv, bestLabel(rows, prefixes, nv, true)}}
-	stable := "" // highest version among numbered (non-rolling) releases
+	nv, _ := newestRow(rows) // newest across all channels (incl. rolling/testing)
+
+	isStable := func(lbl string) bool {
+		return !rollingRelease(lbl) && (isTesting == nil || !isTesting(lbl))
+	}
+	stableVer, stableLabel := "", ""
 	for _, p := range rows {
-		if rollingRelease(releaseLabel(p.Repo, prefixes)) {
+		if !isStable(releaseLabel(p.Repo, prefixes)) {
 			continue
 		}
-		if stable == "" || betterVer(stable, p.Version) {
-			stable = p.Version
+		if stableVer == "" || betterVer(stableVer, p.Version) {
+			stableVer = p.Version
 		}
 	}
-	if stable != "" && stable != nv {
-		out = append(out, channelLine{stable, bestLabel(rows, prefixes, stable, false)})
+	if stableVer != "" { // label = the newest stable release that ships that version
+		for _, p := range rows {
+			if p.Version != stableVer {
+				continue
+			}
+			if lbl := releaseLabel(p.Repo, prefixes); isStable(lbl) && (stableLabel == "" || verLess(stableLabel, lbl)) {
+				stableLabel = lbl
+			}
+		}
 	}
-	return out
+
+	if stableVer == "" { // a pure rolling distro (Arch, AUR, Tumbleweed) — just the rolling line
+		return []channelLine{{nv, bestLabel(rows, prefixes, nv, true)}}
+	}
+	if nv == stableVer { // stable carries the newest version — one line, labelled by the release
+		return []channelLine{{stableVer, stableLabel}}
+	}
+	// A rolling/dev (or testing) channel is ahead of stable — show it, then stable.
+	return []channelLine{{nv, bestLabel(rows, prefixes, nv, true)}, {stableVer, stableLabel}}
+}
+
+// debianTesting reports whether a Debian release label is the current "testing" series
+// (forky/14 today), per the live distro-info-data status — so it isn't mistaken for stable.
+func debianTesting(label string) bool {
+	relInfo.mu.Lock()
+	defer relInfo.mu.Unlock()
+	return relInfo.debian[label] == "testing"
 }
 
 // releaseLabel turns the Repology repo id of a family's winning version into a short
@@ -352,11 +380,15 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		if len(rows) == 0 {
 			continue
 		}
-		// Show the newest version + the current stable when they differ (e.g. Debian
-		// unstable + stable), one line each. The relabel hook turns a raw release number into
-		// its live role (Debian "13" -> "13 stable", Ubuntu "24.04" -> "24.04 LTS").
+		// Show the current stable, plus the rolling/dev channel above it when ahead (e.g.
+		// Debian sid + stable), one line each. The relabel hook turns a raw release number
+		// into its live role (Debian "13" -> "13 stable", Ubuntu "24.04" -> "24.04 LTS").
+		var isTesting func(string) bool
+		if f.label == "Debian" { // only Debian numbers a testing series above stable
+			isTesting = debianTesting
+		}
 		url := fmt.Sprintf(f.search, qproj)
-		for _, ch := range familyChannels(rows, f.prefixes) {
+		for _, ch := range familyChannels(rows, f.prefixes, isTesting) {
 			label := ch.label
 			if f.relabel != nil {
 				label = f.relabel(ch.label)

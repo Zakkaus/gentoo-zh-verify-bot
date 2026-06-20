@@ -8,39 +8,39 @@ import "testing"
 // that carries a different version); a package at one version everywhere stays one line.
 func TestFamilyChannels(t *testing.T) {
 	deb := []string{"debian_"}
-	// firefox-like: unstable newest; 11/12/13 share the stable version; 14 (forky) is lower.
+	// 14/forky is testing (excluded from stable); 13/trixie is the real stable.
+	debTesting := func(lbl string) bool { return lbl == "14" }
+
+	// firefox-like: sid newest; 11/12/13 share the stable version; 14 (testing) is excluded.
 	got := familyChannels([]repologyPkg{
 		{"debian_unstable", "152.0.1"},
-		{"debian_11", "140.12.0"},
-		{"debian_12", "140.12.0"},
-		{"debian_13", "140.12.0"},
-		{"debian_14", "140.11.0"},
-	}, deb)
+		{"debian_12", "140.12.0"}, {"debian_13", "140.12.0"}, {"debian_14", "140.11.0"},
+	}, deb, debTesting)
 	want := []channelLine{{"152.0.1", "unstable"}, {"140.12.0", "13"}}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("firefox-like = %v, want %v", got, want)
 	}
-	// htop-like: same version in unstable and the releases -> one line, prefer the rolling label.
+	// nano-like: testing(14) ties with sid at 9.0 but real stable(13) is older -> 2 lines.
 	if g := familyChannels([]repologyPkg{
-		{"debian_unstable", "3.5.1"}, {"debian_13", "3.5.1"}, {"debian_14", "3.5.1"},
-	}, deb); len(g) != 1 || g[0] != (channelLine{"3.5.1", "unstable"}) {
-		t.Errorf("htop-like = %v, want one line {3.5.1, unstable}", g)
+		{"debian_unstable", "9.0"}, {"debian_14", "9.0"}, {"debian_13", "8.4"},
+	}, deb, debTesting); len(g) != 2 || g[1] != (channelLine{"8.4", "13"}) {
+		t.Errorf("nano-like = %v, want sid 9.0 + stable {8.4,13}", g)
 	}
-	// no rolling channel (Ubuntu-like, all numbered) -> one line, no phantom stable.
+	// Fedora-like: rawhide newest, but stable(44) carries a different version -> 2 lines; when
+	// rawhide == stable, a single line labelled by the stable release (not "rawhide").
 	if g := familyChannels([]repologyPkg{
-		{"ubuntu_24_04", "1.0"}, {"ubuntu_22_04", "0.9"},
-	}, []string{"ubuntu_"}); len(g) != 1 {
-		t.Errorf("ubuntu-like = %v, want one line", g)
+		{"fedora_rawhide", "9.0"}, {"fedora_44", "8.7"}, {"fedora_43", "8.5"},
+	}, []string{"fedora_"}, nil); len(g) != 2 || g[1] != (channelLine{"8.7", "44"}) {
+		t.Errorf("fedora-like = %v, want rawhide 9.0 + {8.7,44}", g)
 	}
-	// RHEL-like: the same version is in several clone releases -> labelled by the NEWEST one
-	// (centos_stream_10), not an arbitrary older almalinux_8.
-	rhel := []string{"epel_", "centos_", "almalinux_", "rockylinux_", "rhel_"}
-	g := familyChannels([]repologyPkg{
-		{"almalinux_8", "140.11.0"}, {"almalinux_9", "140.11.0"},
-		{"centos_stream_9", "140.11.0"}, {"centos_stream_10", "140.11.0"},
-	}, rhel)
-	if len(g) != 1 || g[0].label != "stream.10" {
-		t.Errorf("rhel-like = %v, want one line labelled stream.10 (newest clone release)", g)
+	if g := familyChannels([]repologyPkg{
+		{"fedora_rawhide", "152.0"}, {"fedora_44", "152.0"},
+	}, []string{"fedora_"}, nil); len(g) != 1 || g[0] != (channelLine{"152.0", "44"}) {
+		t.Errorf("fedora-coincide = %v, want one line {152.0,44} (not rawhide)", g)
+	}
+	// pure rolling (Arch) -> one line, rolling label.
+	if g := familyChannels([]repologyPkg{{"arch", "153.0b2"}}, []string{"arch"}, nil); len(g) != 1 || g[0].label != "" {
+		t.Errorf("arch-like = %v, want one rolling line", g)
 	}
 }
 
