@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] - 2026-06-20
+
+Hardening from a second full multi-dimension audit (each finding adversarially verified).
+
+### Fixed
+- **Version comparator**: a Gentoo pre-release (`1.0_rc1`, `_alpha`, `_beta`, `_pre`) is now
+  correctly older than the release, and a patch `_pN` / revision `-rN` newer — previously any
+  extra suffix sorted as *newer*, so `/pkg`/`/distro` could show an rc as "latest".
+- **`commandArg`** splits on the first run of whitespace, so a tab/newline-separated argument
+  (a pasted `/pkg<newline>vim`) works, not just a single space.
+- **Feed poll interval** now clamps a too-fast `interval_seconds` (1–59) to the 60 s floor
+  instead of silently falling back to 5 minutes.
+
+### Changed / Hardened
+- Lookup commands root their HTTP timeout on the request context, so in-flight work is
+  cancelled on shutdown instead of lingering ~20 s.
+- Persistence writes now go through one atomic helper that **logs** marshal/write/rename
+  failures; the bot `MkdirAll`s `STATE_DIRECTORY` on start; the warn/antispam/feed loaders
+  log a corrupt-file parse error (matching `pending.json`) instead of silently dropping state.
+- Duplicate feed targets (same `chat_id`) are de-duplicated at config load (they would have
+  shared one cursor and dropped each other's items).
+- **CI now runs `go test -race ./...`** (the test suite previously wasn't gating merges).
+- The build embeds a `version` (via `-ldflags -X main.version`), shown in `/ping` and the
+  startup log.
+
 ## [2.5.3] - 2026-06-20
 
 ### Changed
@@ -284,6 +309,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.6.0
 [2.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.3
 [2.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.2
 [2.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.1

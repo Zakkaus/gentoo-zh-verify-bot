@@ -13,12 +13,13 @@ go build ./...
 
 ## Before opening a PR
 
-The CI runs these three checks — please make sure they pass locally:
+The CI runs these checks — please make sure they pass locally:
 
 ```sh
 gofmt -l .      # must print nothing (run `gofmt -w .` to fix)
 go vet ./...
 go build ./...
+go test -race ./...
 ```
 
 ## Code style
