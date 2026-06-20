@@ -130,26 +130,25 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
 		"/wiki <关键词> — 搜索 Gentoo / Arch wiki(含中文页)\n" +
 		"/bbs <关键词> — 搜各大 Linux 论坛(中文优先)\n" +
-		"/pkgs <包名> — 跨发行版查版本(= /distro;Gentoo/AUR/Arch/Alpine/Debian/Ubuntu/Nix/Fedora/RHEL/openSUSE Leap+风滚草)\n" +
-		"/arm <包名> — 查该包在 arm64 (aarch64) 上的 Gentoo keyword 状态\n" +
-		"/armpkgs <包名> — 跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch Linux ARM/AUR)\n" +
+		"/pkgs <包名> — 跨发行版查包版本(Gentoo/Debian/Ubuntu/Fedora/Arch/openSUSE 等)\n" +
+		"/arm <包名> — 查该包的 arm64 (aarch64) Gentoo keyword 状态\n" +
+		"/armpkgs <包名> — 跨发行版查 arm64 支持\n" +
 		"/ping — 机器人状态 / 运行时长\n" +
 		"/stats — 今日通过 / 拒绝人数\n" +
 		"/help — 显示本帮助"
 	if inGroup && v.isGroupAdmin(c, bot, chatID, msg.From.ID) {
-		help += "\n\n👮 管理员:\n" +
-			"/start — 开启入群验证\n" +
-			"/stop — 关闭入群验证\n" +
+		help += "\n\n👮 管理员(回复某条消息使用):\n" +
+			"/mute — 禁言(留群不能发言,到期自动解除);默认1h,可 /mute 30m\n" +
+			"/unmute — 解除禁言\n" +
+			"/ban — 封禁(踢出群,仅删该条消息)\n" +
+			"/sb — 举报并封禁(踢出群 + 清除其全部消息)\n" +
+			fmt.Sprintf("/warn — 警告(满 %d 次自动踢出);/clearwarn — 清除警告\n", v.cfg.WarnLimit) +
+			"\n其它管理指令:\n" +
+			"/bantime — 设定封禁时长(0=永久;如 7d/12h/30m)\n" +
+			"/autodel — 查询结果自动删除开关(/autodel on|off|<分钟>)\n" +
 			"/rich — 开关富文本输出(/pkg /use)\n" +
-			"/autodel — 开关/调节查询结果自动删除(/autodel on|off|<分钟>,默认3分钟)\n" +
-			"/bantime — 设定封禁时长:0=永久(不能再进群);7d/12h/30m/3600=限时(到期可重新加入,相当于踢出)。默认永久\n" +
-			"/mute — 回复某条消息:禁言发送者(留在群里但不能发言,到期自动解除);默认1h,可 /mute 30m、/mute 12h 指定时长\n" +
-			"/unmute — 回复某条消息:解除该用户的禁言\n" +
-			"/sb — 回复某条消息:举报并封禁(清除该用户在群里的全部消息 + 按 /bantime 时长封禁)\n" +
-			"/ban — 回复某条消息:封禁/踢出群(仅删被回复的那条消息 + 按 /bantime 时长封禁)\n" +
-			fmt.Sprintf("/warn — 回复某消息:警告用户(满 %d 次自动踢出)\n", v.cfg.WarnLimit) +
-			"/clearwarn — 回复某消息:清除用户警告\n" +
-			"/bc — 频道马甲封禁开关;/bc allow|deny <频道id> 管白名单"
+			"/bc — 频道马甲封禁开关;/bc allow|deny <频道id> 管白名单\n" +
+			"/start /stop — 开启 / 关闭入群验证"
 	}
 	if inGroup {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: msg.MessageID})

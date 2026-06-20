@@ -12,33 +12,34 @@ import (
 // "/" in the chat shows an autocomplete menu. Member commands are visible to
 // everyone; the admin commands are only shown to chat administrators.
 func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
+	// Keep menu descriptions SHORT — Telegram's command menu truncates long ones.
 	member := []telego.BotCommand{
 		{Command: "help", Description: "查看可用指令"},
-		{Command: "pkg", Description: "搜索 Gentoo 包(官方树 / gentoo-zh / guru)"},
-		{Command: "use", Description: "查看某个包的 USE 标志 + 信息"},
-		{Command: "bug", Description: "查询 Gentoo Bugzilla 编号"},
-		{Command: "news", Description: "查看 / 搜索 Gentoo 新闻"},
-		{Command: "wiki", Description: "搜索 Gentoo / Arch wiki(含中文页)"},
-		{Command: "bbs", Description: "搜各大 Linux 论坛(中文优先)"},
-		{Command: "pkgs", Description: "跨发行版查包版本(Gentoo/AUR/Arch/Alpine/Debian/Ubuntu/Nix/Fedora/RHEL/openSUSE)"},
-		{Command: "arm", Description: "查包在 arm64 上的 Gentoo keyword 状态"},
-		{Command: "armpkgs", Description: "跨发行版查 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR)"},
-		{Command: "ping", Description: "查看机器人状态 / 运行时长"},
+		{Command: "pkg", Description: "搜索 Gentoo 包"},
+		{Command: "use", Description: "查包的 USE 标志 + 信息"},
+		{Command: "bug", Description: "查 Gentoo Bugzilla 编号"},
+		{Command: "news", Description: "查 / 搜 Gentoo 新闻"},
+		{Command: "wiki", Description: "搜 Gentoo / Arch wiki"},
+		{Command: "bbs", Description: "搜 Linux 论坛(中文优先)"},
+		{Command: "pkgs", Description: "跨发行版查包版本"},
+		{Command: "arm", Description: "查包的 arm64 keyword 状态"},
+		{Command: "armpkgs", Description: "跨发行版查 arm64 支持"},
+		{Command: "ping", Description: "机器人状态 / 运行时长"},
 		{Command: "stats", Description: "今日通过 / 拒绝人数"},
 	}
 	admin := append([]telego.BotCommand{
 		{Command: "start", Description: "[管理] 开启入群验证"},
 		{Command: "stop", Description: "[管理] 关闭入群验证"},
-		{Command: "mute", Description: "[管理] 回复消息:禁言(留群但不能发言;默认1h,可 /mute 30m 指定)"},
-		{Command: "unmute", Description: "[管理] 回复消息:解除禁言"},
-		{Command: "sb", Description: "[管理] 回复消息:举报并封禁(清除其全部消息,时长见 /bantime)"},
-		{Command: "ban", Description: "[管理] 回复消息:封禁(踢出群,仅删该消息,时长见 /bantime)"},
-		{Command: "warn", Description: fmt.Sprintf("[管理] 回复消息:警告用户(满 %d 次自动踢出)", warnLimit)},
-		{Command: "clearwarn", Description: "[管理] 回复消息:清除用户警告"},
-		{Command: "bc", Description: "[管理] 频道马甲封禁开关 / 白名单"},
-		{Command: "rich", Description: "[管理] 开关富文本输出(/pkg /use)"},
-		{Command: "autodel", Description: "[管理] 开关/调节查询结果自动删除(默认3分钟)"},
-		{Command: "bantime", Description: "[管理] 设定封禁时长(0=永久,如 7d/12h/30m)"},
+		{Command: "mute", Description: "[管理] 回复:禁言(默认1h,可 /mute 30m)"},
+		{Command: "unmute", Description: "[管理] 回复:解除禁言"},
+		{Command: "sb", Description: "[管理] 回复:举报+封禁并清空其消息"},
+		{Command: "ban", Description: "[管理] 回复:封禁(踢出群)"},
+		{Command: "warn", Description: fmt.Sprintf("[管理] 回复:警告(满 %d 次自动踢)", warnLimit)},
+		{Command: "clearwarn", Description: "[管理] 回复:清除警告"},
+		{Command: "bc", Description: "[管理] 频道马甲封禁 / 白名单"},
+		{Command: "rich", Description: "[管理] 开关富文本(/pkg /use)"},
+		{Command: "autodel", Description: "[管理] 查询结果自动删除开关"},
+		{Command: "bantime", Description: "[管理] 设定封禁时长(0=永久)"},
 	}, member...)
 
 	if err := bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
