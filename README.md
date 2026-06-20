@@ -16,7 +16,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **DM auto-reply.** A direct message to the bot (outside the verification flow) gets a single unified reply pointing the user back to the group + commands, instead of silence. Customizable via `private_reply`.
 - **Channel sock-puppet block (optional, `/bc`).** A message posted in a guarded group *on behalf of a channel* (a common spam/ban-evasion trick) is deleted and that channel is banned from posting. Admins toggle it with `/bc`, and manage a whitelist with `/bc allow|deny <channel id>` (`allow` also un-bans) — the toggle and whitelist **persist across restarts**. Anonymous group admins and the linked discussion channel are exempt. **Requires the bot's privacy mode to be OFF** (BotFather → disable group privacy) so it can see these messages.
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban, `/warn` = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts), `/clearwarn` = clear a user's strikes.
-- **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/ping`, `/stats` (today's approved/declined), `/help`.
+- **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/autodel` (toggle/adjust auto-deletion of lookup answers; default 3 min), `/ping`, `/stats` (today's approved/declined), `/help`.
 - **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise. Also accepts a full `cat/pkg` atom, e.g. `/pkg sys-kernel/gentoo-kernel`.
 - **USE flags:** `/use <package>` shows one package's USE flags (with descriptions, each linked to its useflags page) + info. Accepts a bare name, a `cat/pkg` atom, or a pasted `packages.gentoo.org` (or overlay GitHub) URL. Data from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
 - **Bugzilla:** `/bug <id>` looks up a [Gentoo Bugzilla](https://bugs.gentoo.org) bug (title + status), else just links it.
@@ -77,6 +77,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `channel_invite_url` | **global default** explicit join link; required for a **private** channel (no `@handle`) |
 | `timeout_seconds` | time to finish verification (default 240, max 1800) |
 | `notify_ttl_seconds` | auto-delete the bot's group messages after N s (`0`→60, negative→never) |
+| `lookup_ttl_seconds` | auto-delete a lookup command (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/distro`) and its answer after N s (unset→180 = 3 min, on; `0`/negative→off). Admins toggle/adjust at runtime with `/autodel` |
 | `warn_limit` | `/warn` strikes before a user is auto-kicked (default 3) |
 | `admin_log_chat_id` | optional chat that receives a line per moderation / failed-approve event |
 | `overlays` | `/pkg` GitHub overlays `[{name,repo,branch}]` (default: gentoo-zh + guru) |

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-06-20
+
+### Added
+- **Auto-delete for lookup results** — a lookup command (`/pkg` `/use` `/bug` `/news`
+  `/wiki` `/bbs` `/distro`) and its answer are removed after a delay (default **3 minutes**)
+  to keep the group tidy. Configurable via `lookup_ttl_seconds` (unset → on at 3 min;
+  `0`/negative → off) and adjustable at runtime by admins with **`/autodel`**
+  (`/autodel on|off` or `/autodel <minutes>`).
+
 ## [2.0.0] - 2026-06-20
 
 Stable release after a full multi-dimension audit (logic, APIs, concurrency/leaks,
@@ -216,6 +225,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.0.0
 [1.9.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.1
 [1.9.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.0

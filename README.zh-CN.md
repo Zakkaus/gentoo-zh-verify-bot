@@ -16,7 +16,7 @@
 - **私聊自动回复**:有人私聊机器人(非验证流程)时会收到一条**统一回复**,引导去群里使用命令,而不是没反应。可用 `private_reply` 自定义。
 - **频道马甲封禁(可选,`/bc`)**:有人在守护群里**用频道身份发言**(常见的刷屏 / 规避封禁手法)会被删消息 + 封禁该频道再也发不了。管理员用 `/bc` 开关,`/bc allow|deny <频道id>` 管白名单(`allow` 同时解封)—— 开关和白名单**重启不丢**。匿名群管和群的关联频道自动放行。**需要把机器人的隐私模式关掉**(BotFather → 关闭群隐私)才能看到这些消息。
 - **管理命令**(回复目标消息,仅管理员):`/sb` 删消息 + 踢出(可再申请)、`/ban` 删消息 + 永久封禁、`/warn` 警告用户(满 `warn_limit` 次自动踢出,默认 3 次,计数重启不丢)、`/clearwarn` 清除某用户的警告。
-- **控制 / 信息**:`/start` `/stop`(开关验证)、`/rich`(开关富文本输出)、`/ping`、`/stats`(今日通过 / 拒绝数)、`/help`。
+- **控制 / 信息**:`/start` `/stop`(开关验证)、`/rich`(开关富文本输出)、`/autodel`(开关/调节查询结果自动删除,默认 3 分钟)、`/ping`、`/stats`(今日通过 / 拒绝数)、`/help`。
 - **包搜索**:`/pkg <名字>` 搜索官方树([packages.gentoo.org](https://packages.gentoo.org))与配置的 overlay(默认 `gentoo-zh` + `guru`),并显示版本——官方树包显示 **amd64 稳定版**,无稳定版则显示最新 `~` 测试版;overlay 包一律标 `~`。也支持完整 atom 查询(如 `/pkg sys-kernel/gentoo-kernel`)。
 - **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述,每个都链到其 useflags 页)+ 信息。支持**包名**、**`分类/包名`** 或直接粘贴 **packages.gentoo.org(或 overlay 的 GitHub)链接**。数据取自官方树 JSON,或 overlay 的 ebuild / `metadata.xml`。
 - **Bugzilla**:`/bug <编号>` 查询 [Gentoo Bugzilla](https://bugs.gentoo.org) 工单(标题 + 状态),取不到则给链接。
@@ -62,6 +62,7 @@ GITHUB_TOKEN=ghp_xxx
 | `channel_invite_url` | **全局默认**:频道邀请链接;**私有频道**(无 `@` 用户名)必填 |
 | `timeout_seconds` | 验证超时秒数(默认 240,上限 1800) |
 | `notify_ttl_seconds` | 机器人群消息 N 秒后自动删除(`0`→60,负数→不删) |
+| `lookup_ttl_seconds` | 查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/distro`)及其回复 N 秒后自动删除(不设→180=3 分钟、开;`0`/负数→关)。管理员用 `/autodel` 运行时开关/调节 |
 | `warn_limit` | `/warn` 多少次后自动踢出(默认 3) |
 | `admin_log_chat_id` | 可选:接收每次管理操作 / 批准失败的日志 |
 | `overlays` | `/pkg` 的 GitHub overlay `[{name,repo,branch}]`(默认 gentoo-zh + guru) |
