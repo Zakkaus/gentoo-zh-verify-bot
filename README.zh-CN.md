@@ -70,8 +70,8 @@ GITHUB_TOKEN=ghp_xxx
 | `rich_messages` | `/pkg`、`/use` 用 Bot API 10.1 富消息(默认 `false`;也可群内 `/rich` 开关) |
 | `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
 | `private_reply` | 私聊(非验证流程)的统一自动回复(空=内置默认) |
-| `block_channel_senders` | 频道马甲封禁的**初始**状态(运行时用 `/bc` 开关,持久化;默认 `false`;需关隐私模式) |
-| `channel_whitelist` | **初始**频道白名单(运行时用 `/bc allow|deny`,持久化) |
+| `block_channel_senders` | 频道马甲封禁的**初始**状态(运行时用 `/bc` 开关,持久化;默认 `false`;需关隐私模式)。`antispam.json` 一旦生成即以它为准——之后改这个键不再生效,除非删掉该文件 |
+| `channel_whitelist` | **初始**频道白名单(运行时用 `/bc allow|deny`,持久化到 `antispam.json`,该文件随后优先于此键) |
 | `feed` / `feeds` | 可选:自动播报——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天。`feed` 是单个目标;`feeds` 是它们的数组(每个有各自的聊天、语言、过滤)。见下;省略即关闭 |
 | `questions` | **全局默认**题库;每次随机抽一题,选项顺序打乱(可在 `groups` 里按群覆盖) |
 

@@ -8,6 +8,7 @@
   "channel_invite_url": "",
   "timeout_seconds": 240,
   "notify_ttl_seconds": 60,
+  "warn_limit": 3,
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",
@@ -15,7 +16,7 @@
   "block_channel_senders": false,
   "channel_whitelist": [],
   "feeds": [
-    {"chat_id": 0, "lang": "en", "interval_seconds": 300, "bugs": true, "news": true, "bug_product": "", "bug_component": ""},
+    {"chat_id": 0, "lang": "en", "interval_seconds": 300, "bugs": true, "news": true, "bug_product": "", "bug_component": "", "silent_bugs": false},
     {"chat_id": 0, "lang": "zh", "interval_seconds": 300}
   ],
   "stats_timezone": "Asia/Shanghai",

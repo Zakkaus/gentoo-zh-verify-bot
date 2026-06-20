@@ -17,7 +17,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 - **Channel sock-puppet block (optional, `/bc`).** A message posted in a guarded group *on behalf of a channel* (a common spam/ban-evasion trick) is deleted and that channel is banned from posting. Admins toggle it with `/bc`, and manage a whitelist with `/bc allow|deny <channel id>` (`allow` also un-bans) — the toggle and whitelist **persist across restarts**. Anonymous group admins and the linked discussion channel are exempt. **Requires the bot's privacy mode to be OFF** (BotFather → disable group privacy) so it can see these messages.
 - **Moderation commands** (reply to a message, admins only): `/sb` = delete + kick (rejoinable), `/ban` = delete + permanent ban, `/warn` = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts), `/clearwarn` = clear a user's strikes.
 - **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/ping`, `/stats` (today's approved/declined), `/help`.
-- **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise.
+- **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise. Also accepts a full `cat/pkg` atom, e.g. `/pkg sys-kernel/gentoo-kernel`.
 - **USE flags:** `/use <package>` shows one package's USE flags (with descriptions, each linked to its useflags page) + info. Accepts a bare name, a `cat/pkg` atom, or a pasted `packages.gentoo.org` (or overlay GitHub) URL. Data from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
 - **Bugzilla:** `/bug <id>` looks up a [Gentoo Bugzilla](https://bugs.gentoo.org) bug (title + status), else just links it.
 - **News:** `/news [keyword]` lists or searches [Gentoo news items](https://www.gentoo.org/support/news-items/).
@@ -85,8 +85,8 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `rich_messages` | render `/pkg` & `/use` as Bot API 10.1 rich messages (default `false`; also toggleable in-chat via `/rich`) |
 | `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
 | `private_reply` | the unified auto-reply for DMs outside the verify flow (empty → built-in default) |
-| `block_channel_senders` | **initial** state of the channel sock-puppet filter (runtime toggle is `/bc`, persisted; default `false`; needs privacy mode OFF) |
-| `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow|deny`, persisted) |
+| `block_channel_senders` | **initial** state of the channel sock-puppet filter (runtime toggle is `/bc`, persisted; default `false`; needs privacy mode OFF). Once `antispam.json` exists it is authoritative — editing this key afterward has no effect until that file is deleted |
+| `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow|deny`, persisted to `antispam.json`, which then takes precedence over this key) |
 | `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
 | `questions` | **global default** quiz pool; one is picked at random, options shuffled (override per-group in `groups`) |
 

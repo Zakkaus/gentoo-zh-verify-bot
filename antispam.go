@@ -22,7 +22,13 @@ type antispamState struct {
 	Whitelist []int64 `json:"whitelist"`
 }
 
-// loadAntispam overrides the config-seeded state from antispam.json when it exists.
+// loadAntispam overrides the config-seeded state with antispam.json when it exists.
+//
+// PRECEDENCE: config's block_channel_senders / channel_whitelist are only the INITIAL
+// seed (applied in NewVerifier). Once antispam.json exists (after the first /bc command),
+// it is authoritative and fully replaces that seed — so editing those config keys later
+// has NO effect until antispam.json is deleted. This keeps runtime /bc changes from being
+// silently reverted on restart. Documented in the README config table.
 func (v *Verifier) loadAntispam() {
 	if v.acPath == "" {
 		return

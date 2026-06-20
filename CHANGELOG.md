@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-06-20
+
+Stable release after a full multi-dimension audit (logic, APIs, concurrency/leaks,
+docs, permissions, robustness), each finding adversarially verified and the confirmed
+ones fixed and unit-tested.
+
+### Added
+- Lookup commands (`/distro` `/pkg` `/use` `/bug` `/news` `/wiki` `/bbs`) now **reply to
+  the command message**, so concurrent answers (these hit slow external APIs) can't be
+  mistaken for one another.
+- A unit-test suite (`*_test.go`) covering the version comparator, per-group config
+  resolution/validation, feed cursor logic, status-aware notifications and the quiz shuffler.
+- Startup now probes each required channel and logs whether the bot can read its members.
+
+### Fixed
+- **Feed news dedup** no longer re-broadcasts the entire news archive if the stored cursor
+  URL falls out of the fetched list — it re-baselines instead of flooding the channel.
+- **Feed bug cursor** is now strictly forward-only (can't regress and re-post older bugs).
+- **Version comparison** (`/pkg`, `/distro`) handles double-digit revisions/suffixes
+  correctly (`r10` is newer than `r2`), via overflow-safe natural-order token comparison.
+- **Required-channel gate fails open** when the bot can't read the channel (it isn't an
+  admin there): rather than silently locking every applicant out, it passes verified users
+  through and alerts admins — so a permission slip can't break joining.
+
+### Changed / Hardened
+- Bounded the `/pkg` version/info caches; warn when `STATE_DIRECTORY` is unset (persistence
+  off) or a feed has `chat_id=0`; the DM auto-reply is throttled per user; failed admin-log
+  sends are now logged. `config.example.json` gains `warn_limit` + `silent_bugs`; docs and
+  the `/distro` command-menu text brought in sync.
+
 ## [1.9.1] - 2026-06-20
 
 ### Changed
@@ -186,6 +216,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.0.0
 [1.9.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.1
 [1.9.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.9.0
 [1.8.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.8.1
