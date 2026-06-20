@@ -8,36 +8,38 @@
 
 ## 功能
 
-- **入群答题验证**:申请入群**不**自动批准。机器人在群里 @ 申请人并附「✅ 点此完成验证」深链按钮;申请人打开机器人私聊,答对一道随机单选题才被批准,答错或超时则自动拒绝。从不点击 / 不作答的广告机器人进不来。
-- **频道关注门槛(可选)**:要求申请人先关注指定频道。关注这一步在**私聊里两步式**完成(先给「📢 关注频道」+「✅ 我已关注,继续」复检,再发题);群内消息**不**放频道按钮,以免把用户带离验证流程。私有频道用 `channel_invite_url` 配置邀请链接。
-- **管理员一键操作**:每条申请都带「👮 直接通过」与「🚫 举报并封禁」按钮。
-- **多群守护**:一个实例可同时守护多个群。
-- **自动退出未授权聊天**:被加进任何不在配置里的群/频道(非守护群、非必关频道、非播报目标、非管理日志)时,机器人会立刻退出 —— 不会被人随便拉进群刷存在。要新增守护群,先把群 id 写进 `group_ids`,再把机器人加进去。
-- **私聊也能用查询命令(限频)**:只读查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`)**私聊机器人也能直接用**,每人每分钟上限 `private_query_per_min` 次(默认 3)防滥用 —— 守护群里不限次。其它私聊消息收到统一自动回复(`private_reply` 可自定义)。
-- **频道马甲封禁(可选,`/bc`)**:有人在守护群里**用频道身份发言**(常见的刷屏 / 规避封禁手法)会被删消息 + 封禁该频道再也发不了。管理员用 `/bc` 开关,`/bc allow|deny <频道id>` 管白名单(`allow` 同时解封)—— 开关和白名单**重启不丢**。匿名群管和群的关联频道自动放行。**需要把机器人的隐私模式关掉**(BotFather → 关闭群隐私)才能看到这些消息。
-- **管理命令**(回复目标消息,仅管理员):
-  - **`/mute`** = 禁言——用户**留在群里但不能发言**;默认 1 小时,或在命令后指定时长(`/mute 30m`、`/mute 12h`);始终限时、到期自动解除,**`/unmute`** 可提前解除。
-  - **`/ban`** = 封禁——把人**踢出群**;仅删被回复的那条消息;封禁时长见 `/bantime`(默认永久,或限时则到期可重新加入)。
-  - **`/sb`** = 举报并封禁——同 `/ban`,但额外**清除该用户的全部消息**(清理刷屏)。
-  - **`/warn`** 警告用户(满 `warn_limit` 次自动踢出,默认 3 次,计数重启不丢)、**`/clearwarn`** 清除某用户的警告。
-  > **注意**:管理指令需**以个人身份**发送 —— 匿名管理员发言会显示为「群」而非用户,过不了管理员校验。另外,若用户同时申请多个守护群且**必关频道不同**,私聊里的关注引导只覆盖第一个待处理群的频道;多个群共用一个必关频道体验最顺。
-- **封禁时长可配**(`/bantime`,管理员):`/bantime 0` 永久(默认)、`/bantime 7d` / `12h` / `30m` / `3600`(秒)。`/ban`、`/sb` 和验证自动封禁都用它;由 `ban_seconds` 初始化,运行时改动重启后回到配置值。
-- **验证防滥用**:验证失败(答错/超时)只**拒绝**该次申请(绝不立即永久封禁),申请人需等 `verify_retry_seconds`(默认 180 秒)才能重新申请;**数小时内**连续失败 `verify_max_fails` 次(默认 3)后**自动封禁**(时长同上)。strike 计数重启不丢、验证成功后清零、且**会随时间衰减**(隔很久的偶发失误不累计)。自动封禁只有真正成功才清零;bot 无封禁权限时保留 strike 并持续告警管理员。
-- **控制 / 信息**:`/start` `/stop`(开关验证)、`/rich`(开关富文本输出)、`/autodel`(开关/调节查询结果自动删除,默认 3 分钟)、`/ping`、`/stats`(今日通过 / 拒绝数)、`/help`。
-- **包搜索**:`/pkg <名字>` 搜索官方树([packages.gentoo.org](https://packages.gentoo.org))与配置的 overlay(默认 `gentoo-zh` + `guru`),并显示版本——官方树包显示 **amd64 稳定版**,无稳定版则显示最新 `~` 测试版;overlay 包一律标 `~`。也支持完整 atom 查询(如 `/pkg sys-kernel/gentoo-kernel`)。
-- **USE 标志**:`/use <包名>` 显示单个包的 USE 标志(含描述,每个都链到其 useflags 页)+ 信息。支持**包名**、**`分类/包名`** 或直接粘贴 **packages.gentoo.org(或 overlay 的 GitHub)链接**。数据取自官方树 JSON,或 overlay 的 ebuild / `metadata.xml`。
-- **Bugzilla**:`/bug <编号>` 查询 [Gentoo Bugzilla](https://bugs.gentoo.org) 工单(标题 + 状态),取不到则给链接。
-- **新闻**:`/news [关键词]` 列出 / 搜索 [Gentoo 新闻条目](https://www.gentoo.org/support/news-items/)。
-- **Wiki 搜索**:`/wiki <关键词>` 搜索 [Gentoo](https://wiki.gentoo.org) 与 [Arch](https://wiki.archlinux.org) wiki(MediaWiki),**优先返回简体中文页**,没有则回落到默认页;其它语言的页面会被过滤掉。
-- **论坛搜索**:`/bbs <关键词>` 内联返回 [Arch Linux CN](https://forum.archlinuxcn.org) 论坛(中文,走 Discourse API)的结果,并附各大英文论坛(Gentoo、Arch BBS、Ubuntu、Debian)的一键站内搜索按钮 —— 中文优先,英文备用。
-- **arm64 状态**:`/arm <包名>` 显示一个 Gentoo 包在 **arm64 (aarch64) 上的 keyword 状态** —— 稳定、~测试、还是未 keyword —— ARM 用户一眼就能看出该包在自己架构上能不能用。
-- **跨发行版 arm64**:`/armpkgs <包名>` 查该包在 **Gentoo、Debian、Ubuntu、Fedora、Arch Linux ARM、AUR** 上的 arm64 支持(各走自己的按架构 API;AUR 读 PKGBUILD 的 `arch=()`)。特别适合 Gentoo 还没给某包 keyword arm64、但别的发行版已经有的情况 —— 这通常说明它能用,可 `ACCEPT_KEYWORDS="~arm64"` 强制开启自行编译。
-- **跨发行版通道标注**:Debian/Ubuntu 的发行版按**实时角色**标注(`stable`/`testing`/`oldstable`/`LTS`),取自 `distro-info-data` 而非写死 —— Debian 下次发布时"stable"会自动跟着变。**RHEL 生态拆分**为 RHEL(AlmaLinux/Rocky 1:1 重建 = 真实 RHEL 版本)、**CentOS Stream**(滚动上游)和 **EPEL**,因为它们是不同的产品。
-- **跨发行版查包**:`/pkgs <包名>`(别名 `/distro`)一条消息显示一个包在 **Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL/EPEL、openSUSE(Leap + 风滚草)** 各自的当前版本(走 [Repology](https://repology.org) API),同生态的变体单独列行。每个版本都标注它来自哪个 release(如 Debian `(unstable)`、Fedora `(43)`、Alpine `(edge)`);每个发行版都链到其软件包页面;查不到精确匹配时给出最接近包的版本表 + 可折叠的其它匹配。支持 `rich_messages` / `/rich` 富文本开关(对齐 `/pkg`、`/use`)。
-- **自动播报(可选)**:配置 `feed`(或用 `feeds` 数组配多个目标)后,机器人每隔 `interval_seconds`(默认 300 秒)轮询 Gentoo Bugzilla + 新闻,把**新增的** bug / 新闻发到该频道(机器人需是该频道管理员且有发帖权)。每个 feed 有各自的语言(`lang`)与过滤,所有 feed 每周期共享一次抓取。去重 + 重启不丢;首次运行只记录基线,不补发历史。**已推送的 bug 之后被解决/关闭时,机器人会就地编辑那条消息**(🐞→✅、状态更新)—— 每个 feed 各自独立、用各自的语言(中英文 bug 频道都会更新)。
-- **重启不丢**:进行中的验证会持久化到磁盘,重启后恢复(systemd 下,见 unit 里的 `StateDirectory=`)。
-- **富文本输出(可选,默认关)**:`/pkg`、`/use` 可用 Bot API 10.1 富消息渲染(标题、列表、可折叠分组),由配置 `rich_messages` 或管理员 `/rich` 命令开关,失败自动回落纯 HTML。默认关闭(旧 / 第三方客户端不渲染富消息);入群验证、`/bug`、`/news` 始终用纯 HTML。
-- 机器人自己发的群消息在 TTL 后自动删除以保持整洁;命令显示在 Telegram 的 `/` 菜单中(管理命令仅管理员可见)。
+**入群答题验证** —— 申请入群**不**自动批准。机器人在群里 @ 申请人并附「✅ 完成验证」深链;申请人打开机器人,在私聊里答一道随机(crypto 打乱)单选题 —— 可选先关注**必关频道**(私聊两步引导;私有频道用 `channel_invite_url`)—— 答对才批准,答错/超时则拒绝。每条申请还带「👮 直接通过」/「🚫 举报并封禁」按钮。
+
+- **防滥用**:验证失败先**拒绝**并冷却(`verify_retry_seconds`,180 秒);数小时内连续失败 `verify_max_fails`(默认 3)次后自动封禁。strike 持久化、成功清零、随时间衰减。
+
+**管理命令**(管理员,回复目标消息):
+
+| 命令 | 作用 |
+| --- | --- |
+| `/mute [时长]` · `/unmute` | 禁言 —— 留群但不能发言;限时(默认 1 小时,如 `/mute 30m`);`/unmute` 提前解除 |
+| `/ban` | 封禁 —— 踢出群;时长见 `/bantime`(默认永久,或限时=到期可重进) |
+| `/sb` | 举报并封禁 —— 同 `/ban`,再**清除该用户全部消息** |
+| `/warn` · `/clearwarn` | 警告(满 `warn_limit` 次自动踢,默认 3) · 清除警告 |
+| `/bantime` | 设定封禁时长:`0`=永久,或 `7d`/`12h`/`30m` |
+| `/bc` | 频道马甲封禁 + 白名单(需关隐私模式;持久化) |
+
+**Gentoo / Linux 查询**(私聊也能用,每分钟限 `private_query_per_min` 次):
+
+| 命令 | 查询 |
+| --- | --- |
+| `/pkg <名字>` | Gentoo 包 + 版本(官方树 + `gentoo-zh`/`guru` overlay) |
+| `/use <包名>` | 某个包的 USE 标志 + 信息 |
+| `/bug <编号>` | Gentoo Bugzilla 工单 |
+| `/news [关键词]` | Gentoo 新闻 |
+| `/wiki <关键词>` | Gentoo / Arch wiki(优先简体中文页) |
+| `/bbs <关键词>` | Linux 论坛(Arch Linux CN 内联 + 英文论坛按钮) |
+| `/pkgs <包名>` | 跨发行版版本(走 [Repology](https://repology.org),按 release 标注;RHEL ≠ CentOS Stream ≠ EPEL) |
+| `/arm <包名>` | 某 Gentoo 包的 arm64 keyword 状态 |
+| `/armpkgs <包名>` | 跨发行版 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR) |
+
+**自动播报(可选)** —— 轮询 Gentoo Bugzilla + 新闻,把**新增**项发到一个或多个频道(`feed` / `feeds`),各有语言 + 过滤;去重、重启不丢,**bug 被解决/关闭时就地编辑那条消息**(🐞→✅)。
+
+**其它**:守护多个群;自动退出未授权聊天;验证进度重启不丢;群消息按 TTL 自动删除;`/pkg` `/use` 可选富文本(`rich_messages` / `/rich`,默认关);`/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/help`。
 
 ## 部署
 
@@ -88,7 +90,7 @@ GITHUB_TOKEN=ghp_xxx
 | `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
 | `private_reply` | 私聊(非验证流程)的统一自动回复(空=内置默认) |
 | `block_channel_senders` | 频道马甲封禁的**初始**状态(运行时用 `/bc` 开关,持久化;默认 `false`;需关隐私模式)。`antispam.json` 一旦生成即以它为准——之后改这个键不再生效,除非删掉该文件 |
-| `channel_whitelist` | **初始**频道白名单(运行时用 `/bc allow|deny`,持久化到 `antispam.json`,该文件随后优先于此键) |
+| `channel_whitelist` | **初始**频道白名单(运行时用 `/bc allow` / `deny`,持久化到 `antispam.json`,该文件随后优先于此键) |
 | `feed` / `feeds` | 可选:自动播报——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天。`feed` 是单个目标;`feeds` 是它们的数组(每个有各自的聊天、语言、过滤)。见下;省略即关闭 |
 | `questions` | **全局默认**题库;每次随机抽一题,选项顺序打乱(可在 `groups` 里按群覆盖) |
 
@@ -121,6 +123,8 @@ journalctl -fu gentoo-zh-verify-bot
 ## 说明 / 限制
 - 每日 `/stats` 统计在内存中,重启清零;**进行中的验证**会持久化到 `$STATE_DIRECTORY/pending.json`,在 systemd 下(unit 里的 `StateDirectory=`)重启后恢复定时器。
 - 验证链接依赖群为**公开群**。
+- 管理指令需**以个人身份**发送 —— 匿名管理员发言显示为「群」而非用户,过不了管理员校验。
+- 多个守护群若**必关频道不同**,私聊关注引导只覆盖第一个待处理群的频道;共用一个频道体验最顺。
 - 界面文案为**简体中文**(本项目面向 Gentoo 中文社区)。运营设置全在配置文件;要改语言需修改 `.go` 源码中的字符串字面量(主要在 `verify.go`、`admin.go`、`commands.go`)。
 
 ## 许可证

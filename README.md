@@ -8,36 +8,38 @@ Built for open-source community groups that get flooded with spam-bot join reque
 
 ## Features
 
-- **Join verification.** A join request is **not** auto-approved. The bot posts an in-group message that @-mentions the applicant with a `✅ 点此完成验证` deep-link button (+ a text link). The applicant opens the bot via the link, answers a randomized multiple-choice quiz in DM, and is then `approveChatJoinRequest`-ed. Wrong answer / timeout → `declineChatJoinRequest`. Spam bots that never click or never answer never get in.
-- **Required channel (optional).** Require the applicant to have joined a channel before approval. The follow step happens **in DM** (two-step): if not yet joined, the bot first shows a 📢 join-channel button + a "✅ 我已关注,继续" button that re-checks membership, and only then sends the quiz. The in-group message deliberately has **no** channel button (only the verify deep-link + admin buttons) so users aren't sent away from the verify flow. For a **private** channel (no `@handle`), set `channel_invite_url`.
-- **Admin override buttons** on every request: **👮 直接通过** (approve now) and **🚫 举报并封禁** (decline + permanent ban).
-- **Multiple groups.** Guard several groups with one bot instance.
-- **Auto-leaves unauthorized chats.** If the bot is added to any group/channel that isn't in its config (a guarded group, the required channel, a feed target, or the admin-log chat), it leaves immediately — so it can't be pulled into random groups. To add a new guarded group, put its id in `group_ids` first, then add the bot.
-- **Lookup commands in DM (rate-limited).** The read-only lookup commands (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`) also work in a **private chat with the bot**, capped at `private_query_per_min` per user per minute (default 3) to prevent abuse — guarded groups stay unlimited. Any other DM gets a unified auto-reply (customizable via `private_reply`).
-- **Channel sock-puppet block (optional, `/bc`).** A message posted in a guarded group *on behalf of a channel* (a common spam/ban-evasion trick) is deleted and that channel is banned from posting. Admins toggle it with `/bc`, and manage a whitelist with `/bc allow|deny <channel id>` (`allow` also un-bans) — the toggle and whitelist **persist across restarts**. Anonymous group admins and the linked discussion channel are exempt. **Requires the bot's privacy mode to be OFF** (BotFather → disable group privacy) so it can see these messages.
-- **Moderation commands** (reply to a message, admins only):
-  - **`/mute`** = 禁言 (mute) — the user **stays in the group but can't post**; default 1h, or give a duration inline (`/mute 30m`, `/mute 12h`); always timed (Telegram auto-lifts it), and **`/unmute`** lifts it early.
-  - **`/ban`** = 封禁 (ban) — **removes** the user; deletes only the replied message; banned for `/bantime` (default permanent, or timed so they can rejoin after).
-  - **`/sb`** = 举报并封禁 (report + ban) — like `/ban` but also **deletes all of the user's messages** (spam cleanup).
-  - **`/warn`** = strike a user (auto-kick after `warn_limit`, default 3 — counts persist across restarts); **`/clearwarn`** = clear a user's strikes.
-  > **Notes:** admin commands must be sent **non-anonymously** — an anonymous-admin post appears as the group itself, not a user, so it can't pass the admin check. And if a user applies to several guarded groups with **different** required channels, the DM follow-prompt covers the first pending group's channel; sharing one required channel across groups gives the smoothest flow.
-- **Configurable ban duration** (`/bantime`, admins): `/bantime 0` = permanent (default), `/bantime 7d` / `12h` / `30m` / `3600` (seconds). Sets the duration used by `/ban`, `/sb` and the verification auto-ban. Seeded from `ban_seconds`; a runtime change resets to the config value on restart.
-- **Verification anti-spam.** A failed verification (wrong answer / timeout) **declines** the request (never an immediate permanent ban) and the applicant must wait `verify_retry_seconds` (default 180) before re-applying; after `verify_max_fails` failures (default 3) **within a few hours** they are **auto-banned** for the configured duration. Strikes persist across restarts, reset on a successful verification, and **age out** (so a genuine user's isolated mistakes don't accumulate). The auto-ban is only cleared if it actually succeeds — where the bot lacks ban rights, strikes are kept and admins keep getting alerted.
-- **Control / info:** `/start` `/stop` (toggle verification), `/rich` (toggle rich output), `/autodel` (toggle/adjust auto-deletion of lookup answers; default 3 min), `/ping`, `/stats` (today's approved/declined), `/help`.
-- **Package search:** `/pkg <name>` searches the official tree ([packages.gentoo.org](https://packages.gentoo.org)) plus the configured overlays (default `gentoo-zh` + `guru`, GitHub, cached ~6h), and shows each result's version — the **amd64-stable** version (`稳定`) for official-tree packages, or the newest `~`testing version otherwise. Also accepts a full `cat/pkg` atom, e.g. `/pkg sys-kernel/gentoo-kernel`.
-- **USE flags:** `/use <package>` shows one package's USE flags (with descriptions, each linked to its useflags page) + info. Accepts a bare name, a `cat/pkg` atom, or a pasted `packages.gentoo.org` (or overlay GitHub) URL. Data from the official tree's JSON, or an overlay's ebuild / `metadata.xml`.
-- **Bugzilla:** `/bug <id>` looks up a [Gentoo Bugzilla](https://bugs.gentoo.org) bug (title + status), else just links it.
-- **News:** `/news [keyword]` lists or searches [Gentoo news items](https://www.gentoo.org/support/news-items/).
-- **Wiki search:** `/wiki <query>` searches the [Gentoo](https://wiki.gentoo.org) and [Arch](https://wiki.archlinux.org) wikis (MediaWiki), **preferring Simplified-Chinese pages** and falling back to the default page; other languages are filtered out.
-- **Forum search:** `/bbs <query>` returns inline results from the [Arch Linux CN](https://forum.archlinuxcn.org) forum (Chinese, via its Discourse API), plus one-tap site-search buttons for the major English forums (Gentoo, Arch BBS, Ubuntu, Debian) — Chinese first, English as backup.
-- **arm64 status:** `/arm <pkg>` shows a Gentoo package's **arm64 (aarch64) keyword status** — stable, ~testing, or not keyworded — so ARM users can tell at a glance whether it's available for their arch.
-- **Cross-distro arm64:** `/armpkgs <pkg>` checks arm64 support across **Gentoo, Debian, Ubuntu, Fedora, Arch Linux ARM and AUR** (each via its own per-arch API; AUR from the PKGBUILD `arch=()`). Handy when Gentoo hasn't keyworded a package for arm64 but other distros ship it — a strong hint it builds fine with `ACCEPT_KEYWORDS="~arm64"`.
-- **Cross-distro channel labels:** Debian/Ubuntu releases are labelled by their **live role** (`stable`/`testing`/`oldstable`/`LTS`), derived from `distro-info-data` rather than hardcoded — so "stable" follows the next Debian release automatically. The **RHEL ecosystem is split** into RHEL (the AlmaLinux/Rocky 1:1 rebuilds = the actual RHEL versions), **CentOS Stream** (the rolling upstream) and **EPEL**, since they're different products.
-- **Cross-distro search:** `/pkgs <pkg>` (alias `/distro`) shows a package's current version across **Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL/EPEL and openSUSE (Leap + Tumbleweed)** in one message, via the [Repology](https://repology.org) API — ecosystem variants on separate lines. Each version is annotated with the release it's from (e.g. Debian `(unstable)`, Fedora `(43)`, Alpine `(edge)`); each distro links to its package page; an unmatched query shows the closest match's table plus collapsible alternatives. Honors the `rich_messages` / `/rich` toggle like `/pkg` and `/use`.
-- **Auto-feed (optional).** Configure a `feed` (or a `feeds` array for several destinations) and the bot polls Gentoo Bugzilla + news every `interval_seconds` (default 300) and posts each **new** bug / news item to that channel (the bot must be an admin there with post rights). Each feed has its own language (`lang`) and filters, and all feeds share a single fetch per cycle. Deduped + restart-safe, and seeds a baseline on first run so there's no backlog flood. **When a posted bug is later resolved/closed, the bot edits its message in place** (🐞→✅, status updated) — independently per feed, in each feed's own language.
-- **Restart-safe:** in-progress verifications are persisted to disk and resumed after a restart (no orphaned challenges).
-- **Rich output (optional, off by default).** `/pkg` and `/use` can render as Bot API 10.1 rich messages (heading, lists, collapsible sections) — toggled per-config (`rich_messages`) or at runtime by the admin `/rich` command, with automatic fall-back to plain HTML. Off by default because older / third-party clients don't render rich messages; verification, `/bug` and `/news` always stay plain HTML.
-- The bot's own group messages auto-delete after a TTL to stay tidy; commands appear in Telegram's `/` menu (admin commands only shown to admins).
+**Join verification** — a join request is **not** auto-approved. The bot posts an in-group message @-mentioning the applicant with a `✅ 完成验证` deep-link; the applicant opens the bot, answers a randomized (crypto-shuffled) multiple-choice quiz in DM — optionally after joining a **required channel** (two-step DM prompt; private channels via `channel_invite_url`) — and only then is approved. Wrong answer / timeout declines. Each request also gets admin **👮 直接通过** / **🚫 举报并封禁** buttons.
+
+- **Anti-spam:** a failed verification declines with a cooldown (`verify_retry_seconds`, 180 s); after `verify_max_fails` (3) failures within a few hours the applicant is auto-banned. Strikes persist, reset on success, and age out.
+
+**Moderation** (admins, reply to a message):
+
+| Command | Action |
+| --- | --- |
+| `/mute [时长]` · `/unmute` | 禁言 — stays in group but can't post; timed (default 1 h, e.g. `/mute 30m`); `/unmute` lifts early |
+| `/ban` | 封禁 — remove from group; duration from `/bantime` (default permanent, or timed = rejoin after) |
+| `/sb` | 举报并封禁 — like `/ban` + delete **all** the user's messages |
+| `/warn` · `/clearwarn` | strike (auto-kick at `warn_limit`, default 3) · clear strikes |
+| `/bantime` | set the ban duration: `0`=permanent, or `7d`/`12h`/`30m` |
+| `/bc` | block channel sock-puppets + whitelist (needs privacy mode OFF; persists) |
+
+**Gentoo / Linux lookups** (also work in DM, rate-limited to `private_query_per_min`/min):
+
+| Command | Looks up |
+| --- | --- |
+| `/pkg <name>` | Gentoo package + version (official tree + `gentoo-zh`/`guru` overlays) |
+| `/use <pkg>` | a package's USE flags + info |
+| `/bug <id>` | a Gentoo Bugzilla bug |
+| `/news [kw]` | Gentoo news items |
+| `/wiki <kw>` | Gentoo / Arch wiki (Simplified-Chinese pages first) |
+| `/bbs <kw>` | Linux forums (Arch Linux CN inline + EN forum buttons) |
+| `/pkgs <pkg>` | cross-distro versions via [Repology](https://repology.org), labelled by release; RHEL ≠ CentOS Stream ≠ EPEL |
+| `/arm <pkg>` | a Gentoo package's arm64 keyword status |
+| `/armpkgs <pkg>` | cross-distro arm64 support (Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR) |
+
+**Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when it's resolved** (🐞→✅).
+
+**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; bot messages auto-delete after a TTL; optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/help`.
 
 ## Telegram setup
 
@@ -103,7 +105,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
 | `private_reply` | the unified auto-reply for DMs outside the verify flow (empty → built-in default) |
 | `block_channel_senders` | **initial** state of the channel sock-puppet filter (runtime toggle is `/bc`, persisted; default `false`; needs privacy mode OFF). Once `antispam.json` exists it is authoritative — editing this key afterward has no effect until that file is deleted |
-| `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow|deny`, persisted to `antispam.json`, which then takes precedence over this key) |
+| `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow` / `deny`, persisted to `antispam.json`, which then takes precedence over this key) |
 | `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
 | `questions` | **global default** quiz pool; one is picked at random, options shuffled (override per-group in `groups`) |
 
@@ -138,6 +140,8 @@ Uses long polling — no inbound port or reverse proxy needed.
 
 - Daily **stats** are in-memory and reset on restart. In-progress **verifications are persisted** to `$STATE_DIRECTORY/pending.json` and resumed (timers re-armed) after a restart when run under systemd (`StateDirectory=`); if `STATE_DIRECTORY` is unset they are kept in memory only.
 - The verification link relies on each group being **public**.
+- Admin commands must be sent **non-anonymously** — an anonymous-admin post appears as the group, not a user, so it won't pass the admin check.
+- Multi-group with **different** required channels: the DM follow-prompt covers the first pending group's channel — sharing one channel across groups is smoothest.
 - User-facing strings are **Simplified Chinese** (this bot targets the Gentoo zh community). All *operational* settings are in the config; to localize the wording, edit the string literals in the `.go` sources (mainly `verify.go`, `admin.go`, `commands.go`).
 
 ## License
