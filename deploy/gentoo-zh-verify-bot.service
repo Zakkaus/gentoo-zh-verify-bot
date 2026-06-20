@@ -12,16 +12,35 @@ StateDirectory=gentoo-zh-verify-bot
 Restart=on-failure
 RestartSec=5
 
-# hardening
+# resource cap: the bot is light (~50 MiB steady, brief peak while building the /pkg
+# cache); cap it so a runaway can't pressure anything else on the host.
+MemoryMax=512M
+
+# hardening — the bot only needs outbound HTTPS + its StateDirectory, nothing else.
 DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
