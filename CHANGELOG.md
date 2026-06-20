@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.4.3] - 2026-06-21
+
+### Changed
+- **Bug feed edits on ANY state change, not just resolution.** A tracked bug's message is now
+  re-rendered whenever its status *or* resolution changes — so an **UNCONFIRMED** bug (which
+  posts silently) that later becomes **CONFIRMED** / IN_PROGRESS has its message updated in place,
+  and on resolution still swaps 🐞→✅ and stops tracking. Tracking keys on `status|resolution`;
+  a redundant "message is not modified" edit is treated as success. Per feed, in each feed's
+  own language (EN + ZH both update).
+
 ## [3.4.2] - 2026-06-21
 
 Hardening from a fourth external review (no P0/P1 found; all prior fixes re-verified). P3 polish:
@@ -541,6 +551,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.4.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.3
 [3.4.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.2
 [3.4.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.1
 [3.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.0
