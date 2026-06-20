@@ -141,7 +141,10 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	help += "\n\n(以上查询命令私聊也能用,每分钟限次;审核/管理命令仅在群里有效。)"
-	_, _ = bot.SendMessage(c, htmlMessage(chatID, help))
+	// Plain text (no HTML parse mode): the help lists literal <包名> placeholders that would
+	// otherwise be misread as HTML tags and rejected by Telegram. The group path uses notify,
+	// which is also plain.
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(chatID), help))
 	return nil
 }
 
@@ -160,7 +163,7 @@ func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() st
 		v.notify(c, bot, msg.Chat.ID, fn())
 		return nil
 	}
-	_, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, fn())) // DM: reply plainly, no delete
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), fn())) // DM: reply as plain text, no delete
 	return nil
 }
 
