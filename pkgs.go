@@ -19,11 +19,6 @@ type repologyPkg struct {
 	Version string `json:"version"`
 }
 
-// distroFamilies maps Repology repo ids to the families /distro surfaces (a repo belongs
-// to a family if it equals one of its prefixes or starts with one, e.g. debian_12).
-// Variants of one ecosystem are listed separately (Fedora vs RHEL/EPEL, openSUSE Leap vs
-// Tumbleweed) since their versions differ a lot. search is a printf template
-// (%s = url-escaped project) to that distro's package page, so the label is clickable.
 // A distro family shown by /pkgs. A repo belongs to it if its id equals a prefix or starts
 // with "<prefix>_". search is a printf template (%s = url-escaped project) to the family's
 // package page. relabel (optional) maps a raw release label to a friendlier one — used to
@@ -155,12 +150,6 @@ func rollingRelease(label string) bool {
 
 type channelLine struct{ ver, label string }
 
-// familyChannels returns the versions to show for one distro family: the newest version
-// (its channel), plus the newest STABLE release when that differs — so e.g. Debian shows
-// both unstable and the current stable, while a package at the same version everywhere
-// stays a single line. The stable version's label is the highest-numbered release that
-// actually ships it (so Debian's stable shows "13"/trixie, not the higher "14"/forky that
-// carries a different version).
 // bestLabel returns the most representative release label for a given version among rows:
 // a rolling/dev channel that carries it (when preferRolling), otherwise the highest-numbered
 // release that ships it — so a version present in several releases is labelled by the newest
@@ -317,7 +306,7 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 // onPkgs handles /pkgs (and its alias /distro) — cross-distro package versions via Repology.
 func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

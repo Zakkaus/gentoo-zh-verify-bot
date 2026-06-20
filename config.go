@@ -90,6 +90,9 @@ type Config struct {
 	LookupTTLSeconds *int `json:"lookup_ttl_seconds"`
 	// WarnLimit: number of /warn strikes before the user is auto-kicked (default 3).
 	WarnLimit int `json:"warn_limit"`
+	// PrivateQueryPerMin: how many lookup queries (/pkg /use /bug …) a user may run per
+	// minute in a PRIVATE chat (anti-abuse; default 3). Guarded groups are never limited.
+	PrivateQueryPerMin int `json:"private_query_per_min"`
 	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).
 	Overlays []OverlayCfg `json:"overlays"`
 	// NewsURL: the Gentoo news-items index for /news (defaults to gentoo.org when empty).
@@ -181,6 +184,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.WarnLimit <= 0 {
 		c.WarnLimit = 3
+	}
+	if c.PrivateQueryPerMin <= 0 {
+		c.PrivateQueryPerMin = 3
 	}
 	if c.PrivateReply == "" {
 		c.PrivateReply = defaultPrivateReply

@@ -142,7 +142,7 @@ func alarmArmStatus(ctx context.Context, pkg string) string {
 // onArmpkgs handles /armpkgs <pkg> — cross-distro arm64 (aarch64) support.
 func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

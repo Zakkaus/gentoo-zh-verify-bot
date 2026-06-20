@@ -68,10 +68,11 @@ type Verifier struct {
 	acMu        sync.RWMutex // guards the channel-sock-puppet filter's runtime state
 	acOn        bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
 	acWhite     map[int64]bool
-	chanAlert   map[int64]time.Time // required-channel -> last "bot can't access" alert (throttle), guarded by mu
-	dmLast      map[int64]time.Time // user -> last DM auto-reply time (throttle), guarded by mu
-	lookupOn    bool                // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
-	lookupTTL   time.Duration       // how long before that deletion, guarded by mu
+	chanAlert   map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
+	dmLast      map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
+	queryHits   map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
+	lookupOn    bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
+	lookupTTL   time.Duration         // how long before that deletion, guarded by mu
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -107,7 +108,7 @@ func replyParams(msgID int) *telego.ReplyParameters {
 func NewVerifier(cfg *Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
-		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{},
+		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, queryHits: map[int64][]time.Time{},
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders}
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
@@ -147,8 +148,8 @@ func (v *Verifier) setLookupAutoDelete(ttl time.Duration, on bool) {
 // a fresh context because the timer fires minutes after the request context is done.
 func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID, respMsgID int) {
 	ttl, on := v.lookupAutoDelete()
-	if !on || respMsgID == 0 {
-		return
+	if !on || respMsgID == 0 || chatID >= 0 {
+		return // private chats have non-negative ids — nothing to keep tidy there
 	}
 	time.AfterFunc(ttl, func() {
 		_ = bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: respMsgID})
@@ -164,6 +165,54 @@ func msgID(m *telego.Message) int {
 		return 0
 	}
 	return m.MessageID
+}
+
+const privateQueryWindow = time.Minute
+
+// queryRateOK records a private-chat lookup for userID and reports whether it is within the
+// per-minute limit (sliding window, cfg.PrivateQueryPerMin). Groups are never rate-limited.
+func (v *Verifier) queryRateOK(userID int64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-privateQueryWindow)
+	kept := v.queryHits[userID][:0]
+	for _, t := range v.queryHits[userID] {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= v.cfg.PrivateQueryPerMin {
+		v.queryHits[userID] = kept
+		return false
+	}
+	v.queryHits[userID] = append(kept, now)
+	if len(v.queryHits) > dmMapMax { // bound the map: drop fully-expired users
+		for u, ts := range v.queryHits {
+			if len(ts) == 0 || !ts[len(ts)-1].After(cutoff) {
+				delete(v.queryHits, u)
+			}
+		}
+	}
+	return true
+}
+
+// queryAllowed reports whether a lookup command may run for this message: unlimited in a
+// guarded group, rate-limited per user in a private chat (anti-abuse), and not elsewhere. It
+// sends the rate-limit notice itself when a DM user is over the limit.
+func (v *Verifier) queryAllowed(ctx *th.Context, msg *telego.Message) bool {
+	if v.cfg.IsGroup(msg.Chat.ID) {
+		return true
+	}
+	if msg.Chat.Type == "private" && msg.From != nil {
+		if v.queryRateOK(msg.From.ID) {
+			return true
+		}
+		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(msg.Chat.ID),
+			fmt.Sprintf("⏳ 查询太频繁:私聊每分钟最多 %d 次,请稍后再试(在群里不限次)。", v.cfg.PrivateQueryPerMin)))
+		return false
+	}
+	return false
 }
 
 func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }

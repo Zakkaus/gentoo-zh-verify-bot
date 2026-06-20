@@ -55,7 +55,7 @@ func arm64Keywords(versions []pkgVersionJSON) (stable, testing string) {
 // not packaged for their arch.
 func (v *Verifier) onArm(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

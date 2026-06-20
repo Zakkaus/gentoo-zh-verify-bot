@@ -22,12 +22,19 @@ const dmMapMax = 10000
 // so a plain DM would otherwise get no response at all.
 const defaultPrivateReply = "👋 这是 Gentoo 中文社区的入群验证 + Gentoo/Linux 助手机器人。\n\n" +
 	"• 想入群:回到群里发起加入申请,再点群消息中的「✅ 点此完成验证」链接来这里答题。\n" +
-	"• 机器人命令(/pkg /use /bug /news /wiki /bbs 等)请在群里使用,私聊不处理。"
+	"• 查询命令(/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs)私聊也能直接用(每分钟有限次,防滥用;群里不限次)。\n" +
+	"• 审核/管理命令仅在群里有效。"
 
-// privateNonStart matches any message in a private chat EXCEPT the /start command (the
-// verification deep-link entry, which onStart handles). Registered before the command
-// handlers so that DM'd commands — which only work in groups and would otherwise no-op
-// silently — also get the unified auto-reply, while /start still reaches the verify flow.
+// queryCommands are the read-only lookup commands allowed in a private chat (rate-limited
+// per user). Everything else in a DM gets the unified auto-reply.
+var queryCommands = map[string]bool{
+	"pkg": true, "use": true, "bug": true, "news": true, "wiki": true,
+	"bbs": true, "distro": true, "pkgs": true, "arm": true, "armpkgs": true,
+}
+
+// privateNonStart matches a private-chat message that should get the unified auto-reply:
+// anything EXCEPT the /start verification deep link and the lookup query commands (which are
+// allowed in DM and handled — rate-limited — by their own handlers registered after this).
 func privateNonStart(_ context.Context, update telego.Update) bool {
 	m := update.Message
 	if m == nil || m.Chat.Type != "private" {
@@ -35,11 +42,14 @@ func privateNonStart(_ context.Context, update telego.Update) bool {
 	}
 	if fields := strings.Fields(m.Text); len(fields) > 0 {
 		cmd := fields[0]
-		if i := strings.IndexByte(cmd, '@'); i >= 0 { // strip /start@BotName
+		if i := strings.IndexByte(cmd, '@'); i >= 0 { // strip /cmd@BotName
 			cmd = cmd[:i]
 		}
 		if cmd == "/start" {
 			return false
+		}
+		if strings.HasPrefix(cmd, "/") && queryCommands[cmd[1:]] {
+			return false // a lookup command — let its (rate-limited) handler run
 		}
 	}
 	return true

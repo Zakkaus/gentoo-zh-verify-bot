@@ -491,7 +491,7 @@ func commandArg(text string) string {
 // onPkg handles /pkg <name> — searches the official tree + the configured overlays, with versions.
 func (v *Verifier) onPkg(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

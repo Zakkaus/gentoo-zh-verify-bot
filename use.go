@@ -506,7 +506,7 @@ func resolveUseSources(ctx context.Context, q string) map[string]*useSrc {
 // onUse handles /use <package> — show one package's USE flags + info (multi-source aware).
 func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

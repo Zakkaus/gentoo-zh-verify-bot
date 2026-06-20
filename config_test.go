@@ -99,3 +99,28 @@ func TestWarnLimitDefault(t *testing.T) {
 		t.Errorf("WarnLimit default = %d, want 3", c.WarnLimit)
 	}
 }
+
+// TestPrivateQueryRate verifies the per-minute DM lookup limit honours the config (default 3)
+// and is per-user; guarded groups are never limited.
+func TestPrivateQueryRate(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PrivateQueryPerMin != 3 {
+		t.Errorf("default PrivateQueryPerMin = %d, want 3", c.PrivateQueryPerMin)
+	}
+	v := NewVerifier(c)
+	pass := 0
+	for i := 0; i < 5; i++ {
+		if v.queryRateOK(7) {
+			pass++
+		}
+	}
+	if pass != 3 {
+		t.Errorf("user 7: %d/5 allowed, want 3", pass)
+	}
+	if !v.queryRateOK(8) { // a different user is independent
+		t.Errorf("user 8 should be allowed")
+	}
+}

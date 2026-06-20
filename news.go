@@ -91,7 +91,7 @@ func getNews(c context.Context) []newsItem {
 // onNews handles /news [keyword] — list recent Gentoo news, or filter by keyword.
 func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

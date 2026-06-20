@@ -59,7 +59,7 @@ func ddgSiteSearch(site, query string) string {
 // plus search-link buttons to the major English forums.
 func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()

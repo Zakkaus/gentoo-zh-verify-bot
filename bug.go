@@ -77,7 +77,7 @@ func fetchBug(ctx context.Context, id string) (bugInfo, bool) {
 // onBug handles /bug <id> — Gentoo Bugzilla quick lookup.
 func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || !v.queryAllowed(ctx, msg) {
 		return nil
 	}
 	bot := ctx.Bot()
