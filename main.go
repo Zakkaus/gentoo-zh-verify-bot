@@ -60,8 +60,11 @@ func main() {
 		log.Fatalf("GetMe failed (required for the verification deep link): %v", err)
 	}
 	v.botUsername = me.Username
-	log.Printf("verify bot @%s started — groups=%d channel=%d timeout=%ds questions=%d",
-		me.Username, len(cfg.GroupIDs), cfg.RequiredChannelID, cfg.TimeoutSeconds, len(cfg.Questions))
+	log.Printf("verify bot @%s started — groups=%d timeout=%ds", me.Username, len(cfg.Groups), cfg.TimeoutSeconds)
+	for i := range cfg.Groups {
+		g := &cfg.Groups[i]
+		log.Printf("  group %d: required_channel=%d questions=%d", g.ID, cfg.requiredChannel(g.ID), len(cfg.questions(g.ID)))
+	}
 	v.register(bh)
 	setupCommands(ctx, bot, cfg.WarnLimit)
 	sd := os.Getenv("STATE_DIRECTORY")

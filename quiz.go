@@ -2,10 +2,12 @@ package main
 
 import "math/rand"
 
-// randomQuestion picks a random question from the pool.
+// randomQuestion picks a random question from the group's pool (its own questions if
+// configured, otherwise the global pool).
 // (Go 1.20+ auto-seeds the global rand source, so no manual Seed is needed.)
-func (c *Config) randomQuestion() Question {
-	return c.Questions[rand.Intn(len(c.Questions))]
+func (c *Config) randomQuestion(gid int64) Question {
+	qs := c.questions(gid)
+	return qs[rand.Intn(len(qs))]
 }
 
 // shuffledQuestion returns the question text, its options in randomized order,

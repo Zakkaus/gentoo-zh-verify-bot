@@ -271,7 +271,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	uid := jr.From.ID
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 
-	q := v.cfg.randomQuestion()
+	q := v.cfg.randomQuestion(gid)
 	text, opts, correctIdx := shuffledQuestion(q)
 
 	mention := fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>", uid, html.EscapeString(displayName(&jr.From)))
@@ -282,8 +282,8 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	// Channel requirement is mentioned as plain text only — the actual follow
 	// button lives in the DM step, so users aren't sent away from the verify flow.
 	channelHint := ""
-	if v.cfg.RequiredChannelID != 0 {
-		channelHint = fmt.Sprintf("\n⚠️ 完成验证前还需先关注频道 %s。", html.EscapeString(v.cfg.ChannelDisplay))
+	if v.cfg.requiredChannel(gid) != 0 {
+		channelHint = fmt.Sprintf("\n⚠️ 完成验证前还需先关注频道 %s。", html.EscapeString(v.cfg.channelDisplay(gid)))
 	}
 	linkText := ""
 	if link != "" {
@@ -343,22 +343,40 @@ func (v *Verifier) hasPending(uid int64) bool {
 	return false
 }
 
+// firstPending returns the group id of one of the user's live verifications. Used to
+// resolve a single channel for the DM follow-prompt (groups usually share one channel);
+// the per-group channel is still enforced per group at answer time.
+func (v *Verifier) firstPending(uid int64) (int64, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for k, p := range v.pend {
+		if k.uid == uid && !p.done {
+			return k.gid, true
+		}
+	}
+	return 0, false
+}
+
 // sendDMChallenge runs when the applicant opens the bot via the deep link.
 // Two-step: if a channel is required and not yet joined, ask them to follow it
 // first (with a "I've followed, continue" button); otherwise send the quiz.
 func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64) {
-	if !v.hasPending(uid) {
+	gid, ok := v.firstPending(uid)
+	if !ok {
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), "你当前没有待处理的入群申请。请先在群里发起加入申请,再点群内的「✅ 点此完成验证」按钮。"))
 		return
 	}
-	if v.cfg.RequiredChannelID != 0 && !v.isChannelMember(c, bot, uid) {
+	// The follow-prompt uses the first pending group's channel (groups usually share one);
+	// the per-group channel is still enforced at answer time in onAnswer.
+	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		var rows [][]telego.InlineKeyboardButton
-		if curl := v.channelURL(); curl != "" {
-			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "📢 关注频道 " + v.cfg.ChannelDisplay, URL: curl}))
+		if curl := v.channelURL(gid); curl != "" {
+			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "📢 关注频道 " + v.cfg.channelDisplay(gid), URL: curl}))
 		}
-		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 我已关注,继续", CallbackData: recheckPrefix + strconv.FormatInt(uid, 10)}))
+		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 我已关注,继续",
+			CallbackData: recheckPrefix + strconv.FormatInt(gid, 10) + ":" + strconv.FormatInt(uid, 10)}))
 		_, _ = bot.SendMessage(c, htmlMessage(uid,
-			fmt.Sprintf("完成验证还差一步:请先关注频道 %s,关注后回到本对话点「✅ 我已关注,继续」。", v.channelLinkHTML())).
+			fmt.Sprintf("完成验证还差一步:请先关注频道 %s,关注后回到本对话点「✅ 我已关注,继续」。", v.channelLinkHTML(gid))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 		return
 	}
@@ -401,7 +419,13 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	uid, _ := strconv.ParseInt(strings.TrimPrefix(cq.Data, recheckPrefix), 10, 64)
+	parts := strings.SplitN(strings.TrimPrefix(cq.Data, recheckPrefix), ":", 2)
+	if len(parts) != 2 {
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
+		return nil
+	}
+	gid, _ := strconv.ParseInt(parts[0], 10, 64)
+	uid, _ := strconv.ParseInt(parts[1], 10, 64)
 	if cq.From.ID != uid {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证申请,无法操作。").WithShowAlert())
 		return nil
@@ -410,9 +434,9 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该验证已处理或已过期。"))
 		return nil
 	}
-	if v.cfg.RequiredChannelID != 0 && !v.isChannelMember(c, bot, uid) {
+	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(fmt.Sprintf("还没检测到你关注 %s,关注后再点一次。", v.cfg.ChannelDisplay)).WithShowAlert())
+			WithText(fmt.Sprintf("还没检测到你关注 %s,关注后再点一次。", v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
 	v.sendQuizzes(c, bot, uid)
@@ -462,9 +486,9 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("❌ 答错了,已拒绝。可重新申请。").WithShowAlert())
 		return nil
 	}
-	if !v.isChannelMember(c, bot, owner) {
+	if !v.isChannelMember(c, bot, gid, owner) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(fmt.Sprintf("请先关注频道 %s,关注后再点一次你的答案。", v.cfg.ChannelDisplay)).WithShowAlert())
+			WithText(fmt.Sprintf("请先关注频道 %s,关注后再点一次你的答案。", v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
 	if v.approve(c, bot, gid, owner) {
@@ -515,13 +539,14 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-func (v *Verifier) isChannelMember(c context.Context, bot *telego.Bot, userID int64) bool {
-	if v.cfg.RequiredChannelID == 0 {
+func (v *Verifier) isChannelMember(c context.Context, bot *telego.Bot, gid, userID int64) bool {
+	rc := v.cfg.requiredChannel(gid)
+	if rc == 0 {
 		return true
 	}
-	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(v.cfg.RequiredChannelID), UserID: userID})
+	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: userID})
 	if err != nil {
-		log.Printf("getChatMember(channel=%d user=%d): %v", v.cfg.RequiredChannelID, userID, err)
+		log.Printf("getChatMember(channel=%d user=%d): %v", rc, userID, err)
 		return false
 	}
 	switch cm.MemberStatus() {
@@ -535,23 +560,23 @@ func (v *Verifier) isChannelMember(c context.Context, bot *telego.Bot, userID in
 // channelURL returns a join link for the required channel: an explicit
 // channel_invite_url if set (needed for private channels with no @handle), else
 // the t.me link derived from an @handle, else "".
-func (v *Verifier) channelURL() string {
-	if v.cfg.ChannelInviteURL != "" {
-		return v.cfg.ChannelInviteURL
+func (v *Verifier) channelURL(gid int64) string {
+	if u := v.cfg.channelInvite(gid); u != "" {
+		return u
 	}
-	if d := v.cfg.ChannelDisplay; strings.HasPrefix(d, "@") {
+	if d := v.cfg.channelDisplay(gid); strings.HasPrefix(d, "@") {
 		return "https://t.me/" + d[1:]
 	}
 	return ""
 }
 
 // channelLinkHTML returns the channel as a clickable HTML link (or escaped text).
-func (v *Verifier) channelLinkHTML() string {
-	d := v.cfg.ChannelDisplay
+func (v *Verifier) channelLinkHTML(gid int64) string {
+	d := v.cfg.channelDisplay(gid)
 	if d == "" {
 		d = "管理员指定的频道"
 	}
-	if u := v.channelURL(); u != "" {
+	if u := v.channelURL(gid); u != "" {
 		return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(d))
 	}
 	return html.EscapeString(d)
