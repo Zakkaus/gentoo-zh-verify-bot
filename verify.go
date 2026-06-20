@@ -180,6 +180,12 @@ func (v *Verifier) load(bot *telego.Bot) {
 }
 
 func (v *Verifier) register(bh *th.BotHandler) {
+	// Contain a panic in any single handler (e.g. an unexpected nil) so one bad
+	// update can't take the whole bot down — the update is dropped, the bot lives.
+	bh.Use(th.PanicRecoveryHandler(func(recovered any) error {
+		log.Printf("recovered from handler panic: %v", recovered)
+		return nil
+	}))
 	bh.Handle(v.onAnswer, th.CallbackDataPrefix(answerPrefix))
 	bh.Handle(v.onAdminAction, th.CallbackDataPrefix(adminPrefix))
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))
