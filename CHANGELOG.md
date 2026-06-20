@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.3] - 2026-06-20
+
+### Changed
+- `/pkgs` shows a distro's **rolling/dev channel AND its current stable** on separate lines
+  when they differ (e.g. Debian `152.0.1 (unstable)` + `140.12.0 (13)`), like the Gentoo
+  amd64/~amd64 split — instead of only the newest. The stable is labelled by the highest
+  release that actually ships it (Debian → `13`/trixie, not `14`/forky), and a package at one
+  version everywhere stays a single line (labelled by its rolling channel when applicable).
+
 ## [2.5.2] - 2026-06-20
 
 ### Changed
@@ -275,6 +284,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.3
 [2.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.2
 [2.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.1
 [2.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.0
