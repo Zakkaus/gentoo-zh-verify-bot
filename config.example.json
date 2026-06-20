@@ -12,6 +12,7 @@
   "warn_limit": 3,
   "private_query_per_min": 3,
   "ban_seconds": 0,
+  "mute_seconds": 3600,
   "verify_retry_seconds": 180,
   "verify_max_fails": 3,
   "required_channel_fail_open": true,

@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.4.0] - 2026-06-21
+
+Mute/unmute + bug-feed resolved-edits, plus two more full-repo adversarial reviews (each
+finding verified) — a HIGH verification race and a batch of robustness fixes.
+
+### Added
+- **`/mute` / `/unmute`** (admins, reply to a message) — **timed mute (禁言)**: the user stays
+  in the group but can't post. No-arg uses `mute_seconds` (default **1h**); an inline duration
+  overrides it (`/mute 30m`, `/mute 12h`). Always timed (Telegram auto-lifts on expiry);
+  `/unmute` lifts it early. (No permanent mute by design.)
+- **Bug-feed `#RESOLVED` edits** — when a posted bug is later resolved/closed, the feed **edits
+  its message in place** (🐞→✅, status updated), independently per feed and **in each feed's own
+  language** (so the EN and ZH bug channels both update).
+
+### Changed
+- **`/sb` vs `/ban` now differ**: `/sb` = 举报并封禁 — **deletes all of the user's messages**
+  (spam cleanup) + bans; `/ban` = ban — deletes only the replied message + bans.
+- Per-feed **`interval_seconds` is now honoured** — each feed posts on its own interval (the
+  shared fetch still runs once per due cycle), instead of every feed following the global minimum.
+
+### Fixed
+- **HIGH — stale verification timeout race.** A timed-out attempt's timer could `consume` a
+  *freshly re-issued* pending under the same user (it keyed only on group+user), silently
+  declining + striking + potentially auto-banning a legitimate re-applicant. Decline is now
+  **identity-checked by a per-pending nonce** (`consumeNonce`), and a replaced pending is marked
+  done.
+- Config-supplied **`ban_seconds` / `mute_seconds` are clamped** to Telegram's honoured window
+  (`<30s`→30s, `>366d`→permanent/cap), like the runtime paths — so a config value can't silently
+  become a permanent ban/mute reported as finite.
+- **Feed robustness:** a corrupt state file (null tracked entry) no longer crashes the bot (skip
+  + the poll loop now `recover`s); a permanently-uneditable resolved message is dropped instead
+  of retried forever; `flattenAtoms`/summary/keywords truncate by **rune** (no invalid UTF-8) and
+  are length-capped so a pathological bug can't wedge the feed; dropped two over-fetched Bugzilla
+  fields the decoder ignored.
+- `/mute` now applies the restriction **before** deleting the offending message (a permission
+  failure no longer deletes a message while leaving the user unmuted).
+- `/bug` "not found" reply is now reply-linked + auto-deleted like every other lookup (was the
+  lone path that lingered).
+- `ensureReleaseInfo` clears its in-flight flag via `defer` (a panic can't freeze `/pkgs` labels).
+
+### Internal
+- `moderate()` now reuses the shared `warnPrecheck` (admin-gate + reply-target + skip-admins),
+  so all six reply-target moderation commands share one precheck. README `/mutetime` references
+  corrected to the inline form; zh-CN privacy-mode setup note clarified (only `/bc` needs it off).
+  Added tests for the nonce identity-check, the duration clamps, and rune-safe truncation.
+
 ## [3.3.0] - 2026-06-21
 
 Configurable ban duration + verification anti-spam, plus fixes from an external code review
@@ -463,6 +509,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.0
 [3.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.3.0
 [3.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.2.0
 [3.1.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.1.3

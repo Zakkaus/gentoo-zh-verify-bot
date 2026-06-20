@@ -94,3 +94,53 @@ func TestVerifyStrikeDecay(t *testing.T) {
 		t.Errorf("after window elapsed, strike = (%d,%v), want fresh (1,false)", count, ban)
 	}
 }
+
+// TestConsumeNonceIdentity covers the stale-timer fix: a decline/timeout carrying an OLD nonce
+// must not consume a freshly re-issued pending (same gid,uid, new nonce).
+func TestConsumeNonceIdentity(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewVerifier(c)
+	key := pkey{-100, 42}
+	v.pend[key] = &pending{nonce: "NEW"}
+	if _, ok := v.consumeNonce(-100, 42, "OLD"); ok {
+		t.Error("stale nonce must NOT consume the fresh pending")
+	}
+	if _, ok := v.pend[key]; !ok {
+		t.Error("fresh pending must survive a stale-nonce consume attempt")
+	}
+	if _, ok := v.consumeNonce(-100, 42, "NEW"); !ok {
+		t.Error("matching nonce should consume")
+	}
+	if _, ok := v.pend[key]; ok {
+		t.Error("pending should be gone after a matching consume")
+	}
+}
+
+// TestConfigClampDurations: out-of-window config ban/mute durations are normalized at load so the
+// reported duration matches what Telegram enforces.
+func TestConfigClampDurations(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids": []int{-100}, "questions": sampleQ, "ban_seconds": 10, "mute_seconds": 10,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BanSeconds != 30 || c.MuteSeconds != 30 {
+		t.Errorf("sub-30s clamp: ban=%d mute=%d, want 30/30", c.BanSeconds, c.MuteSeconds)
+	}
+	c2, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids": []int{-100}, "questions": sampleQ, "ban_seconds": 40000000, "mute_seconds": 40000000,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.BanSeconds != 0 { // >366d ban => permanent
+		t.Errorf("over-366d ban_seconds should clamp to 0 (permanent), got %d", c2.BanSeconds)
+	}
+	if c2.MuteSeconds != telegramBanMax { // mute can't be permanent => capped
+		t.Errorf("over-366d mute_seconds should cap to %d, got %d", telegramBanMax, c2.MuteSeconds)
+	}
+}
