@@ -30,13 +30,18 @@ type feedState struct {
 }
 
 type trackedBug struct {
-	MsgID  int    `json:"msg_id"`
-	Status string `json:"status"` // last-known status (for diagnostics)
+	MsgID int    `json:"msg_id"`
+	State string `json:"state"` // last-rendered state key (status|resolution); edit when it changes
 }
 
-// trackBug remembers the message posted for an OPEN bug so a later resolution can edit it.
-// Resolved bugs aren't tracked (nothing to update); the map is bounded by maxTracked, dropping
-// the lowest (oldest) bug id when full.
+// bugStateKey captures a bug's *displayed* state (status + resolution) so the feed only edits a
+// tracked message when something visible actually changed — e.g. UNCONFIRMED -> CONFIRMED, or a
+// resolution being set.
+func bugStateKey(b recentBug) string { return b.Status + "|" + b.Resolution }
+
+// trackBug remembers the message posted for an OPEN bug so a later status change / resolution can
+// edit it in place. Resolved bugs aren't tracked (nothing left to update); the map is bounded by
+// maxTracked, dropping the lowest (oldest) bug id when full.
 func (st *feedState) trackBug(b recentBug, msgID int) {
 	if msgID == 0 || bugResolved(b) {
 		return
@@ -56,7 +61,7 @@ func (st *feedState) trackBug(b recentBug, msgID int) {
 		}
 		delete(st.Tracked, strconv.Itoa(oldest))
 	}
-	st.Tracked[strconv.Itoa(b.ID)] = &trackedBug{MsgID: msgID, Status: b.Status}
+	st.Tracked[strconv.Itoa(b.ID)] = &trackedBug{MsgID: msgID, State: bugStateKey(b)}
 }
 
 type bugUser struct {
@@ -277,10 +282,12 @@ func formatBugResolved(b recentBug, lang string) string {
 	return strings.Replace(formatBug(b, lang), "🐞", "✅", 1)
 }
 
-// resolveTracked edits the feed messages of any tracked bugs that have since been resolved
-// (using the freshly-fetched statuses in byID), then stops tracking them. Best-effort: an edit
-// failure is logged and the bug stays tracked for a retry next cycle.
-func resolveTracked(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feedState, byID map[int]recentBug) {
+// refreshTracked edits the feed message of any tracked bug whose displayed state changed since
+// it was posted — a status transition (e.g. an UNCONFIRMED bug becoming CONFIRMED / IN_PROGRESS)
+// or a resolution (🐞 -> ✅, after which the bug is untracked). Runs per feed, in the feed's own
+// language. Best-effort: a transient edit failure keeps the bug tracked for a retry; a permanent
+// one (message deleted / uneditable) drops it.
+func refreshTracked(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feedState, byID map[int]recentBug) {
 	for idStr, tb := range st.Tracked {
 		id, err := strconv.Atoi(idStr)
 		if err != nil || tb == nil { // bad id or a null entry (e.g. hand-edited state) — drop it
@@ -291,26 +298,41 @@ func resolveTracked(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *fee
 		if !ok {
 			continue // not in this refresh batch — keep tracking
 		}
-		if !bugResolved(b) {
-			tb.Status = b.Status // still open; refresh last-known status
-			continue
+		cur := bugStateKey(b)
+		if cur == tb.State {
+			continue // nothing visible changed
 		}
-		edit := htmlMessage(f.ChatID, formatBugResolved(b, f.Lang))
-		if _, eerr := bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+		text := formatBug(b, f.Lang)
+		if bugResolved(b) {
+			text = formatBugResolved(b, f.Lang) // 🐞 -> ✅
+		}
+		edit := htmlMessage(f.ChatID, text)
+		_, eerr := bot.EditMessageText(ctx, &telego.EditMessageTextParams{
 			ChatID:             tu.ID(f.ChatID),
 			MessageID:          tb.MsgID,
 			Text:               edit.Text,
 			ParseMode:          edit.ParseMode,
 			LinkPreviewOptions: edit.LinkPreviewOptions,
-		}); eerr != nil {
-			log.Printf("feed: edit resolved bug %d in %d: %v", id, f.ChatID, eerr)
-			if permanentEditErr(eerr) {
-				delete(st.Tracked, idStr) // message gone/uneditable — stop retrying it forever
+		})
+		switch {
+		case eerr == nil || isNotModified(eerr): // edited (or already current) — sync our state
+			tb.State = cur
+			if bugResolved(b) {
+				delete(st.Tracked, idStr) // terminal — stop tracking
 			}
-			continue // transient: keep tracking, retry next cycle
+		case permanentEditErr(eerr):
+			log.Printf("feed: drop tracked bug %d in %d (uneditable): %v", id, f.ChatID, eerr)
+			delete(st.Tracked, idStr)
+		default:
+			log.Printf("feed: edit tracked bug %d in %d: %v", id, f.ChatID, eerr) // transient — retry next cycle
 		}
-		delete(st.Tracked, idStr) // resolved + edited — done
 	}
+}
+
+// isNotModified reports whether an edit failed only because the new text equals the current text
+// (Telegram "message is not modified") — treated as success since the message is already correct.
+func isNotModified(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "message is not modified")
 }
 
 // permanentEditErr reports whether a message edit can never succeed (the message was deleted or
@@ -474,7 +496,7 @@ func pollAll(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, states m
 		st := states[f.ChatID]
 		postFeedItems(ctx, bot, f, st, bugs, news)
 		if len(byID) > 0 {
-			resolveTracked(ctx, bot, f, st, byID)
+			refreshTracked(ctx, bot, f, st, byID)
 		}
 		saveFeedState(feedStatePath(stateDir, f.ChatID), *st)
 		nextDue[f.ChatID] = now.Add(f.interval()) // honour THIS feed's own interval

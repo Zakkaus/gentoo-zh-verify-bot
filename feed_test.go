@@ -121,8 +121,31 @@ func TestBugTracking(t *testing.T) {
 	}
 }
 
+// TestBugStateKey covers the status+resolution state key that drives in-place edits, and that an
+// unchanged state doesn't attempt an edit (a matching bug must be skipped, not re-rendered).
+func TestBugStateKey(t *testing.T) {
+	if bugStateKey(recentBug{Status: "UNCONFIRMED"}) == bugStateKey(recentBug{Status: "CONFIRMED"}) {
+		t.Error("UNCONFIRMED vs CONFIRMED must have distinct state keys (so a confirm triggers an edit)")
+	}
+	if bugStateKey(recentBug{Status: "RESOLVED", Resolution: "FIXED"}) == bugStateKey(recentBug{Status: "RESOLVED", Resolution: "WONTFIX"}) {
+		t.Error("different resolutions must have distinct state keys")
+	}
+	var st feedState
+	b := recentBug{ID: 200, Status: "UNCONFIRMED"}
+	st.trackBug(b, 7001)
+	if st.Tracked["200"] == nil || st.Tracked["200"].State != bugStateKey(b) {
+		t.Fatalf("trackBug should store the state key, got %+v", st.Tracked["200"])
+	}
+	// Unchanged state in the refresh batch => skipped before any edit (nil bot is safe only
+	// because no edit is attempted); the bug stays tracked.
+	refreshTracked(context.Background(), nil, &FeedConfig{ChatID: -1, Lang: "en"}, &st, map[int]recentBug{200: b})
+	if st.Tracked["200"] == nil {
+		t.Error("an unchanged bug must stay tracked (no edit, no drop)")
+	}
+}
+
 // TestCapRunesAndNilTracked covers the rune-safe truncation and the nil-tracked-entry guard
-// (a hand-edited state file with a null entry must not crash resolveTracked).
+// (a hand-edited state file with a null entry must not crash refreshTracked).
 func TestCapRunesAndNilTracked(t *testing.T) {
 	if got := capRunes("abcdef", 4); got != "abc…" {
 		t.Errorf("capRunes(abcdef,4) = %q, want abc…", got)
@@ -134,7 +157,7 @@ func TestCapRunesAndNilTracked(t *testing.T) {
 		t.Errorf("capRunes produced invalid UTF-8: %q", got)
 	}
 	st := &feedState{Tracked: map[string]*trackedBug{"100": nil}}
-	resolveTracked(context.Background(), nil, &FeedConfig{ChatID: -1, Lang: "en"}, st, map[int]recentBug{100: {Status: "CONFIRMED"}})
+	refreshTracked(context.Background(), nil, &FeedConfig{ChatID: -1, Lang: "en"}, st, map[int]recentBug{100: {Status: "CONFIRMED"}})
 	if _, ok := st.Tracked["100"]; ok {
 		t.Error("a nil tracked entry should be dropped (not panic)")
 	}
