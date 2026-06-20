@@ -185,6 +185,16 @@ func formatNews(n newsItem) string {
 		html.EscapeString(n.url), n.date, html.EscapeString(html.UnescapeString(n.title)))
 }
 
+// bugSilent reports whether a feed bug should be posted WITHOUT a notification:
+// UNCONFIRMED bugs are silent (a fresh report may be a false alarm); confirmed ones
+// notify. silent_bugs=true forces every bug silent regardless of status.
+func (f *FeedConfig) bugSilent(b recentBug) bool {
+	if f.SilentBugs != nil && *f.SilentBugs {
+		return true
+	}
+	return strings.EqualFold(b.Status, "UNCONFIRMED")
+}
+
 // matchesBug reports whether a bug passes this feed's optional product/component filter.
 func (f *FeedConfig) matchesBug(b recentBug) bool {
 	if f.BugProduct != "" && !strings.EqualFold(b.Product, f.BugProduct) {
@@ -217,7 +227,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 			}
 			delivered := true
 			for i := len(nb) - 1; i >= 0; i-- { // oldest first
-				if !postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.silentBugs()) {
+				if !postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.bugSilent(nb[i])) {
 					delivered = false // leave the cursor so the next cycle retries this item
 					break
 				}

@@ -32,12 +32,11 @@ type FeedConfig struct {
 	News            *bool  `json:"news"`             // post new news items (default true)
 	BugProduct      string `json:"bug_product"`      // only bugs in this Bugzilla product (empty = all)
 	BugComponent    string `json:"bug_component"`    // only bugs in this component (empty = all)
-	SilentBugs      *bool  `json:"silent_bugs"`      // post bugs without a notification (default true)
+	SilentBugs      *bool  `json:"silent_bugs"`      // true => all bugs silent; unset => only UNCONFIRMED silent (see bugSilent)
 }
 
-func (f *FeedConfig) bugsOn() bool     { return f.Bugs == nil || *f.Bugs }
-func (f *FeedConfig) newsOn() bool     { return f.News == nil || *f.News }
-func (f *FeedConfig) silentBugs() bool { return f.SilentBugs == nil || *f.SilentBugs }
+func (f *FeedConfig) bugsOn() bool { return f.Bugs == nil || *f.Bugs }
+func (f *FeedConfig) newsOn() bool { return f.News == nil || *f.News }
 
 // interval is the poll interval, defaulting to 5 min with a 60 s floor.
 func (f *FeedConfig) interval() time.Duration {
