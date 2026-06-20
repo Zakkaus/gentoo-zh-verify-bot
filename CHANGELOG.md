@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.2] - 2026-06-20
+
+### Changed
+- `/armpkgs` output is tidier: each distro is a **clickable link** to its package page, and
+  Debian/Ubuntu show just the newest arm64 channel (not three) with a shorter footer.
+- `/pkgs` Debian/Ubuntu links now point to the **clean package pages** (tracker.debian.org,
+  Launchpad) instead of the cluttered `packages.debian.org` / `packages.ubuntu.com` search.
+
 ## [2.5.1] - 2026-06-20
 
 ### Internal
@@ -267,6 +275,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[2.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.2
 [2.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.1
 [2.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.5.0
 [2.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v2.4.0
