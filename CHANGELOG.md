@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.4.1] - 2026-06-21
+
+### Changed
+- Tidied the `/help` text and the Telegram slash-command **menu** to be short and accurate
+  (the menu truncates long descriptions): dropped the `= /distro` note and the long inline
+  distro lists, grouped the admin commands, and shortened every menu entry. `/distro` stays a
+  working (unadvertised) alias of `/pkgs`.
+
 ## [3.4.0] - 2026-06-21
 
 Mute/unmute + bug-feed resolved-edits, plus two more full-repo adversarial reviews (each
@@ -509,6 +517,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.4.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.1
 [3.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.0
 [3.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.3.0
 [3.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.2.0
