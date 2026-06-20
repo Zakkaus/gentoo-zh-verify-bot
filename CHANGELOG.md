@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-06-20
+
+### Added
+- **`/distro <pkg>`** — cross-distro package version lookup via the Repology API,
+  showing the current version in AUR, Arch, Debian, Ubuntu, Nixpkgs, openSUSE and
+  Fedora in one message.
+
 ## [1.5.4] - 2026-06-20
 
 ### Changed
@@ -128,6 +135,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[1.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.6.0
 [1.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.4
 [1.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.3
 [1.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v1.5.2

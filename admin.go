@@ -85,6 +85,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
 		"/wiki <关键词> — 搜索 Gentoo / Arch wiki(含中文页)\n" +
 		"/bbs <关键词> — 搜各大 Linux 论坛(中文优先)\n" +
+		"/distro <包名> — 跨发行版查版本(AUR/Arch/Debian/Ubuntu/Nix/openSUSE/Fedora)\n" +
 		"/ping — 机器人状态 / 运行时长\n" +
 		"/stats — 今日通过 / 拒绝人数\n" +
 		"/help — 显示本帮助"
