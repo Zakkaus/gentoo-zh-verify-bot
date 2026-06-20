@@ -44,6 +44,30 @@ func TestBetterVer(t *testing.T) {
 	}
 }
 
+// TestReleaseLabel checks the repo-id → release-name annotation shown next to each
+// distro's version (rolling repos with no per-release suffix yield no label).
+func TestReleaseLabel(t *testing.T) {
+	for _, c := range []struct {
+		repo, want string
+		prefixes   []string
+	}{
+		{"debian_unstable", "unstable", []string{"debian_"}},
+		{"ubuntu_24_04", "24.04", []string{"ubuntu_"}},
+		{"fedora_rawhide", "rawhide", []string{"fedora_"}},
+		{"fedora_41", "41", []string{"fedora_"}},
+		{"alpine_3_21", "3.21", []string{"alpine_"}},
+		{"alpine_edge", "edge", []string{"alpine_"}},
+		{"opensuse_leap_15_6", "15.6", []string{"opensuse_leap"}},
+		{"almalinux_9", "9", []string{"epel_", "centos_", "almalinux_", "rockylinux_", "rhel_"}},
+		{"arch", "", []string{"arch"}},                            // rolling, exact prefix -> no label
+		{"opensuse_tumbleweed", "", []string{"opensuse_tumbleweed"}}, // rolling
+	} {
+		if got := releaseLabel(c.repo, c.prefixes); got != c.want {
+			t.Errorf("releaseLabel(%q) = %q, want %q", c.repo, got, c.want)
+		}
+	}
+}
+
 // TestFamOf maps Repology repo ids to the displayed family, including the multi-prefix
 // families (RHEL/EPEL) and the split openSUSE variants.
 func TestFamOf(t *testing.T) {

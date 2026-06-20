@@ -121,6 +121,25 @@ func repologyVersionsURL(proj string) string {
 	return "https://repology.org/project/" + neturl.PathEscape(proj) + "/versions"
 }
 
+// releaseLabel turns the Repology repo id of a family's winning version into a short
+// release name shown in parentheses — so e.g. debian_unstable -> "unstable" (sid),
+// ubuntu_25_04 -> "25.04", fedora_rawhide -> "rawhide", alpine_3_21 -> "3.21". A rolling
+// repo with no per-release suffix (arch, aur, opensuse_tumbleweed) yields "" (no label).
+func releaseLabel(repo string, prefixes []string) string {
+	s := repo
+	for _, p := range prefixes {
+		if strings.HasPrefix(repo, p) {
+			s = strings.TrimPrefix(repo, p)
+			break
+		}
+	}
+	s = strings.TrimLeft(s, "_")
+	if s == "" || s == repo { // exact-prefix (rolling) repo, or no prefix matched
+		return ""
+	}
+	return strings.ReplaceAll(s, "_", ".")
+}
+
 // fetchRepology resolves a package via Repology. On an exact project match it returns that
 // project (exact=true). Otherwise it picks the closest project that is actually packaged in
 // the distros we show — ranked by distro coverage — as the result, plus a few alternatives,
@@ -196,20 +215,22 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 
-	// newest version per family from Repology
-	best := map[string]string{}
+	// newest version per family from Repology, remembering which repo (release) it came from
+	type famVer struct{ ver, repo string }
+	best := map[string]famVer{}
 	for _, p := range pkgs {
 		if fam := famOf(p.Repo); fam != "" && p.Version != "" {
-			if cur, ok := best[fam]; !ok || betterVer(cur, p.Version) {
-				best[fam] = p.Version
+			if cur, ok := best[fam]; !ok || betterVer(cur.ver, p.Version) {
+				best[fam] = famVer{p.Version, p.Repo}
 			}
 		}
 	}
 
 	// Build the displayed lines. Gentoo is special: use the bot's own packages.gentoo.org
 	// data so amd64-stable and ~amd64 testing show on SEPARATE lines (Repology can't express
-	// Gentoo keyword status). All other families come from Repology, one line each.
-	type distroLine struct{ label, ver, url string }
+	// Gentoo keyword status). All other families come from Repology, one line each, annotated
+	// with the release the version is from (so e.g. Debian shows it's from unstable/sid).
+	type distroLine struct{ label, ver, rel, url string }
 	var lines []distroLine
 	if atoms := searchMainTree(hc, proj); len(atoms) > 0 {
 		atom := atoms[0]
@@ -218,11 +239,11 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 			stable, testing := pkgVersion(hc, atom)
 			switch {
 			case stable != "" && testing != "" && stable != testing:
-				lines = append(lines, distroLine{"Gentoo amd64", stable, gURL}, distroLine{"Gentoo ~amd64", testing, gURL})
+				lines = append(lines, distroLine{"Gentoo amd64", stable, "", gURL}, distroLine{"Gentoo ~amd64", testing, "", gURL})
 			case testing != "":
-				lines = append(lines, distroLine{"Gentoo ~amd64", testing, gURL})
+				lines = append(lines, distroLine{"Gentoo ~amd64", testing, "", gURL})
 			case stable != "":
-				lines = append(lines, distroLine{"Gentoo amd64", stable, gURL})
+				lines = append(lines, distroLine{"Gentoo amd64", stable, "", gURL})
 			}
 		}
 	}
@@ -230,14 +251,14 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 	for _, f := range distroFamilies {
 		if f.label == "Gentoo" {
 			if len(lines) == 0 { // bot lookup found nothing -> fall back to Repology's gentoo version
-				if ver, ok := best["Gentoo"]; ok {
-					lines = append(lines, distroLine{"Gentoo", ver, fmt.Sprintf(f.search, qproj)})
+				if fv, ok := best["Gentoo"]; ok {
+					lines = append(lines, distroLine{"Gentoo", fv.ver, "", fmt.Sprintf(f.search, qproj)})
 				}
 			}
 			continue
 		}
-		if ver, ok := best[f.label]; ok {
-			lines = append(lines, distroLine{f.label, ver, fmt.Sprintf(f.search, qproj)})
+		if fv, ok := best[f.label]; ok {
+			lines = append(lines, distroLine{f.label, fv.ver, releaseLabel(fv.repo, f.prefixes), fmt.Sprintf(f.search, qproj)})
 		}
 	}
 	if len(lines) == 0 {
@@ -254,8 +275,12 @@ func (v *Verifier) onDistro(ctx *th.Context, update telego.Update) error {
 	rich.WriteString("<h3>" + head + "</h3><ul>")
 	for _, ln := range lines {
 		famLink := fmt.Sprintf("<a href=\"%s\">%s</a>", esc(ln.url), esc(ln.label))
-		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s", famLink, esc(ln.ver))
-		fmt.Fprintf(&rich, "<li><b>%s</b>:%s</li>", famLink, esc(ln.ver))
+		rel := ""
+		if ln.rel != "" {
+			rel = fmt.Sprintf(" <i>(%s)</i>", esc(ln.rel))
+		}
+		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s%s", famLink, esc(ln.ver), rel)
+		fmt.Fprintf(&rich, "<li><b>%s</b>:%s%s</li>", famLink, esc(ln.ver), rel)
 	}
 	rich.WriteString("</ul>")
 	if len(alts) > 0 {
