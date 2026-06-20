@@ -64,33 +64,34 @@ func newNonce() string {
 // (keyed by group+user), the daily approve/decline counters, and the enabled /
 // rich-output toggles. All mutable fields are guarded by mu.
 type Verifier struct {
-	cfg         *Config
-	botUsername string
-	botID       int64
-	statePath   string
-	warnPath    string
-	acPath      string
-	loc         *time.Location
-	startTime   time.Time
-	mu          sync.Mutex
-	pend        map[pkey]*pending
-	warns       map[pkey]int // group+user -> warning count (persisted)
-	enabled     bool
-	rich        bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
-	statDate    string
-	approved    int
-	declined    int
-	acMu        sync.RWMutex // guards the channel-sock-puppet filter's runtime state
-	acOn        bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
-	acWhite     map[int64]bool
-	chanAlert   map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
-	dmLast      map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
-	queryHits   map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
-	lookupOn    bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
-	lookupTTL   time.Duration         // how long before that deletion, guarded by mu
-	banSecs     int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
-	vfail       map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
-	vfailPath   string                // persistence path for vfail
+	cfg          *Config
+	botUsername  string
+	botID        int64
+	statePath    string
+	warnPath     string
+	acPath       string
+	loc          *time.Location
+	startTime    time.Time
+	mu           sync.Mutex
+	pend         map[pkey]*pending
+	warns        map[pkey]int // group+user -> warning count (persisted)
+	enabled      bool
+	rich         bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
+	statDate     string
+	approved     int
+	declined     int
+	acMu         sync.RWMutex // guards the channel-sock-puppet filter's runtime state
+	acOn         bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
+	acWhite      map[int64]bool
+	chanAlert    map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
+	dmLast       map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
+	queryHits    map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
+	lookupOn     bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
+	lookupTTL    time.Duration         // how long before that deletion, guarded by mu
+	banSecs      int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
+	vfail        map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
+	vfailPath    string                // persistence path for vfail
+	settingsPath string                // persistence path for runtime settings (verification enabled state)
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -272,7 +273,7 @@ func (v *Verifier) queryAllowed(ctx *th.Context, msg *telego.Message) bool {
 }
 
 func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }
-func (v *Verifier) setEnabled(b bool) { v.mu.Lock(); v.enabled = b; v.mu.Unlock() }
+func (v *Verifier) setEnabled(b bool) { v.mu.Lock(); v.enabled = b; v.mu.Unlock(); v.saveSettings() }
 
 func (v *Verifier) isRichEnabled() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.rich }
 func (v *Verifier) toggleRich() bool {
