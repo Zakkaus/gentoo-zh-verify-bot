@@ -37,7 +37,6 @@
     {"q": "Gentoo 官方的包管理器是哪个?", "options": ["Portage", "apt", "pacman", "dnf"], "answer": 0},
     {"q": "在 Gentoo 上安装软件最常用的命令是?", "options": ["emerge", "apt install", "yum install", "brew install"], "answer": 0},
     {"q": "Gentoo 是一个什么类型的发行版?", "options": ["源码编译型", "纯二进制不可编译", "只能用于手机", "闭源商业系统"], "answer": 0},
-    {"q": "Gentoo 默认可用的 init 系统之一是?", "options": ["OpenRC", "launchd", "Windows 服务", "系统注册表"], "answer": 0},
     {"q": "Gentoo 官方的用户维护 overlay(GURU)是用来放什么的?", "options": ["用户贡献的软件包", "病毒样本", "游戏存档", "桌面壁纸"], "answer": 0},
     {"q": "Linux 内核最初是由谁创造的?", "options": ["Steve Jobs", "Linus Torvalds", "Bill Gates", "Mark Zuckerberg"], "answer": 1},
     {"q": "在 Linux / 类 Unix 系统中,用来列出当前目录下文件的常用命令是?", "options": ["show", "list-files", "ls", "dir.exe"], "answer": 2},
