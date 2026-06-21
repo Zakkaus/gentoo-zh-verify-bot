@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # Go module dependencies (the only runtime dep is telego; this also flags indirect bumps).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  # GitHub Actions used by the CI workflow.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
