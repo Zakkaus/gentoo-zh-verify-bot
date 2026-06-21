@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.3] - 2026-06-21
+
+### Changed
+- **Feed confirm notice now replies to the original bug post.** When a tracked bug leaves
+  UNCONFIRMED, the 🔔 notice is sent as a Telegram *reply* to that bug's original feed message
+  rather than a disconnected new message — so it stays linked to the original (a tap jumps straight
+  to it) while still delivering the notification. `AllowSendingWithoutReply` keeps it working if the
+  original was deleted. (Resolved bugs remain a silent in-place edit with no ping; new bug/news
+  posts are unaffected.)
+
 ## [3.6.2] - 2026-06-21
 
 ### Internal
