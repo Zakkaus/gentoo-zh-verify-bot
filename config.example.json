@@ -39,8 +39,15 @@
     {"q": "Gentoo 是一个什么类型的发行版?", "options": ["源码编译型", "纯二进制不可编译", "只能用于手机", "闭源商业系统"], "answer": 0},
     {"q": "Gentoo 默认可用的 init 系统之一是?", "options": ["OpenRC", "launchd", "Windows 服务", "系统注册表"], "answer": 0},
     {"q": "Gentoo 官方的用户维护 overlay(GURU)是用来放什么的?", "options": ["用户贡献的软件包", "病毒样本", "游戏存档", "桌面壁纸"], "answer": 0},
-    {"q": "配置 Gentoo 全局编译选项(USE / CFLAGS)的文件是?", "options": ["/etc/portage/make.conf", "/etc/apt/sources.list", "/etc/pacman.conf", "/etc/yum.conf"], "answer": 0},
-    {"q": "更新整个系统(@world)常用的命令是?", "options": ["emerge -uDN @world", "apt full-upgrade", "pacman -Syu", "dnf upgrade"], "answer": 0},
-    {"q": "Gentoo 的 logo / 标志通常是什么颜色?", "options": ["紫色", "红色", "绿色", "橙色"], "answer": 0}
+    {"q": "Linux 内核最初是由谁创造的?", "options": ["Steve Jobs", "Linus Torvalds", "Bill Gates", "Mark Zuckerberg"], "answer": 1},
+    {"q": "在 Linux / 类 Unix 系统中,用来列出当前目录下文件的常用命令是?", "options": ["show", "list-files", "ls", "dir.exe"], "answer": 2},
+    {"q": "在 Linux 命令行里,用来临时以管理员(root)权限执行命令的常用命令是?", "options": ["sudo", "admin", "root.exe", "superuser"], "answer": 0},
+    {"q": "Linux 本质上是一种什么?", "options": ["一款杀毒软件", "一种网页浏览器", "一种编程语言", "操作系统 / 操作系统内核"], "answer": 3},
+    {"q": "下面哪一个是 Linux 发行版?", "options": ["Microsoft Office", "Gentoo", "Adobe Photoshop", "Google Chrome"], "answer": 1},
+    {"q": "Gentoo 是基于哪种操作系统内核的?", "options": ["Windows", "Linux", "Android 专用内核", "它没有内核"], "answer": 1},
+    {"q": "和大多数「直接安装编译好的二进制包」的发行版相比,Gentoo 最出名的特点是什么?", "options": ["完全不能联网", "只能用鼠标不能用键盘", "软件主要从源代码在本机编译安装", "必须付费才能使用"], "answer": 2},
+    {"q": "Gentoo 用户常说的 USE flag(USE 标志)大致是用来做什么的?", "options": ["设置开机密码", "在编译时开关软件的功能特性", "调节屏幕亮度", "给文件夹换图标"], "answer": 1},
+    {"q": "Gentoo 这样的 Linux 发行版属于哪一类软件?", "options": ["自由 / 开源软件", "付费购买的盗版破解软件", "手机里的短视频 App", "一种杀毒软件"], "answer": 0},
+    {"q": "这个群主要是讨论什么话题的?", "options": ["炒股和理财", "美妆护肤", "Gentoo / Linux 系统", "宠物养殖"], "answer": 2}
   ]
 }
