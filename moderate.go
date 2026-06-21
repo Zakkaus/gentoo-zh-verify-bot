@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -33,6 +34,27 @@ func (v *Verifier) isGroupAdmin(c context.Context, bot *telego.Bot, chatID, user
 	return ok
 }
 
+// missingModRights returns the moderation rights the bot still lacks as a group admin: approving
+// join requests needs can_invite_users, banning needs can_restrict_members, deleting needs
+// can_delete_messages. The owner (ChatMemberOwner) implicitly has every right, so nothing is missing.
+func missingModRights(cm telego.ChatMember) []string {
+	adm, ok := cm.(*telego.ChatMemberAdministrator)
+	if !ok {
+		return nil // owner (all rights) or non-admin (the caller's NOT-admin branch handles that)
+	}
+	var miss []string
+	if !adm.CanInviteUsers {
+		miss = append(miss, "approve members (can_invite_users)")
+	}
+	if !adm.CanRestrictMembers {
+		miss = append(miss, "ban/restrict (can_restrict_members)")
+	}
+	if !adm.CanDeleteMessages {
+		miss = append(miss, "delete messages (can_delete_messages)")
+	}
+	return miss
+}
+
 // logGroupAdmin logs (non-fatally) whether the bot is an admin in each guarded group, so
 // a group it hasn't been granted admin in yet is visible in the logs rather than silently
 // inert. Telegram only delivers join requests to admins, so a non-admin group is harmless
@@ -45,6 +67,11 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot *telego.Bot, selfID int6
 			log.Printf("group %d: cannot read bot membership yet (%v) — verification stays inactive until the bot is added as admin", gid, err)
 		case ok:
 			log.Printf("group %d: bot is admin ✓", gid)
+			if cm, e := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(gid), UserID: selfID}); e == nil {
+				if miss := missingModRights(cm); len(miss) > 0 {
+					log.Printf("group %d: WARNING bot is admin but MISSING rights: %s — those actions will fail until granted", gid, strings.Join(miss, ", "))
+				}
+			}
 		default:
 			log.Printf("group %d: bot is NOT admin — join verification inactive until it's granted admin (approve members / ban / delete)", gid)
 		}
