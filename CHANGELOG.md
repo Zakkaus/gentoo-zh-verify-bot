@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.5] - 2026-06-21
+
+### Docs / governance
+- **gosec triage documented** in SECURITY.md (the accepted G304/G703/G706 operator-path & log-taint
+  classes, with rationale), giving CI's gosec gate a written baseline. README + SECURITY now state
+  that `$STATE_DIRECTORY` must be private to the bot's service user.
+- Added GitHub **issue and PR templates** (the PR template encodes the gofmt/vet/test/CI checklist).
+
+### Internal
+- Unit test for `missingModRights` (the startup rights preflight), which now also logs when it
+  can't read a group's exact rights. The feed confirm-ping reply test asserts
+  `AllowSendingWithoutReply`. Coverage 28.3% → 28.7%.
+
 ## [3.6.4] - 2026-06-21
 
 ### Added
