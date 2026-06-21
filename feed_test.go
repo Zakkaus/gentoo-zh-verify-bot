@@ -170,12 +170,13 @@ func TestCapRunesAndNilTracked(t *testing.T) {
 // exercised without a real Telegram connection. editErr (when set) is returned by
 // EditMessageText; every SendMessage is recorded so a confirm-ping can be asserted.
 type fakeFeedBot struct {
-	editErr    error
-	sendErr    error
-	edits      int
-	sends      int
-	sentText   []string
-	sentSilent []bool
+	editErr     error
+	sendErr     error
+	edits       int
+	sends       int
+	sentText    []string
+	sentSilent  []bool
+	sentReplyTo []int
 }
 
 func (b *fakeFeedBot) EditMessageText(_ context.Context, _ *telego.EditMessageTextParams) (*telego.Message, error) {
@@ -190,6 +191,11 @@ func (b *fakeFeedBot) SendMessage(_ context.Context, p *telego.SendMessageParams
 	b.sends++
 	b.sentText = append(b.sentText, p.Text)
 	b.sentSilent = append(b.sentSilent, p.DisableNotification)
+	rt := 0
+	if p.ReplyParameters != nil {
+		rt = p.ReplyParameters.MessageID
+	}
+	b.sentReplyTo = append(b.sentReplyTo, rt)
 	if b.sendErr != nil {
 		return nil, b.sendErr
 	}
@@ -290,6 +296,9 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 		}
 		if !strings.Contains(fb.sentText[0], "Bug 700") {
 			t.Errorf("the confirm ping should reference the bug, got %q", fb.sentText[0])
+		}
+		if fb.sentReplyTo[0] != 9 {
+			t.Errorf("the confirm ping should reply to the original bug message (id 9), got %d", fb.sentReplyTo[0])
 		}
 	})
 

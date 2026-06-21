@@ -212,10 +212,16 @@ func saveFeedState(path string, st feedState) {
 // postFeed sends one feed item and returns the sent message id (0 on failure) plus ok. ok is
 // false on a send failure so the caller won't advance the dedup cursor past an item that was
 // never delivered (a transient error, a Telegram rate-limit, or shutdown-cancelled context).
-func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silent bool) (int, bool) {
+// replyTo (0 = none) ties the message to an earlier feed post — used for the confirm notice, which
+// replies to the original bug message so the notice links back to it; AllowSendingWithoutReply
+// keeps the send working even if that original was deleted.
+func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silent bool, replyTo int) (int, bool) {
 	m := htmlMessage(chatID, text)
 	if silent {
 		m = m.WithDisableNotification()
+	}
+	if replyTo != 0 {
+		m = m.WithReplyParameters(&telego.ReplyParameters{MessageID: replyTo, AllowSendingWithoutReply: true})
 	}
 	sent, err := bot.SendMessage(ctx, m)
 	if err != nil {
@@ -366,7 +372,7 @@ func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedSta
 				// ping lands still notifies. Advance state only once the ping is delivered, so a
 				// transient send failure retries next cycle (the re-edit is then a harmless "message
 				// is not modified"). A silent_bugs feed skips the ping entirely.
-				if _, ok := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false); ok {
+				if _, ok := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false, tb.MsgID); ok {
 					tb.State = cur
 				}
 			default:
@@ -455,7 +461,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 			}
 			delivered := true
 			for i := len(nb) - 1; i >= 0; i-- { // oldest first
-				mid, ok := postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.bugSilent(nb[i]))
+				mid, ok := postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.bugSilent(nb[i]), 0)
 				if !ok {
 					delivered = false // leave the cursor so the next cycle retries this item
 					break
@@ -490,7 +496,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 			}
 			delivered := true
 			for i := len(nn) - 1; i >= 0; i-- { // oldest first
-				if _, ok := postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false); !ok {
+				if _, ok := postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false, 0); !ok {
 					delivered = false
 					break
 				}
