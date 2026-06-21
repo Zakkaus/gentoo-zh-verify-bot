@@ -57,7 +57,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("create handler: %v", err)
 	}
-	defer func() { _ = bh.Stop() }()
+	// bh.Stop() is called explicitly in the graceful-shutdown block after Start() returns; every
+	// other exit from here is a log.Fatalf (which os.Exits and would skip a deferred Stop anyway),
+	// so no defer is needed.
 
 	v := NewVerifier(cfg)
 	me, err := bot.GetMe(ctx)

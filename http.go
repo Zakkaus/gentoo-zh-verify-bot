@@ -68,7 +68,7 @@ func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, 
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close() // discarding a non-200 body; close error is irrelevant (slot freed below)
 		<-httpSem
 		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
 	}
