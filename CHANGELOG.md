@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.2] - 2026-06-21
+
+### Internal
+- **Verification handler test seam (the long-recommended P2 work, as a focused slice).** Introduced
+  a small `verifyBot` interface and widened the approve / decline / ban path (`approve`, `decline`,
+  `banApplicant`, `applyBan`, `deleteChallenge`, `adminAlert`) from `*telego.Bot` to it — a
+  compile-checked type-widening with **no behaviour change** (`*telego.Bot` satisfies it), so the
+  most critical handlers can finally be unit-tested with a fake bot. New tests cover approve
+  success, the failed-approve reopen path (the v3.6.1 race guarantee), decline below threshold,
+  auto-ban at the strike threshold, and admin report-and-ban. Statement coverage 25.1% → 27.7%.
+
+### Fixed
+- **Feed status-notice wording.** A bug leaving UNCONFIRMED straight for IN_PROGRESS was labelled
+  "confirmed"; the 🔔 notice now names the bug's *actual* new status (CONFIRMED / IN_PROGRESS / …).
+- Removed a redundant deferred `bh.Stop()` (the graceful-shutdown path already stops handlers
+  explicitly), and handled the previously-ignored non-200 `resp.Body.Close()` error (gosec G104).
+
+### Notes
+- The remaining gosec findings are all the accepted operator-controlled-path / log-taint class under
+  the private systemd `StateDirectory=`; documented as accepted rather than annotated inline.
+
 ## [3.6.1] - 2026-06-21
 
 ### Fixed
