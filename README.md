@@ -138,7 +138,7 @@ Uses long polling — no inbound port or reverse proxy needed.
 
 ## Notes / limitations
 
-- **State persistence.** Run under systemd (`StateDirectory=` sets `$STATE_DIRECTORY`), the bot persists the state below and reloads it on restart; with `STATE_DIRECTORY` unset, **nothing** is persisted — everything is in-memory only and lost on restart (a warning is logged).
+- **State persistence.** Run under systemd (`StateDirectory=` sets `$STATE_DIRECTORY`), the bot persists the state below and reloads it on restart; with `STATE_DIRECTORY` unset, **nothing** is persisted — everything is in-memory only and lost on restart (a warning is logged). The state directory must be **private to the bot's service user** and not writable by untrusted users (the unit's `StateDirectory=` + `DynamicUser=` ensure this).
 
   | Persisted (`$STATE_DIRECTORY/…`) | What |
   | --- | --- |
