@@ -20,6 +20,13 @@ const relInfoTTL = 24 * time.Hour
 // release metadata is retried within minutes instead of being cached for the full relInfoTTL.
 const relInfoRetryTTL = 10 * time.Minute
 
+// fetchDebianStatusFn / fetchUbuntuFn indirect over the real fetchers so tests can inject
+// empty/malformed results and assert ensureReleaseInfo's store + freshness behaviour offline.
+var (
+	fetchDebianStatusFn = fetchDebianStatus
+	fetchUbuntuFn       = fetchUbuntu
+)
+
 var relInfo = struct {
 	mu         sync.Mutex
 	debian     map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
@@ -52,8 +59,8 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 		relInfo.mu.Unlock()
 	}()
 
-	deb := fetchDebianStatus(ctx, now)
-	ubu, ubuRel, ubuEOL, ubuSer := fetchUbuntu(ctx, now)
+	deb := fetchDebianStatusFn(ctx, now)
+	ubu, ubuRel, ubuEOL, ubuSer := fetchUbuntuFn(ctx, now)
 
 	// Treat an EMPTY parsed result as a failed fetch, not success: a malformed/empty HTTP-200 body
 	// (GitLab Pages error page, schema drift) parses to zero rows -> empty maps, which must not

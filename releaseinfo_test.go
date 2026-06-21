@@ -1,9 +1,46 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 )
+
+// TestEnsureReleaseInfoEmptyDoesNotOverwrite drives ensureReleaseInfo with injected fetchers that
+// return EMPTY maps (a malformed HTTP-200): the previously-good cache must NOT be overwritten, and
+// the round must take the short retry window (fetched != now) rather than full-TTL freshness.
+func TestEnsureReleaseInfoEmptyDoesNotOverwrite(t *testing.T) {
+	relInfo.mu.Lock()
+	relInfo.debian = map[string]string{"13": "stable"}
+	relInfo.ubuntu = map[string]bool{"24.04": true}
+	relInfo.fetched, relInfo.refreshing = time.Time{}, false // stale => ensureReleaseInfo will refetch
+	relInfo.mu.Unlock()
+	t.Cleanup(func() {
+		relInfo.mu.Lock()
+		relInfo.debian, relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = nil, nil, nil, nil, nil
+		relInfo.fetched, relInfo.refreshing = time.Time{}, false
+		relInfo.mu.Unlock()
+	})
+
+	od, ou := fetchDebianStatusFn, fetchUbuntuFn
+	fetchDebianStatusFn = func(context.Context, time.Time) map[string]string { return map[string]string{} }
+	fetchUbuntuFn = func(context.Context, time.Time) (map[string]bool, map[string]bool, map[string]bool, map[string]bool) {
+		return map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	}
+	t.Cleanup(func() { fetchDebianStatusFn, fetchUbuntuFn = od, ou })
+
+	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
+	ensureReleaseInfo(context.Background(), now)
+
+	relInfo.mu.Lock()
+	defer relInfo.mu.Unlock()
+	if relInfo.debian["13"] != "stable" || !relInfo.ubuntu["24.04"] {
+		t.Error("an empty (malformed-200) fetch must NOT overwrite previously-good cached release data")
+	}
+	if relInfo.fetched.Equal(now) {
+		t.Error("an empty fetch must take the short retry window (fetched != now), not full-TTL freshness")
+	}
+}
 
 // TestDeriveDebianStatus verifies the role mapping is derived from release dates (not
 // hardcoded): with Trixie/13 released and Forky/14 not yet, 13 is stable and 14 testing;

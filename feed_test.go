@@ -353,6 +353,24 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 	})
 }
 
+// TestConfirmNotice guards the confirm-notice wording: it names the bug's ACTUAL status
+// (localized in zh, raw in en), never always "confirmed", and falls back to the raw status for an
+// unmapped value.
+func TestConfirmNotice(t *testing.T) {
+	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, "en"); !strings.Contains(got, "IN_PROGRESS") {
+		t.Errorf("en IN_PROGRESS notice should name the status, got %q", got)
+	}
+	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, "zh"); !strings.Contains(got, "处理中") {
+		t.Errorf("zh IN_PROGRESS notice should localize the status, got %q", got)
+	}
+	if got := confirmNotice(recentBug{ID: 5, Status: "CONFIRMED"}, "en"); !strings.Contains(got, "CONFIRMED") {
+		t.Errorf("en CONFIRMED notice should name the status, got %q", got)
+	}
+	if got := confirmNotice(recentBug{ID: 5, Status: "WEIRD_STATE"}, "en"); !strings.Contains(got, "WEIRD_STATE") {
+		t.Errorf("an unmapped status should fall back to the raw value, got %q", got)
+	}
+}
+
 // TestFeedStateMigration covers the load-time upgrade of pre-v3.4.3 state: a tracked bug that
 // carried only the legacy `status` is folded into the current `state` key, while an
 // already-current entry is left untouched.
