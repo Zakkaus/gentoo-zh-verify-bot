@@ -121,7 +121,7 @@ journalctl -fu gentoo-zh-verify-bot
 采用长轮询(long polling),无需开放入站端口或反向代理。
 
 ## 说明 / 限制
-- **状态持久化。** 在 systemd 下(unit 的 `StateDirectory=` 会设置 `$STATE_DIRECTORY`),机器人持久化下列状态并在重启后重新载入;若 `STATE_DIRECTORY` 未设置,则**一律不持久化**——全部仅存于内存,重启即丢(会打日志告警)。
+- **状态持久化。** 在 systemd 下(unit 的 `StateDirectory=` 会设置 `$STATE_DIRECTORY`),机器人持久化下列状态并在重启后重新载入;若 `STATE_DIRECTORY` 未设置,则**一律不持久化**——全部仅存于内存,重启即丢(会打日志告警)。状态目录必须**仅对机器人的服务用户私有**、不可被不可信用户写入(unit 的 `StateDirectory=` + `DynamicUser=` 已保证这点)。
 
   | 持久化(`$STATE_DIRECTORY/…`) | 内容 |
   | --- | --- |
