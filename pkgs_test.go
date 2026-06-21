@@ -218,4 +218,24 @@ func TestSnapVersionAndUbuntuChannels(t *testing.T) {
 	if g := familyChannels(vim, []string{"ubuntu_"}, excl); len(g) != 1 || g[0] != (channelLine{"9.1.2141", "26.04"}) {
 		t.Errorf("vim-like Ubuntu = %v, want 9.1.2141@26.04", g)
 	}
+
+	// real chromium data: 22.04 (still supported) carries an ANCIENT real deb (85) while 24.04+
+	// moved to Snap. The NEWEST supported release (26.04, Snap) must win — the stale 22.04 deb must
+	// NOT mask it (the v3.6.6 newest-release fix; the old "highest version" logic showed 85@22.04).
+	chromiumReal := []repologyPkg{
+		{"ubuntu_18_04", "112.0.5615.49"}, {"ubuntu_20_04", "85.0.4183.83"},
+		{"ubuntu_22_04", "85.0.4183.83"}, {"ubuntu_24_04", "1snap1"},
+		{"ubuntu_25_04", "1snap1"}, {"ubuntu_26_04", "1snap1"}, {"ubuntu_26_10", "1snap1"},
+	}
+	if g := familyChannels(chromiumReal, []string{"ubuntu_"}, excl); len(g) != 1 || g[0].label != "26.04" || displayVer(g[0].ver) != "snap" {
+		t.Errorf("real chromium Ubuntu (stale 22.04 deb) = %v, want snap@26.04", g)
+	}
+
+	// openSUSE Leap: the newest release wins even when an older one carries a higher version.
+	leap := []repologyPkg{
+		{"opensuse_leap_15_5", "144.0"}, {"opensuse_leap_15_6", "144.0"}, {"opensuse_leap_16_0", "143.0"},
+	}
+	if g := familyChannels(leap, []string{"opensuse_leap"}, nil); len(g) != 1 || g[0] != (channelLine{"143.0", "16.0"}) {
+		t.Errorf("openSUSE Leap should show the newest release 16.0 (143.0), got %v", g)
+	}
 }

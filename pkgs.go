@@ -196,90 +196,62 @@ func rollingRelease(label string) bool {
 
 type channelLine struct{ ver, label string }
 
-// bestLabel returns the most representative release label for a given version among rows:
-// a rolling/dev channel that carries it (when preferRolling), otherwise the highest-numbered
-// release that ships it — so a version present in several releases is labelled by the newest
-// one (e.g. RHEL firefox 140.11.0 → the newest clone release, not an arbitrary older one),
-// not by whichever repo happened to be scanned first.
-func bestLabel(rows []repologyPkg, prefixes []string, version string, preferRolling bool) string {
-	rolling, numbered := "", ""
-	for _, p := range rows {
-		if p.Version != version {
-			continue
-		}
-		lbl := releaseLabel(p.Repo, prefixes)
-		if rollingRelease(lbl) {
-			rolling = lbl
-		} else if numbered == "" || verLess(numbered, lbl) {
-			numbered = lbl
-		}
-	}
-	if preferRolling && rolling != "" {
-		return rolling
-	}
-	if numbered != "" {
-		return numbered
-	}
-	return rolling
-}
-
-// familyChannels returns the versions to show for one distro family. It centres on the
-// current STABLE release (so Fedora shows 44, not just rawhide) and adds the newest
-// rolling/dev channel above it when that's ahead (so Debian shows sid AND stable). A package
-// at one version everywhere stays a single line. isTesting (optional, Debian only) excludes a
-// pre-release numbered series — Debian's highest number is testing/forky, not stable — so the
-// stable line is the real stable (trixie/13), derived live rather than "highest number".
+// familyChannels returns the versions to show for one distro family: the NEWEST supported numbered
+// release as the stable line, plus the rolling/dev channel above it when that's ahead (so Debian
+// shows sid AND stable, Fedora rawhide AND 44). A package at one version everywhere stays one line.
+//
+// The stable line follows the newest release, NOT the highest version across releases — otherwise
+// an old real package lingering in an older still-supported release masks the newest release's
+// actual package (e.g. Ubuntu 22.04's chromium 85 deb vs 24.04+'s Snap, or an openSUSE Leap 15.6
+// build vs the newer 16.0). isTesting (optional) excludes a pre-release/EOL/unreleased numbered
+// series so it's neither the stable line nor mistaken for current — all derived live, not by
+// "highest number".
 func familyChannels(rows []repologyPkg, prefixes []string, isTesting func(string) bool) []channelLine {
 	if len(rows) == 0 {
 		return nil
 	}
 	excluded := func(lbl string) bool { return isTesting != nil && isTesting(lbl) }
-	isStable := func(lbl string) bool { return !rollingRelease(lbl) && !excluded(lbl) }
 
-	// nv = newest version we'd surface as the top line: a rolling/dev or released channel, but
-	// NOT an excluded pre-release series (Debian forky, an unreleased Ubuntu series, a proposed
-	// pocket) — those must not appear as a version line. Fall back to the raw newest if every
-	// channel is excluded, so we still show something.
-	nv := ""
+	// rolling line: the newest version from a rolling/dev channel (sid, rawhide, edge, unstable, or
+	// a label-less rolling repo) — the "ahead of stable" channel shown above the stable line.
+	rollingVer, rollingLabel := "", ""
 	for _, p := range rows {
-		if excluded(releaseLabel(p.Repo, prefixes)) {
+		lbl := releaseLabel(p.Repo, prefixes)
+		if !rollingRelease(lbl) || excluded(lbl) {
 			continue
 		}
-		if nv == "" || betterVer(nv, p.Version) {
-			nv = p.Version
+		if rollingVer == "" || betterVer(rollingVer, p.Version) {
+			rollingVer, rollingLabel = p.Version, lbl
 		}
 	}
-	if nv == "" {
-		nv, _ = newestRow(rows)
-	}
+
+	// stable line: the version shipped by the NEWEST supported numbered release (skipping
+	// excluded EOL/unreleased/testing series). Within one release the better version wins.
 	stableVer, stableLabel := "", ""
 	for _, p := range rows {
-		if !isStable(releaseLabel(p.Repo, prefixes)) {
+		lbl := releaseLabel(p.Repo, prefixes)
+		if rollingRelease(lbl) || excluded(lbl) {
 			continue
 		}
-		if stableVer == "" || betterVer(stableVer, p.Version) {
+		switch {
+		case stableLabel == "" || verLess(stableLabel, lbl): // first, or a newer release
+			stableVer, stableLabel = p.Version, lbl
+		case lbl == stableLabel && betterVer(stableVer, p.Version): // same release, better version
 			stableVer = p.Version
 		}
 	}
-	if stableVer != "" { // label = the newest stable release that ships that version
-		for _, p := range rows {
-			if p.Version != stableVer {
-				continue
-			}
-			if lbl := releaseLabel(p.Repo, prefixes); isStable(lbl) && (stableLabel == "" || verLess(stableLabel, lbl)) {
-				stableLabel = lbl
-			}
-		}
-	}
 
-	if stableVer == "" { // a pure rolling distro (Arch, AUR, Tumbleweed) — just the rolling line
-		return []channelLine{{nv, bestLabel(rows, prefixes, nv, true)}}
-	}
-	if nv == stableVer { // stable carries the newest version — one line, labelled by the release
+	switch {
+	case stableVer == "" && rollingVer == "": // everything excluded — fall back to the raw newest
+		v, r := newestRow(rows)
+		return []channelLine{{v, releaseLabel(r, prefixes)}}
+	case stableVer == "": // a pure rolling distro (Arch, AUR, Tumbleweed) — just the rolling line
+		return []channelLine{{rollingVer, rollingLabel}}
+	case rollingVer == "" || !betterVer(stableVer, rollingVer): // no rolling, or it isn't ahead
 		return []channelLine{{stableVer, stableLabel}}
+	default: // a rolling/dev channel is ahead of stable — show it, then stable
+		return []channelLine{{rollingVer, rollingLabel}, {stableVer, stableLabel}}
 	}
-	// A rolling/dev (or testing) channel is ahead of stable — show it, then stable.
-	return []channelLine{{nv, bestLabel(rows, prefixes, nv, true)}, {stableVer, stableLabel}}
 }
 
 // debianTesting reports whether a Debian release label is the current "testing" series
