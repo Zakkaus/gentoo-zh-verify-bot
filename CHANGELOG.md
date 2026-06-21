@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.6] - 2026-06-21
+
+### Fixed
+- **`/pkgs` now takes each distro's version from its NEWEST supported release, not the highest
+  version across releases.** An old real package lingering in an older still-supported release was
+  masking the newer release's actual one — e.g. Ubuntu `chromium` showed `85.0.4183.83 (22.04 LTS)`
+  (a 2020-era deb 22.04 still carries) while 24.04+ ship chromium as a Snap; it now correctly shows
+  `snap (26.04 LTS)`. The same fix surfaces the newest openSUSE Leap (16.0) over an older 15.6 build.
+  Rolling/dev channels (Debian sid, Fedora rawhide) and the EOL/unreleased exclusions are unchanged.
+
 ## [3.6.5] - 2026-06-21
 
 ### Docs / governance
