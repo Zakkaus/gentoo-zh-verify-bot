@@ -71,6 +71,8 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot *telego.Bot, selfID int6
 				if miss := missingModRights(cm); len(miss) > 0 {
 					log.Printf("group %d: WARNING bot is admin but MISSING rights: %s — those actions will fail until granted", gid, strings.Join(miss, ", "))
 				}
+			} else {
+				log.Printf("group %d: bot is admin but couldn't read its exact rights (%v)", gid, e)
 			}
 		default:
 			log.Printf("group %d: bot is NOT admin — join verification inactive until it's granted admin (approve members / ban / delete)", gid)
