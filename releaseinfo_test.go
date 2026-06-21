@@ -63,6 +63,23 @@ func TestUbuntuExcluded(t *testing.T) {
 	}
 }
 
+// TestDeriveDebianStatusEmpty verifies the v3.6.1 empty-CSV guard's signal: a malformed/empty or
+// header-only HTTP-200 body parses to an EMPTY status map (which ensureReleaseInfo's len>0 check
+// then treats as a failed fetch and retries soon), rather than a non-empty map cached as success.
+func TestDeriveDebianStatusEmpty(t *testing.T) {
+	now := time.Date(2026, 6, 21, 0, 0, 0, 0, time.UTC)
+	for _, body := range []string{
+		"", // empty body
+		"version,codename,series,created,release,eol", // header only, no data rows
+		"<html>503 Service Unavailable</html>",        // an error page, not CSV
+		"garbage,no,real,release,dates,here",          // a row with no past release date
+	} {
+		if got := deriveDebianStatus(body, now); len(got) != 0 {
+			t.Errorf("deriveDebianStatus(%q) = %v, want empty (so ensureReleaseInfo treats it as a failed fetch)", body, got)
+		}
+	}
+}
+
 // TestRelInfoNextFetched verifies the freshness marker: both-sources-OK is fresh for the full TTL,
 // while a failed fetch is only fresh for relInfoRetryTTL (so it self-heals soon, not in 24h).
 func TestRelInfoNextFetched(t *testing.T) {
