@@ -108,7 +108,7 @@ func (v *Verifier) setBanDuration(secs int) { v.mu.Lock(); v.banSecs = secs; v.m
 
 // applyBan bans uid from gid for the configured duration: secs<=0 => permanent (no until-date),
 // secs>0 => Telegram auto-unbans after now+secs. revoke deletes the user's recent messages.
-func (v *Verifier) applyBan(c context.Context, bot *telego.Bot, gid, uid int64, secs int, revoke bool) error {
+func (v *Verifier) applyBan(c context.Context, bot verifyBot, gid, uid int64, secs int, revoke bool) error {
 	p := &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: uid, RevokeMessages: revoke}
 	if secs > 0 {
 		p.UntilDate = time.Now().Add(time.Duration(secs) * time.Second).Unix()

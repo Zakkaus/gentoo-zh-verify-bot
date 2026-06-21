@@ -28,6 +28,18 @@ const (
 
 type pkey struct{ gid, uid int64 }
 
+// verifyBot is the slice of the telego.Bot API the verification approve / decline / ban path uses.
+// Threading it (instead of *telego.Bot) through approve, decline, banApplicant, applyBan,
+// deleteChallenge and adminAlert lets those critical handler branches be unit-tested with a fake
+// bot — the test seam the reviews keep asking for. *telego.Bot satisfies it; callers are unchanged.
+type verifyBot interface {
+	ApproveChatJoinRequest(ctx context.Context, params *telego.ApproveChatJoinRequestParams) error
+	DeclineChatJoinRequest(ctx context.Context, params *telego.DeclineChatJoinRequestParams) error
+	BanChatMember(ctx context.Context, params *telego.BanChatMemberParams) error
+	DeleteMessage(ctx context.Context, params *telego.DeleteMessageParams) error
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
+}
+
 type pending struct {
 	groupMsgID int
 	qText      string
@@ -871,13 +883,13 @@ func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	return p, true
 }
 
-func (v *Verifier) deleteChallenge(c context.Context, bot *telego.Bot, gid int64, msgID int) {
+func (v *Verifier) deleteChallenge(c context.Context, bot verifyBot, gid int64, msgID int) {
 	if msgID != 0 {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msgID})
 	}
 }
 
-func (v *Verifier) adminAlert(c context.Context, bot *telego.Bot, text string) {
+func (v *Verifier) adminAlert(c context.Context, bot verifyBot, text string) {
 	if v.cfg.AdminLogChatID != 0 {
 		if _, err := bot.SendMessage(c, tu.Message(tu.ID(v.cfg.AdminLogChatID), text)); err != nil {
 			log.Printf("adminAlert to %d failed (check admin_log_chat_id / bot membership): %v", v.cfg.AdminLogChatID, err)
@@ -903,7 +915,7 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot *telego.Bot, channe
 	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必关频道 %d 的成员(可能已不是该频道管理员)——关注门槛暂时无法核验,%s。请把机器人重新设为该频道管理员。", channelID, mode))
 }
 
-func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) bool {
+func (v *Verifier) approve(c context.Context, bot verifyBot, gid, uid int64) bool {
 	// CLAIM the pending before the network approve — stop its timeout timer and mark it done,
 	// atomically with the peek — so the timer (or a concurrent callback) can't decline/strike/
 	// auto-ban a user we're about to approve. The entry stays in the map (done, timer stopped) so
@@ -947,7 +959,7 @@ func (v *Verifier) approve(c context.Context, bot *telego.Bot, gid, uid int64) b
 // reopenPending re-arms a pending that was claimed for an approve that then FAILED, so the
 // applicant can still retry, be approved by an admin, or time out normally. No-op if a newer
 // request has since replaced the entry, or it was otherwise consumed.
-func (v *Verifier) reopenPending(bot *telego.Bot, gid, uid int64, p *pending) {
+func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if cur, ok := v.pend[pkey{gid, uid}]; !ok || cur != p || !p.done {
@@ -979,7 +991,7 @@ func (v *Verifier) wrongAnswerText(banned bool) string {
 // It records a strike; once an applicant reaches cfg.VerifyMaxFails strikes it is banned (for
 // the configured duration) instead of retrying forever. Returns handled=false if there was no
 // matching live pending, and banned=true if this failure crossed the auto-ban threshold.
-func (v *Verifier) decline(c context.Context, bot *telego.Bot, gid, uid int64, nonce, reason string) (handled, banned bool) {
+func (v *Verifier) decline(c context.Context, bot verifyBot, gid, uid int64, nonce, reason string) (handled, banned bool) {
 	p, ok := v.consumeNonce(gid, uid, nonce)
 	if !ok {
 		return false, false
@@ -1014,7 +1026,7 @@ func (v *Verifier) decline(c context.Context, bot *telego.Bot, gid, uid int64, n
 // banApplicant declines the join request and bans the user. It returns handled=false if there
 // was no live pending to act on, and banned=false if the BanChatMember call failed (e.g. the
 // bot lacks ban rights) — so the admin gets honest feedback instead of a false "banned".
-func (v *Verifier) banApplicant(c context.Context, bot *telego.Bot, gid, uid int64) (handled, banned bool) {
+func (v *Verifier) banApplicant(c context.Context, bot verifyBot, gid, uid int64) (handled, banned bool) {
 	p, ok := v.consume(gid, uid)
 	if !ok {
 		return false, false
