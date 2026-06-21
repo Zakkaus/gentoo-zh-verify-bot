@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.4] - 2026-06-21
+
+### Added
+- **Startup permission preflight.** For each guarded group where the bot is an admin, it now logs
+  any *missing* moderation right (approve members / ban / delete messages), so a half-granted
+  deployment is visible at startup instead of only when an action later fails.
+- **CI security gate + dependency automation.** CI now runs `gosec` (with the accepted
+  operator-path/log-taint finding classes excluded and documented, so it gates on anything new), and
+  a Dependabot config keeps the Go module and GitHub Actions current.
+
+### Internal
+- Direct `confirmNotice` wording tests (status-accurate, raw-status fallback) and an
+  injectable-fetcher `ensureReleaseInfo` test proving an empty/malformed CSV neither overwrites good
+  cache nor earns full-TTL freshness. Coverage 27.7% → 28.3%.
+  gofmt / vet / staticcheck / -race / govulncheck / gosec all clean.
+
 ## [3.6.3] - 2026-06-21
 
 ### Changed
