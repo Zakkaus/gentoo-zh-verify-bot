@@ -402,16 +402,15 @@ func formatNews(n newsItem) string {
 		html.EscapeString(n.url), n.date, html.EscapeString(html.UnescapeString(n.title)))
 }
 
-// confirmNotice is the brief, non-silent message sent when a previously-UNCONFIRMED bug (which
-// was posted silently) becomes CONFIRMED — the notification the silent original never produced.
-// 🔔 (not ✅, which marks resolution) signals a confirmation; rendered in the feed's own language.
+// confirmNotice is the brief, non-silent message sent when a previously-UNCONFIRMED bug (which was
+// posted silently) leaves UNCONFIRMED — the notification the silent original never produced. It
+// names the bug's ACTUAL new status (e.g. 已确认 / 处理中, CONFIRMED / IN_PROGRESS) rather than
+// always "confirmed", since the trigger is any move out of UNCONFIRMED. 🔔 (not ✅, which marks
+// resolution) signals a live status update; rendered in the feed's own language.
 func confirmNotice(b recentBug, lang string) string {
-	label := "已确认"
-	if strings.EqualFold(lang, "en") {
-		label = "confirmed"
-	}
-	return fmt.Sprintf("🔔 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a> %s\n%s",
-		b.ID, b.ID, label, html.EscapeString(capRunes(b.Summary, 600)))
+	status := zhVal(bugStatusZH, b.Status, !strings.EqualFold(lang, "en")) // CONFIRMED→已确认, IN_PROGRESS→处理中, …
+	return fmt.Sprintf("🔔 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a> → %s\n%s",
+		b.ID, b.ID, html.EscapeString(status), html.EscapeString(capRunes(b.Summary, 600)))
 }
 
 // bugSilent reports whether a feed bug should be posted WITHOUT a notification:
