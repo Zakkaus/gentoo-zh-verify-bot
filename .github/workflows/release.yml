@@ -1,0 +1,39 @@
+name: Release
+
+# On a vX.Y.Z tag, build static linux binaries (amd64 + arm64) with the version baked in,
+# generate SHA256 checksums, and publish them as assets on the GitHub release for that tag.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # required to create/update the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build static linux binaries (amd64, arm64)
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ver="${GITHUB_REF_NAME}"
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=${ver}" \
+              -o "dist/gentoo-zh-verify-bot-linux-${arch}" .
+          done
+          ( cd dist && sha256sum gentoo-zh-verify-bot-* > SHA256SUMS )
+          ls -l dist
+      - name: Publish release with binaries + checksums
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/gentoo-zh-verify-bot-linux-amd64
+            dist/gentoo-zh-verify-bot-linux-arm64
+            dist/SHA256SUMS
