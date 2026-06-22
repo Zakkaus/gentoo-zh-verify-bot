@@ -13,13 +13,14 @@ import (
 // exercised without a real Telegram connection; it records call counts and returns configured
 // errors for the approve and ban calls.
 type fakeVerifyBot struct {
-	approveErr error
-	banErr     error
-	approves   int
-	declines   int
-	bans       int
-	deletes    int
-	sends      int
+	approveErr   error
+	banErr       error
+	approves     int
+	declines     int
+	bans         int
+	deletes      int
+	sends        int
+	lastSendChat int64
 }
 
 func (b *fakeVerifyBot) ApproveChatJoinRequest(context.Context, *telego.ApproveChatJoinRequestParams) error {
@@ -38,8 +39,9 @@ func (b *fakeVerifyBot) DeleteMessage(context.Context, *telego.DeleteMessagePara
 	b.deletes++
 	return nil
 }
-func (b *fakeVerifyBot) SendMessage(context.Context, *telego.SendMessageParams) (*telego.Message, error) {
+func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
 	b.sends++
+	b.lastSendChat = p.ChatID.ID
 	return &telego.Message{MessageID: 1}, nil
 }
 
@@ -160,6 +162,103 @@ func TestBanApplicant(t *testing.T) {
 	fbFail := &fakeVerifyBot{banErr: errors.New("not enough rights")}
 	if _, banned := v.banApplicant(context.Background(), fbFail, -100, 5); banned {
 		t.Error("a failed BanChatMember must report banned=false (honest feedback)")
+	}
+}
+
+// TestClaimThenExecuteApprove mirrors the onAdminAction "pass" path: claimPending() FIRST (so the
+// callback can be acknowledged before the slow approve round-trip), then executeApprove(). claim
+// must KEEP the entry (marked done, not re-claimable) so a failed approve can reopen it; a
+// successful executeApprove removes it.
+func TestClaimThenExecuteApprove(t *testing.T) {
+	v := NewVerifier(&Config{})
+	key := pkey{-100, 5}
+	v.pend[key] = livePending(42)
+
+	p, ok := v.claimPending(-100, 5)
+	if !ok {
+		t.Fatal("claimPending should claim a live pending")
+	}
+	if cur, ok := v.pend[key]; !ok || cur != p || !p.done {
+		t.Fatal("claimPending must KEEP the entry in the map, marked done (so a failed approve can reopen it)")
+	}
+	if _, ok := v.claimPending(-100, 5); ok {
+		t.Error("an already-claimed pending must not be re-claimable (a timer/second callback can't double-act)")
+	}
+	fb := &fakeVerifyBot{}
+	if !v.executeApprove(context.Background(), fb, -100, 5, p) {
+		t.Fatal("executeApprove should succeed")
+	}
+	if fb.approves != 1 {
+		t.Errorf("want 1 ApproveChatJoinRequest, got %d", fb.approves)
+	}
+	if _, ok := v.pend[key]; ok {
+		t.Error("a successful executeApprove should remove the pending")
+	}
+}
+
+// TestConsumeThenExecuteBan mirrors the onAdminAction "ban" path: consume() (which REMOVES the
+// pending, since there is no reopen for a ban) so the callback can be acked, then executeBan().
+func TestConsumeThenExecuteBan(t *testing.T) {
+	v := NewVerifier(&Config{})
+	key := pkey{-100, 5}
+	v.pend[key] = livePending(42)
+
+	p, ok := v.consume(-100, 5)
+	if !ok {
+		t.Fatal("consume should claim a live pending")
+	}
+	if _, ok := v.pend[key]; ok {
+		t.Error("consume must REMOVE the pending (no reopen for a ban)")
+	}
+	fb := &fakeVerifyBot{}
+	if banned := v.executeBan(context.Background(), fb, -100, 5, p); !banned {
+		t.Fatal("executeBan should report banned=true on success")
+	}
+	if fb.declines != 1 || fb.bans != 1 {
+		t.Errorf("want 1 decline + 1 ban, got declines=%d bans=%d", fb.declines, fb.bans)
+	}
+}
+
+// TestAdminCacheHit verifies a fresh cached admin entry short-circuits adminStatus WITHOUT a
+// GetChatMember call — proven by passing a nil bot: if the cache is honored, bot is never touched.
+func TestAdminCacheHit(t *testing.T) {
+	v := NewVerifier(&Config{})
+	v.adminCache[pkey{-100, 7}] = time.Now().Add(adminCacheTTL)
+	ok, err := v.adminStatus(context.Background(), nil, -100, 7)
+	if err != nil || !ok {
+		t.Fatalf("a fresh cached admin must short-circuit to true (no bot call), got ok=%v err=%v", ok, err)
+	}
+}
+
+// TestFailAlertFallsBackToGroup verifies the ack-first failure notice always reaches a chat: the
+// admin-log chat when configured, otherwise the group itself — so a rare ban/approve failure is
+// never invisible when admin_log_chat_id is unset (the live config has it = 0).
+func TestFailAlertFallsBackToGroup(t *testing.T) {
+	v := NewVerifier(&Config{}) // AdminLogChatID == 0
+	fb := &fakeVerifyBot{}
+	v.failAlert(context.Background(), fb, -555, "x")
+	if fb.lastSendChat != -555 {
+		t.Errorf("with no admin-log chat, failAlert should post to the group, got chat %d", fb.lastSendChat)
+	}
+	v.cfg.AdminLogChatID = -999
+	v.failAlert(context.Background(), fb, -555, "x")
+	if fb.lastSendChat != -999 {
+		t.Errorf("with an admin-log chat set, failAlert should post there, got chat %d", fb.lastSendChat)
+	}
+}
+
+// TestPruneAdminCache verifies expired entries are dropped (keeping the admin-status cache bounded).
+func TestPruneAdminCache(t *testing.T) {
+	v := NewVerifier(&Config{})
+	now := time.Now()
+	v.adminCache[pkey{-1, 1}] = now.Add(time.Minute)  // fresh
+	v.adminCache[pkey{-1, 2}] = now.Add(-time.Minute) // expired
+	v.pruneAdminCacheLocked(now)
+	if _, ok := v.adminCache[pkey{-1, 2}]; ok {
+		t.Error("an expired admin-cache entry should be pruned")
+	}
+	if _, ok := v.adminCache[pkey{-1, 1}]; !ok {
+		t.Error("a fresh admin-cache entry should be kept")
 	}
 }
 

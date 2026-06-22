@@ -12,15 +12,50 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// adminStatus returns whether userID is an admin/creator of chatID, surfacing
-// any API error so callers can fail-closed where it matters.
+// adminCacheTTL is how long a confirmed admin status is reused before re-checking with Telegram.
+// Only ADMINS are cached, so a freshly-promoted admin works immediately (a non-admin always
+// re-checks); the only staleness window is a just-demoted admin still acting for up to this long.
+const (
+	adminCacheTTL = 60 * time.Second
+	adminCacheMax = 4096 // safety cap on adminCache size (admins are few; bounds the map like the other per-user maps)
+)
+
+// pruneAdminCacheLocked drops expired entries from adminCache. Caller holds adminMu.
+func (v *Verifier) pruneAdminCacheLocked(now time.Time) {
+	for k, exp := range v.adminCache {
+		if now.After(exp) {
+			delete(v.adminCache, k)
+		}
+	}
+}
+
+// adminStatus returns whether userID is an admin/creator of chatID, surfacing any API error so
+// callers can fail-closed where it matters. A confirmed admin is cached for adminCacheTTL so the
+// hot path (admin buttons, moderation commands) skips a ~0.5s GetChatMember round-trip on repeat use.
 func (v *Verifier) adminStatus(c context.Context, bot *telego.Bot, chatID, userID int64) (bool, error) {
+	key := pkey{chatID, userID}
+	v.adminMu.Lock()
+	exp, cached := v.adminCache[key]
+	v.adminMu.Unlock()
+	if cached && time.Now().Before(exp) {
+		return true, nil
+	}
 	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(chatID), UserID: userID})
 	if err != nil {
 		return false, err
 	}
 	s := cm.MemberStatus()
-	return s == "creator" || s == "administrator", nil
+	isAdmin := s == "creator" || s == "administrator"
+	if isAdmin {
+		v.adminMu.Lock()
+		now := time.Now()
+		v.adminCache[key] = now.Add(adminCacheTTL)
+		if len(v.adminCache) > adminCacheMax { // bound the map (only admins are cached, so rarely hit)
+			v.pruneAdminCacheLocked(now)
+		}
+		v.adminMu.Unlock()
+	}
+	return isAdmin, nil
 }
 
 // isGroupAdmin is the fail-safe form (error => not admin), suitable for checking

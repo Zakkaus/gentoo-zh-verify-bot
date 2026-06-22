@@ -104,6 +104,8 @@ type Verifier struct {
 	vfail        map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
 	vfailPath    string                // persistence path for vfail
 	settingsPath string                // persistence path for runtime settings (verification enabled state)
+	adminMu      sync.Mutex            // guards adminCache
+	adminCache   map[pkey]time.Time    // group+user -> admin-status cache expiry; only ADMINS are cached (short TTL) so the verify/moderation admin checks skip a GetChatMember round-trip on repeat use
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -140,7 +142,8 @@ func NewVerifier(cfg *Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
 		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, queryHits: map[int64][]time.Time{},
-		vfail: map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
+		adminCache: map[pkey]time.Time{},
+		vfail:      map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders}
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
@@ -676,8 +679,11 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 			WithText(fmt.Sprintf("还没检测到你关注 %s,关注后再点一次。", v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
-	v.sendQuizzes(c, bot, uid)
+	// ACK first so the button stops spinning, THEN send the quiz DM(s) — sendQuizzes swallows send
+	// errors, so the early ack loses no feedback (the channel-membership check above stays before
+	// the ack because its toast is result-driven).
 	_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 已关注,请回答下面的问题"))
+	v.sendQuizzes(c, bot, uid)
 	return nil
 }
 
@@ -773,20 +779,25 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 	}
 	switch action {
 	case "pass":
-		if v.approve(c, bot, gid, target) {
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 已直接通过"))
-		} else {
+		p, ok := v.claimPending(gid, target)
+		if !ok {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理或无法批准。"))
+			return nil
 		}
+		// ACK first so the button stops spinning, THEN do the approve round-trip(s). A failed
+		// approve reopens the pending and alerts admins (executeApprove), so the early ack is safe.
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 已直接通过"))
+		v.executeApprove(c, bot, gid, target, p)
 	case "ban":
-		switch handled, banned := v.banApplicant(c, bot, gid, target); {
-		case !handled:
+		p, ok := v.consume(gid, target)
+		if !ok {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理。"))
-		case banned:
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", banDurationText(v.banDuration()))))
-		default:
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("已拒绝;但封禁失败(可能缺权限),请手动封禁。").WithShowAlert())
+			return nil
 		}
+		// ACK first (button stops spinning), THEN decline/ban/delete. A ban failure is surfaced
+		// via adminAlert (executeBan) and the applicant is declined either way.
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", banDurationText(v.banDuration()))))
+		v.executeBan(c, bot, gid, target, p)
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 	}
@@ -897,6 +908,20 @@ func (v *Verifier) adminAlert(c context.Context, bot verifyBot, text string) {
 	}
 }
 
+// failAlert surfaces a failure notice to admins: to the admin-log chat if one is configured,
+// otherwise to the group itself (gid) where the acting admin is. The ack-first admin buttons answer
+// the callback optimistically, so this guarantees a rare approve/ban failure is never invisible
+// (it would otherwise only reach the server log when admin_log_chat_id is unset).
+func (v *Verifier) failAlert(c context.Context, bot verifyBot, gid int64, text string) {
+	target := v.cfg.AdminLogChatID
+	if target == 0 {
+		target = gid
+	}
+	if _, err := bot.SendMessage(c, tu.Message(tu.ID(target), text)); err != nil {
+		log.Printf("failAlert to %d failed: %v", target, err)
+	}
+}
+
 // channelAccessAlert warns admins that the bot can't read a required channel (so the
 // follow-gate can't be enforced and applicants are being passed through). Throttled to at
 // most once per 10 minutes per channel so a busy join queue doesn't flood the admin log.
@@ -915,41 +940,54 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot *telego.Bot, channe
 	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必关频道 %d 的成员(可能已不是该频道管理员)——关注门槛暂时无法核验,%s。请把机器人重新设为该频道管理员。", channelID, mode))
 }
 
-func (v *Verifier) approve(c context.Context, bot verifyBot, gid, uid int64) bool {
-	// CLAIM the pending before the network approve — stop its timeout timer and mark it done,
-	// atomically with the peek — so the timer (or a concurrent callback) can't decline/strike/
-	// auto-ban a user we're about to approve. The entry stays in the map (done, timer stopped) so
-	// a FAILED approve can re-open it as retryable: a transient failure must not strand the
-	// applicant (their pending, in-group challenge and a fresh timeout all survive for a retry).
-	key := pkey{gid, uid}
+// claimPending atomically marks a pending done and stops its timeout timer but KEEPS it in the map,
+// so a FAILED network action can reopenPending() it (re-arm the timeout) instead of stranding the
+// applicant. Returns the claimed pending, or ok=false if it is gone/already handled. consume() is
+// the sibling that DELETES — use it where there is no reopen-on-failure (e.g. a ban).
+func (v *Verifier) claimPending(gid, uid int64) (*pending, bool) {
 	v.mu.Lock()
-	p, ok := v.pend[key]
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
 	if !ok || p.done {
-		v.mu.Unlock()
-		return false
+		return nil, false
 	}
 	p.done = true
 	if p.timer != nil {
 		p.timer.Stop()
 	}
-	msgID := p.groupMsgID
-	v.mu.Unlock()
+	return p, true
+}
 
+// approve claims the pending (stopping its timeout so the timer can't decline/strike/auto-ban a
+// user we're about to approve) and approves the join request. A callback handler that wants to
+// ACK the button first (so it stops spinning) can instead claimPending() itself, answer the
+// callback, then call executeApprove() with the claimed pending.
+func (v *Verifier) approve(c context.Context, bot verifyBot, gid, uid int64) bool {
+	p, ok := v.claimPending(gid, uid)
+	if !ok {
+		return false
+	}
+	return v.executeApprove(c, bot, gid, uid, p)
+}
+
+// executeApprove runs the network approve + cleanup for an ALREADY-claimed pending p. On failure it
+// reopens p as retryable (re-arms the timeout) so a transient error doesn't strand the applicant.
+func (v *Verifier) executeApprove(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		log.Printf("approve %d in %d: %v", uid, gid, err)
-		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 批准用户 %d 加入群 %d 失败(可能缺权限):%v;已保留申请,可重试或等待超时", uid, gid, err))
+		v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 批准用户 %d 加入群 %d 失败(可能缺权限):%v;已保留申请,可重试或等待超时", uid, gid, err))
 		v.reopenPending(bot, gid, uid, p) // restore as retryable (re-arm the timeout)
 		return false
 	}
 	// Succeeded — drop the (already-claimed) pending and clean up. Only delete if it's still ours,
 	// so a request that replaced it while the approve was in flight isn't clobbered.
 	v.mu.Lock()
-	if cur, ok := v.pend[key]; ok && cur == p {
-		delete(v.pend, key)
+	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
+		delete(v.pend, pkey{gid, uid})
 	}
 	v.mu.Unlock()
 	v.clearVerifyFails(gid, uid) // verified successfully — reset any failure strikes
-	v.deleteChallenge(c, bot, gid, msgID)
+	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	v.recordDecision(true)
 	v.save()
 	log.Printf("approve user=%d group=%d", uid, gid)
@@ -1031,16 +1069,24 @@ func (v *Verifier) banApplicant(c context.Context, bot verifyBot, gid, uid int64
 	if !ok {
 		return false, false
 	}
+	return true, v.executeBan(c, bot, gid, uid, p)
+}
+
+// executeBan declines + bans an ALREADY-consumed applicant and clears the challenge. A callback
+// handler can consume() + ACK the button first, then call this, so the button doesn't spin through
+// the decline/ban/delete round-trips. Returns whether the ban itself succeeded (a failure is
+// surfaced via adminAlert; the applicant is still declined regardless).
+func (v *Verifier) executeBan(c context.Context, bot verifyBot, gid, uid int64, p *pending) (banned bool) {
 	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
 	banned = true
 	if err := v.applyBan(c, bot, gid, uid, v.banDuration(), true); err != nil { // honour /bantime like the other ban paths
 		banned = false
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
-		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 封禁用户 %d(群 %d)失败(可能缺权限):%v;申请已拒绝,请手动封禁", uid, gid, err))
+		v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 封禁用户 %d(群 %d)失败(可能缺权限):%v;申请已拒绝,请手动封禁", uid, gid, err))
 	}
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	v.recordDecision(false)
 	v.save()
 	log.Printf("banApplicant user=%d group=%d banned=%v (admin report)", uid, gid, banned)
-	return true, banned
+	return banned
 }
