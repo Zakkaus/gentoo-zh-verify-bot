@@ -17,6 +17,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Test gate (never publish binaries from a broken commit)
+        run: |
+          go vet ./...
+          go test ./...
       - name: Build static linux binaries (amd64, arm64)
         run: |
           set -euo pipefail
