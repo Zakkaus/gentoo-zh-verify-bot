@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.7] - 2026-06-22
+
+### Performance / UX
+- **The admin verification buttons (👮 直接通过 / 🚫 举报并封禁, and the "我已关注,继续" recheck) now
+  answer the Telegram callback immediately, before the decline/ban/approve/quiz-send round-trips** —
+  so the inline button no longer spins ~2 s (it used to stack ~4 sequential ~0.5 s API calls before
+  acking). `approve`/`banApplicant` were split into claim/consume + execute so the callback can be
+  acked in between; behaviour is unchanged (same race-safe claim-before-network and reopen-on-failure).
+- **Confirmed admin status is cached for 60 s** (only admins are cached; the map is bounded + pruned),
+  so the admin buttons and `/ban` `/sb` `/warn` skip a ~0.5 s GetChatMember round-trip on repeat use.
+
+### Reliability
+- Since the buttons now ack optimistically, a *rare* approve/ban failure is surfaced via a new
+  `failAlert`: it posts to the admin-log chat when configured, **otherwise to the group itself** — so
+  a failure is never invisible when `admin_log_chat_id` is unset (it is `0` on the live deploy).
+
 ## [3.6.6] - 2026-06-21
 
 ### Fixed
