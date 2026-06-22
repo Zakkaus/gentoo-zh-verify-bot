@@ -38,6 +38,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "clearwarn", Description: "[管理] 回复:清除警告"},
 		{Command: "bc", Description: "[管理] 频道马甲封禁 / 白名单"},
 		{Command: "rich", Description: "[管理] 开关富文本(/pkg /use)"},
+		{Command: "spoiler", Description: "[管理] 开关:遮盖新成员名字(防广告)"},
 		{Command: "autodel", Description: "[管理] 查询结果自动删除开关"},
 		{Command: "bantime", Description: "[管理] 设定封禁时长(0=永久)"},
 	}, member...)

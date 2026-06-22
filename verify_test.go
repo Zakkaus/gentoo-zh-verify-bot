@@ -3,11 +3,51 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mymmrac/telego"
 )
+
+// TestJoinerLabel covers the anti-advert name-spoiler: with the spoiler ON the name is a single,
+// always-valid <tg-spoiler> entity (no nested mention link, so it can never cause an HTML parse
+// error that would break the challenge post); with it OFF a clickable mention; and a name with HTML
+// metacharacters is escaped in both modes.
+func TestJoinerLabel(t *testing.T) {
+	const evil = `繁星帮<&>"` // an advert-style name with HTML metacharacters
+	on := joinerLabel(42, evil, true)
+	if !strings.HasPrefix(on, "<tg-spoiler>") || !strings.HasSuffix(on, "</tg-spoiler>") {
+		t.Errorf("spoiler-on should wrap the name in one <tg-spoiler> entity, got %q", on)
+	}
+	if strings.Contains(on, "<a ") || strings.Contains(on, "tg://user") {
+		t.Errorf("spoiler-on must NOT emit a nested mention link (parse-safety), got %q", on)
+	}
+	if strings.Contains(on, "<&>") || strings.Contains(on, "\"") {
+		t.Errorf("spoiler-on must HTML-escape the name, got %q", on)
+	}
+	off := joinerLabel(42, evil, false)
+	if !strings.Contains(off, `href="tg://user?id=42"`) {
+		t.Errorf("spoiler-off should render a clickable mention, got %q", off)
+	}
+	if strings.Contains(off, "<&>") {
+		t.Errorf("spoiler-off must HTML-escape the name, got %q", off)
+	}
+}
+
+// TestNameSpoilerDefaultAndToggle: a fresh Verifier defaults the spoiler ON; toggling flips it.
+func TestNameSpoilerDefaultAndToggle(t *testing.T) {
+	v := NewVerifier(&Config{})
+	if !v.nameSpoilerOn() {
+		t.Error("name spoiler should default ON (spam names are often adverts)")
+	}
+	if v.toggleNameSpoiler() {
+		t.Error("toggle should turn it OFF and return the new state (false)")
+	}
+	if v.nameSpoilerOn() {
+		t.Error("name spoiler should now be OFF")
+	}
+}
 
 // fakeVerifyBot is a verifyBot stand-in so the approve / decline / ban handler branches can be
 // exercised without a real Telegram connection; it records call counts and returns configured

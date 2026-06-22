@@ -89,6 +89,7 @@ type Verifier struct {
 	warns        map[pkey]int // group+user -> warning count (persisted)
 	enabled      bool
 	rich         bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
+	nameSpoiler  bool // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
 	statDate     string
 	approved     int
 	declined     int
@@ -144,7 +145,8 @@ func NewVerifier(cfg *Config) *Verifier {
 		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, queryHits: map[int64][]time.Time{},
 		adminCache: map[pkey]time.Time{},
 		vfail:      map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
-		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders}
+		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders,
+		nameSpoiler: true} // default ON: spam joiners often set their NAME to an advert; hide it behind a spoiler
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
 	}
@@ -296,6 +298,33 @@ func (v *Verifier) toggleRich() bool {
 	defer v.mu.Unlock()
 	v.rich = !v.rich
 	return v.rich
+}
+
+func (v *Verifier) nameSpoilerOn() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.nameSpoiler }
+
+// toggleNameSpoiler flips the name-spoiler and persists it (like /start /stop) so a /spoiler choice
+// survives a restart.
+func (v *Verifier) toggleNameSpoiler() bool {
+	v.mu.Lock()
+	v.nameSpoiler = !v.nameSpoiler
+	on := v.nameSpoiler
+	v.mu.Unlock()
+	v.saveSettings()
+	return on
+}
+
+// joinerLabel renders the applicant's name for the in-group challenge. Normally a clickable
+// mention; when the name-spoiler is on, the HTML-escaped name is hidden behind a Telegram spoiler —
+// a single, always-valid entity (NOT a nested link, so it can never produce an HTML parse error
+// that would break the critical challenge post) — so a spammer who set their display name to an
+// advert can't show it in the group without a deliberate tap. The 👮/🚫 buttons act by id, so
+// losing the click-through on a spoilered name costs admins nothing.
+func joinerLabel(uid int64, name string, spoiler bool) string {
+	esc := html.EscapeString(name)
+	if spoiler {
+		return "<tg-spoiler>" + esc + "</tg-spoiler>"
+	}
+	return fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>", uid, esc)
 }
 
 func (v *Verifier) now() time.Time { return time.Now().In(v.loc) }
@@ -451,6 +480,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onArm, th.CommandEqual("arm"))
 	bh.Handle(v.onArmpkgs, th.CommandEqual("armpkgs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
+	bh.Handle(v.onSpoiler, th.CommandEqual("spoiler"))
 	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
 	bh.Handle(v.onBanTime, th.CommandEqual("bantime"))
 	bh.Handle(v.onMute, th.CommandEqual("mute"))
@@ -502,7 +532,9 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	// before re-applying (they were told the wait time when declined). Decline early re-tries
 	// silently rather than reposting a challenge.
 	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
-		_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
+		if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
+		}
 		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, int(wait.Seconds())+1)
 		return nil
 	}
@@ -511,7 +543,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	q := v.cfg.randomQuestion(gid)
 	text, opts, correctIdx := shuffledQuestion(q)
 
-	mention := fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>", uid, html.EscapeString(displayName(&jr.From)))
+	mention := joinerLabel(uid, displayName(&jr.From), v.nameSpoilerOn())
 	link := ""
 	if v.botUsername != "" {
 		link = "https://t.me/" + v.botUsername + "?start=verify"

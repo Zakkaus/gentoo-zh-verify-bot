@@ -68,6 +68,17 @@ func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
 	})
 }
 
+// onSpoiler toggles whether a new member's display name is hidden behind a Telegram spoiler in the
+// in-group verification challenge — defeats spammers who set their name to an advert. Persisted.
+func (v *Verifier) onSpoiler(ctx *th.Context, update telego.Update) error {
+	return v.adminCmd(ctx, update, func() string {
+		if v.toggleNameSpoiler() {
+			return "🫥 已开启:新成员的名字会用「防剧透」遮盖,不点开看不到 —— 防止有人拿广告当名字在群里刷屏。"
+		}
+		return "👁 已关闭:新成员的名字将正常显示(不再遮盖)。"
+	})
+}
+
 // parseAutoDelArg interprets an /autodel argument (already trimmed + lower-cased) into an
 // action: "show" (empty), "off", "on", "set" (with a ttl of 1–1440 minutes), or "" for an
 // invalid argument. Pure (no state) so it's unit-tested directly.

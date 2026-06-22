@@ -13,8 +13,11 @@ import (
 // persistence matrix); add them here if they ever need to persist too.
 // Enabled is a *bool so a settings.json that is missing the field (e.g. a hand-written {}) keeps
 // the seeded default rather than silently unmarshalling to false and pausing verification.
+// NameSpoiler (/spoiler) persists the same way for the same reason — a missing field keeps the
+// seeded default (spoiler ON).
 type settingsState struct {
-	Enabled *bool `json:"enabled,omitempty"`
+	Enabled     *bool `json:"enabled,omitempty"`
+	NameSpoiler *bool `json:"name_spoiler,omitempty"`
 }
 
 // loadSettings overrides the NewVerifier-seeded runtime toggles with settings.json when present
@@ -32,11 +35,14 @@ func (v *Verifier) loadSettings() {
 		log.Printf("settings load %s: %v", v.settingsPath, err)
 		return
 	}
+	v.mu.Lock()
 	if st.Enabled != nil { // only override the seeded default when the field is actually present
-		v.mu.Lock()
 		v.enabled = *st.Enabled
-		v.mu.Unlock()
 	}
+	if st.NameSpoiler != nil {
+		v.nameSpoiler = *st.NameSpoiler
+	}
+	v.mu.Unlock()
 }
 
 // saveSettings persists the current runtime toggles. A no-op when STATE_DIRECTORY is unset.
@@ -46,6 +52,7 @@ func (v *Verifier) saveSettings() {
 	}
 	v.mu.Lock()
 	en := v.enabled
+	sp := v.nameSpoiler
 	v.mu.Unlock()
-	writeJSONFile(v.settingsPath, settingsState{Enabled: &en})
+	writeJSONFile(v.settingsPath, settingsState{Enabled: &en, NameSpoiler: &sp})
 }
