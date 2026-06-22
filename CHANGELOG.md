@@ -766,6 +766,17 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.7.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.1
+[3.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.0
+[3.6.7]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.7
+[3.6.6]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.6
+[3.6.5]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.5
+[3.6.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.4
+[3.6.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.3
+[3.6.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.2
+[3.6.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.1
+[3.6.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.0
+[3.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.5.0
 [3.4.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.3
 [3.4.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.2
 [3.4.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.4.1

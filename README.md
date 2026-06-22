@@ -126,6 +126,12 @@ The optional **`feed`** object — or **`feeds`**, an array of these objects for
 
 Requires **Go 1.26.4+** (matches `go.mod`; the 1.26.4 toolchain carries security fixes).
 
+> **Install:** grab a prebuilt static `linux-amd64`/`arm64` binary (with `SHA256SUMS`) from the
+> [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) page, or build from source
+> below. Note that `go install …@v3.x` does **not** work (the module path has no `/vN` major-version
+> suffix, by design — this is a binary, not an imported library); clone + `go build`, or use a
+> release binary.
+
 ```sh
 CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .
 sudo cp deploy/gentoo-zh-verify-bot.service /etc/systemd/system/

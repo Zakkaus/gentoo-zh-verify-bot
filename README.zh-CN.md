@@ -110,6 +110,11 @@ GITHUB_TOKEN=ghp_xxx
 ### 4. 构建运行
 需要 **Go 1.26.4+**(与 `go.mod` 一致;1.26.4 含安全修复)。
 
+> **安装:** 可从 [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 下载预编译的
+> `linux-amd64`/`arm64` 静态二进制(附 `SHA256SUMS`),或按下面从源码构建。注意 `go install …@v3.x`
+> **不可用**(module path 没有 `/vN` 大版本后缀 —— 这是二进制而非被引用的库,属预期);请 clone 后
+> `go build`,或直接用 release 二进制。
+
 ```sh
 CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .
 sudo cp deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
