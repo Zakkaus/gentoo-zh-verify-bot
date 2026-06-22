@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.0] - 2026-06-22
+
+### Added
+- **`/spoiler` — hide new members' names behind a spoiler (anti-advert).** Spam accounts often set
+  their *display name* to an advert, which then shows in the in-group verification challenge. The
+  challenge now hides each joiner's name behind a Telegram `<tg-spoiler>` **by default** (one tap to
+  reveal), so an ad can't be broadcast just by applying to join. Admin-toggleable via `/spoiler` and
+  **persisted** across restart (same `*bool` settings pattern as `/start` `/stop`). Rendered as a
+  single HTML-escaped spoiler entity (no nested mention link) so it can never produce an HTML parse
+  error that would break the critical challenge post.
+
+### Reliability
+- The early-cooldown `DeclineChatJoinRequest` error is now logged (was swallowed) for diagnosability.
+- The whole join-verification API-call path was adversarially audited (4 reviewers + synthesis,
+  independently re-running build/vet/test/`-race`): **reliable, no must-fix** — fallbacks (兜底)
+  confirmed in every failure direction (challenge-post / approve / ban / restart all fail safe; the
+  applicant is never silently stranded).
+
 ## [3.6.7] - 2026-06-22
 
 ### Performance / UX
