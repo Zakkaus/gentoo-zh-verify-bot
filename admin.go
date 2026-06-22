@@ -158,6 +158,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/bantime — 设定封禁时长(0=永久;如 7d/12h/30m)\n" +
 			"/autodel — 查询结果自动删除开关(/autodel on|off|<分钟>)\n" +
 			"/rich — 开关富文本输出(/pkg /use)\n" +
+			"/spoiler — 开关:遮盖新成员名字(防广告;默认开)\n" +
 			"/bc — 频道马甲封禁开关;/bc allow|deny <频道id> 管白名单\n" +
 			"/start /stop — 开启 / 关闭入群验证"
 	}

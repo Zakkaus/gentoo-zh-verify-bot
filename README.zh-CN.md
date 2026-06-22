@@ -39,7 +39,7 @@
 
 **自动播报(可选)** —— 轮询 Gentoo Bugzilla + 新闻,把**新增**项发到一个或多个频道(`feed` / `feeds`),各有语言 + 过滤;去重、重启不丢,**bug 状态变化时就地编辑那条消息**(未确认→已确认时就地编辑并补发一条 🔔 通知——因为未确认时的原消息是静默的;解决时 🐞→✅)。
 
-**其它**:守护多个群;自动退出未授权聊天;验证进度重启不丢;群消息按 TTL 自动删除;`/pkg` `/use` 可选富文本(`rich_messages` / `/rich`,默认关);`/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/help`。
+**其它**:守护多个群;自动退出未授权聊天;验证进度重启不丢;群消息按 TTL 自动删除;**默认把新成员的名字用防剧透遮盖**,防止广告号拿名字刷屏(`/spoiler`,可持久化);`/pkg` `/use` 可选富文本(`rich_messages` / `/rich`,默认关);`/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/help`。
 
 ## 部署
 
@@ -130,7 +130,7 @@ journalctl -fu gentoo-zh-verify-bot
   | `antispam.json` | `/bc` 频道马甲状态 + 白名单 |
   | `verifyfail.json` | 验证失败 strike / 冷却 |
   | `feed-<chat_id>.json` | 播报去重游标 + 已跟踪 bug 的消息 id |
-  | `settings.json` | 验证开关状态(`/start` · `/stop`)—— `/stop` 暂停验证可跨重启保留 |
+  | `settings.json` | 验证开关状态(`/start` · `/stop`)**和**名字遮盖开关(`/spoiler`)—— 均可跨重启保留 |
 
   **不**持久化(重启清零):每日 `/stats`;`/rich`、`/autodel`、`/bantime` 的运行时改动;以及查询 / 新闻 / 包缓存。
 - 验证链接依赖群为**公开群**。

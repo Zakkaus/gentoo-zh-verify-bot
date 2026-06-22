@@ -39,7 +39,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 
 **Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when its state changes** — an UNCONFIRMED bug becoming CONFIRMED (plus a one-off 🔔 notification, since the original UNCONFIRMED post is silent), and on resolution 🐞→✅.
 
-**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; bot messages auto-delete after a TTL; optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/help`.
+**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; bot messages auto-delete after a TTL; **hides each new member's display name behind a spoiler by default** so spam accounts can't broadcast an advert via their name (`/spoiler`, persisted); optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/help`.
 
 ## Telegram setup
 
@@ -147,7 +147,7 @@ Uses long polling — no inbound port or reverse proxy needed.
   | `antispam.json` | `/bc` channel sock-puppet state + whitelist |
   | `verifyfail.json` | verification failure strikes / cooldowns |
   | `feed-<chat_id>.json` | feed dedup cursors + tracked bug message IDs |
-  | `settings.json` | verification enabled/paused state (`/start` · `/stop`) — a `/stop` survives a restart |
+  | `settings.json` | verification enabled/paused (`/start` · `/stop`) **and** the name-spoiler toggle (`/spoiler`) — both survive a restart |
 
   **Not** persisted (reset on restart): daily `/stats`; the `/rich`, `/autodel` and `/bantime` runtime overrides; and the lookup / news / package caches.
 - The verification link relies on each group being **public**.
