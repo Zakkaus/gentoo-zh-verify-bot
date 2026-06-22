@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.1] - 2026-06-22
+
+### Docs
+- Documented **`/spoiler`** where it was missing: the `/help` admin section, README.md,
+  README.zh-CN.md, and the state-persistence tables (it persists in `settings.json` alongside
+  `/start` `/stop`).
+
+### CI
+- Added a **release workflow**: a `vX.Y.Z` tag now builds static linux **amd64 + arm64** binaries
+  (version baked in via ldflags), generates `SHA256SUMS`, and attaches them to the GitHub release.
+
 ## [3.7.0] - 2026-06-22
 
 ### Added
