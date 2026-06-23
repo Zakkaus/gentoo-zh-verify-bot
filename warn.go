@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -23,14 +21,9 @@ func (v *Verifier) loadWarns() {
 	if v.warnPath == "" {
 		return
 	}
-	data, err := os.ReadFile(v.warnPath)
-	if err != nil {
-		return
-	}
 	var recs []warnRec
-	if err := json.Unmarshal(data, &recs); err != nil {
-		log.Printf("warns load: %v", err)
-		return
+	if err := loadJSONFile(v.warnPath, &recs); err != nil {
+		return // corrupt file backed up to .corrupt; start empty
 	}
 	v.mu.Lock()
 	for _, r := range recs {
@@ -123,12 +116,16 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 	v.warns[pkey{gid, target.ID}]++
 	n := v.warns[pkey{gid, target.ID}]
 	v.mu.Unlock()
+	v.saveWarns() // persist the warning the moment it's issued — survives a failed at-limit kick + restart
 
 	if n >= limit {
 		rejoinable, err := v.warnKick(c, bot, gid, target.ID)
 		if err != nil {
 			log.Printf("/warn kick %d in %d: %v", target.ID, gid, err)
 			v.notify(c, bot, gid, "⚠️ 已达警告上限,但踢出失败:bot 可能缺少「封禁用户」权限。")
+			// Alert admins (the durable log) — a hit-limit-but-enforcement-failed case is exactly
+			// what they need to act on, and failAlert falls back to the group when admin_log is unset.
+			v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ %s 已达 %d 次警告上限但自动踢出失败,请手动处理(操作人 %s)", displayName(target), limit, displayName(msg.From)))
 			return nil
 		}
 		v.mu.Lock()
@@ -144,7 +141,6 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 		log.Printf("/warn-kick user=%d group=%d by=%d", target.ID, gid, msg.From.ID)
 		return nil
 	}
-	v.saveWarns()
 	v.notify(c, bot, gid, fmt.Sprintf("⚠️ 已警告 %s(%d/%d);满 %d 次将自动踢出。操作人 %s。", displayName(target), n, limit, limit, displayName(msg.From)))
 	log.Printf("/warn user=%d group=%d count=%d by=%d", target.ID, gid, n, msg.From.ID)
 	return nil

@@ -202,6 +202,7 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 	if err := v.applyBan(c, bot, gid, target.ID, secs, revoke); err != nil {
 		log.Printf("%s ban user=%d in %d: %v", cmd, target.ID, gid, err)
 		v.notify(c, bot, gid, "❌ 操作失败:bot 可能缺少「封禁用户」权限。")
+		v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ %s 失败:群 %d 目标 %d (%s),操作人 %s,bot 可能缺「封禁」权限", cmd, gid, target.ID, displayName(target), displayName(msg.From)))
 		return nil
 	}
 	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
