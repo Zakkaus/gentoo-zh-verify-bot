@@ -143,19 +143,28 @@ func aurArchLabel(pkgbuild string) string {
 	}
 }
 
-// aurArmStatus fetches an AUR package's PKGBUILD and reports its declared arch support.
+// aurArmStatus fetches an AUR package's PKGBUILD and reports its declared arch support. A 404 means
+// the package really isn't in the AUR; any other failure (timeout/5xx/network) is reported as a
+// query failure rather than a false "not in AUR".
 func (v *Verifier) aurArmStatus(ctx context.Context, pkg string) string {
 	body, err := httpGetBody(ctx, "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h="+neturl.QueryEscape(pkg), 64<<10)
 	if err != nil {
-		return "❌ 不在 AUR"
+		if httpStatusCode(err) == 404 {
+			return "❌ 不在 AUR"
+		}
+		return "⚠️ AUR 查询失败"
 	}
 	return aurArchLabel(string(body))
 }
 
-// alarmArmStatus checks whether Arch Linux ARM packages the name for aarch64 (200 vs 404).
+// alarmArmStatus checks whether Arch Linux ARM packages the name for aarch64 (200 vs 404). A non-404
+// failure is reported as a query failure, not a false "not packaged".
 func alarmArmStatus(ctx context.Context, pkg string) string {
 	if _, err := httpGetBody(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), 1<<10); err != nil {
-		return "❌ 未打包"
+		if httpStatusCode(err) == 404 {
+			return "❌ 未打包"
+		}
+		return "⚠️ 查询失败"
 	}
 	return "✅ 已打包"
 }

@@ -3,12 +3,33 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
 	"time"
 )
+
+// httpStatusError is returned by httpGet for a non-200 response, carrying the status code so a
+// caller can tell a definitive 404 (the resource really isn't there) from a transient 5xx/timeout/
+// network failure (where a definitive negative answer would be wrong).
+type httpStatusError struct {
+	url  string
+	code int
+}
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("GET %s: HTTP %d", e.url, e.code) }
+
+// httpStatusCode returns the HTTP status carried by a non-200 httpGet error, or 0 when the failure
+// wasn't an HTTP response at all (timeout, DNS, connection reset, body read).
+func httpStatusCode(err error) int {
+	var se *httpStatusError
+	if errors.As(err, &se) {
+		return se.code
+	}
+	return 0
+}
 
 // The shared outbound HTTP layer used by every network command (/pkg, /use, /bug, /news,
 // /wiki, /bbs, /distro, /arm, /armpkgs, the feed). All requests carry the bot's User-Agent
@@ -70,7 +91,7 @@ func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, 
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close() // discarding a non-200 body; close error is irrelevant (slot freed below)
 		<-httpSem
-		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+		return nil, &httpStatusError{url: url, code: resp.StatusCode}
 	}
 	resp.Body = &semReleaseCloser{ReadCloser: resp.Body} // slot released when the caller closes the body
 	return resp, nil
