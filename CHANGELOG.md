@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.1] - 2026-06-23
+
+### Fixed
+Two access-control boundary fixes on the v3.9.0 trusted-member bypass (review follow-up):
+- **A per-group `trusted_member_group_ids` can now explicitly DISABLE the bypass with `[]`** — the
+  resolver distinguishes an OMITTED field (inherit the global) from an explicit empty array (opt out
+  for that group). Previously both inherited the global, so a sensitive group couldn't opt out of a
+  global trusted source.
+- **A trusted member now takes priority over the failure cooldown** — the trusted-member check runs
+  *before* the anti-spam cooldown, so a verified member of a trusted group who had a prior failed
+  verify is auto-approved (and their strikes cleared) instead of being silently declined by the
+  cooldown. A confirmed trusted member whose auto-approve fails proceeds to normal verification and is
+  NOT cooldown-declined; only a non-member / unconfirmable applicant is subject to the cooldown.
+- Tests: gate-level `TestJoinGate` (the cooldown ordering — the integration branch the per-function
+  test missed) and the explicit-`[]`-disables resolver + LoadConfig cases.
+
 ## [3.9.0] - 2026-06-23
 
 ### Added
