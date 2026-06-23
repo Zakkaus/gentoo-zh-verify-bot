@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
-	"os"
 	"time"
 )
 
@@ -35,14 +33,9 @@ func (v *Verifier) loadVerifyFails() {
 	if v.vfailPath == "" {
 		return
 	}
-	data, err := os.ReadFile(v.vfailPath)
-	if err != nil {
-		return
-	}
 	var recs []vfailDisk
-	if err := json.Unmarshal(data, &recs); err != nil {
-		log.Printf("verifyfail load: %v", err)
-		return
+	if err := loadJSONFile(v.vfailPath, &recs); err != nil {
+		return // corrupt file backed up to .corrupt; start empty
 	}
 	v.mu.Lock()
 	for _, r := range recs {

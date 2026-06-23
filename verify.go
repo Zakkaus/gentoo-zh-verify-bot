@@ -415,6 +415,25 @@ func writeJSONFile(path string, val any) {
 	}
 }
 
+// loadJSONFile reads path and JSON-unmarshals it into dst. A MISSING file is not an error (first
+// run — the caller keeps its seeded/empty default). On a CORRUPT file (readable but invalid JSON) it
+// renames the file to path+".corrupt" before returning the error, so the next save can't silently
+// overwrite the original — the same hardening loadFeedState has, now shared by every state loader.
+func loadJSONFile(path string, dst any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		log.Printf("state load %s: %v — backing up to %s.corrupt and starting fresh", path, err, path)
+		if rerr := os.Rename(path, path+".corrupt"); rerr != nil {
+			log.Printf("state load: could not back up corrupt %s: %v", path, rerr)
+		}
+		return err
+	}
+	return nil
+}
+
 func (v *Verifier) save() {
 	if v.statePath == "" {
 		return
@@ -436,21 +455,32 @@ func (v *Verifier) load(bot *telego.Bot) {
 	if v.statePath == "" {
 		return
 	}
-	data, err := os.ReadFile(v.statePath)
-	if err != nil {
-		return
-	}
 	var recs []pendingRec
-	if err := json.Unmarshal(data, &recs); err != nil {
-		log.Printf("state load: %v", err)
-		return
+	if err := loadJSONFile(v.statePath, &recs); err != nil {
+		return // corrupt file backed up to .corrupt; start empty
 	}
 	for _, r := range recs {
 		gid, uid := r.GroupID, r.UserID
+		// Don't restore a pending for a group no longer configured (it would decline/strike against an
+		// unguarded chat), nor one whose question payload is out of range (an unwinnable quiz).
+		if !v.cfg.IsGroup(gid) {
+			log.Printf("state load: skip pending for unconfigured group %d (user %d)", gid, uid)
+			continue
+		}
+		if len(r.QOpts) < 2 || r.CorrectIdx < 0 || r.CorrectIdx >= len(r.QOpts) {
+			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
+			continue
+		}
 		p := &pending{groupMsgID: r.GroupMsgID, qText: r.QText, qOpts: r.QOpts,
 			correctIdx: r.CorrectIdx, nonce: r.Nonce, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
-		if delay < time.Second {
+		reason := "timeout"
+		if delay <= 0 {
+			// the deadline lapsed while the bot was down — give a returning user a fresh window and
+			// don't strike them if they still don't finish (they never had a chance after the restart).
+			delay = noFaultGrace
+			reason = "restart-lapsed"
+		} else if delay < time.Second {
 			delay = time.Second
 		}
 		v.mu.Lock()
@@ -459,7 +489,7 @@ func (v *Verifier) load(bot *telego.Bot) {
 		// near-immediate fire can't decline()->consume() before the entry exists. The captured
 		// nonce makes the decline a no-op if a fresh request has since replaced this pending.
 		nonce := p.nonce
-		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, "timeout") })
+		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, reason) })
 		v.mu.Unlock()
 	}
 	if len(recs) > 0 {
@@ -1147,11 +1177,12 @@ func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 	}
 	p.done = false
 	delay := time.Until(p.deadline)
-	if delay < time.Second {
-		delay = time.Second
+	if delay < noFaultGrace {
+		delay = noFaultGrace // OUR approve failed — give the user a real retry window, not ~1s
 	}
 	nonce := p.nonce // mirror onJoinRequest: a background-context timer that only declines THIS pending
-	p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, "timeout") })
+	// "approve-retry": if this timer fires it must NOT strike the user — the original failure was ours.
+	p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, "approve-retry") })
 }
 
 // wrongAnswerText is the callback alert shown after a wrong answer: a ban notice if this
@@ -1166,20 +1197,41 @@ func (v *Verifier) wrongAnswerText(banned bool) string {
 	return "❌ 答错了,已拒绝。可重新申请。"
 }
 
+// noFaultGrace is the retry window granted when a decline would NOT be the user's fault — after the
+// bot's own approve call failed, or when a restored pending's deadline lapsed while the bot was down
+// — so a returning/retrying legitimate user gets a real chance instead of being declined within ~1s.
+const noFaultGrace = 60 * time.Second
+
+// strikesUser reports whether a decline with this reason counts a verification strike against the
+// applicant. A genuine timeout or wrong answer does; a decline caused by OUR OWN failed approve
+// ("approve-retry") or by a deadline that lapsed while the bot was DOWN ("restart-lapsed") does NOT —
+// those aren't the user's fault, so they must never push a legitimate user toward the auto-ban.
+func strikesUser(reason string) bool {
+	switch reason {
+	case "approve-retry", "restart-lapsed":
+		return false
+	default:
+		return true
+	}
+}
+
 // decline rejects a failed verification (wrong answer / timeout). nonce identifies the exact
 // pending being rejected, so a stale timer can't decline a since-replaced one (see consumeNonce).
-// It records a strike; once an applicant reaches cfg.VerifyMaxFails strikes it is banned (for
-// the configured duration) instead of retrying forever. Returns handled=false if there was no
-// matching live pending, and banned=true if this failure crossed the auto-ban threshold.
+// It records a strike (unless strikesUser(reason) is false); once an applicant reaches
+// cfg.VerifyMaxFails strikes it is banned (for the configured duration) instead of retrying forever.
+// Returns handled=false if there was no matching live pending, banned=true if this crossed the ban.
 func (v *Verifier) decline(c context.Context, bot verifyBot, gid, uid int64, nonce, reason string) (handled, banned bool) {
 	p, ok := v.consumeNonce(gid, uid, nonce)
 	if !ok {
 		return false, false
 	}
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
-	v.recordDecision(false)
-	count, doBan := v.recordVerifyFail(gid, uid)
-
+	var count int
+	var doBan bool
+	if strikesUser(reason) { // a decline from OUR OWN failed approve / a restart-lapsed deadline isn't the user's fault — don't strike them
+		v.recordDecision(false)
+		count, doBan = v.recordVerifyFail(gid, uid)
+	}
 	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}) // benign if already gone
 	if doBan {
 		secs := v.banDuration()

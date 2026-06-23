@@ -1,11 +1,5 @@
 package main
 
-import (
-	"encoding/json"
-	"log"
-	"os"
-)
-
 // settingsState persists the runtime toggles operators expect to survive a service restart.
 // Currently just the verification enabled/paused flag (/start, /stop): a /stop during maintenance
 // should not be silently undone by a restart. The other runtime toggles (/rich, /autodel,
@@ -26,14 +20,9 @@ func (v *Verifier) loadSettings() {
 	if v.settingsPath == "" {
 		return
 	}
-	data, err := os.ReadFile(v.settingsPath)
-	if err != nil {
-		return // no file yet => keep the seeded default (enabled = true)
-	}
 	var st settingsState
-	if err := json.Unmarshal(data, &st); err != nil {
-		log.Printf("settings load %s: %v", v.settingsPath, err)
-		return
+	if err := loadJSONFile(v.settingsPath, &st); err != nil {
+		return // corrupt file backed up to .corrupt; keep the seeded default
 	}
 	v.mu.Lock()
 	if st.Enabled != nil { // only override the seeded default when the field is actually present

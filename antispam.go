@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 
@@ -33,14 +31,9 @@ func (v *Verifier) loadAntispam() {
 	if v.acPath == "" {
 		return
 	}
-	data, err := os.ReadFile(v.acPath)
-	if err != nil {
-		return
-	}
 	var st antispamState
-	if err := json.Unmarshal(data, &st); err != nil {
-		log.Printf("antispam load: %v", err)
-		return
+	if err := loadJSONFile(v.acPath, &st); err != nil {
+		return // corrupt file backed up to .corrupt; start empty
 	}
 	v.acMu.Lock()
 	v.acOn = st.Enabled
