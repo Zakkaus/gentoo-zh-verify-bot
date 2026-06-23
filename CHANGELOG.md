@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.3] - 2026-06-23
+
+### Changed
+- **Bug feed: the closed-bug marker now reflects the resolution — ✅ only for FIXED, ❌ for anything
+  closed without a fix** (INVALID/误报, WONTFIX, DUPLICATE, WORKSFORME, OBSOLETE, …). Previously every
+  resolved bug became ✅, which misrepresented e.g. a RESOLVED/INVALID bug as "fixed". Applies to both
+  a born-resolved bug and a tracked bug's resolution edit. (`resolvedMark`.)
+
 ## [3.7.2] - 2026-06-23
 
 ### Fixed
