@@ -326,6 +326,17 @@ func formatBugResolved(b recentBug, lang string) string {
 	return strings.Replace(formatBug(b, lang), "🐞", "✅", 1)
 }
 
+// formatNewBug renders a freshly-seen bug for the feed and whether to post it silently. A bug that
+// is ALREADY resolved the first time the feed sees it (filed and closed within one poll cycle — e.g.
+// resolved INVALID) gets the ✅ marker, not 🐞, and is posted silently: it is not an actionable new
+// open bug, so it shouldn't look open or ping. An open bug keeps 🐞 and the status-aware silence.
+func formatNewBug(b recentBug, lang string, baseSilent bool) (text string, silent bool) {
+	if bugResolved(b) {
+		return formatBugResolved(b, lang), true
+	}
+	return formatBug(b, lang), baseSilent
+}
+
 // refreshTracked edits the feed message of any tracked bug whose displayed state changed since
 // it was posted — a status transition (e.g. an UNCONFIRMED bug becoming CONFIRMED / IN_PROGRESS)
 // or a resolution (🐞 -> ✅, after which the bug is untracked). Runs per feed, in the feed's own
@@ -461,7 +472,8 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 			}
 			delivered := true
 			for i := len(nb) - 1; i >= 0; i-- { // oldest first
-				mid, ok := postFeed(ctx, bot, f.ChatID, formatBug(nb[i], f.Lang), f.bugSilent(nb[i]), 0)
+				text, silent := formatNewBug(nb[i], f.Lang, f.bugSilent(nb[i]))
+				mid, ok := postFeed(ctx, bot, f.ChatID, text, silent, 0)
 				if !ok {
 					delivered = false // leave the cursor so the next cycle retries this item
 					break

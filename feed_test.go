@@ -35,6 +35,20 @@ func TestBugSilent(t *testing.T) {
 	}
 }
 
+// TestFormatNewBug guards the born-resolved case: a bug already resolved the first time the feed
+// sees it (filed + closed within one poll, e.g. RESOLVED/INVALID) must render ✅ (not 🐞) and be
+// posted silently; an open bug keeps 🐞 and the caller's status-aware silence.
+func TestFormatNewBug(t *testing.T) {
+	text, silent := formatNewBug(recentBug{ID: 1, Summary: "x", Status: "CONFIRMED"}, "en", false)
+	if !strings.Contains(text, "🐞") || silent {
+		t.Errorf("an open new bug should be 🐞 and not forced silent (silent=%v)", silent)
+	}
+	text, silent = formatNewBug(recentBug{ID: 2, Summary: "x", Status: "RESOLVED", Resolution: "INVALID"}, "en", false)
+	if strings.Contains(text, "🐞") || !strings.Contains(text, "✅") || !silent {
+		t.Errorf("a born-resolved bug should be ✅ and silent (silent=%v)", silent)
+	}
+}
+
 // TestNewsCursorMonotonic guards the news-feed dedup against the "cursor scrolled off the
 // page -> re-broadcast the whole archive" bug: when the stored cursor URL is no longer in
 // the fetched list, nothing is re-posted and the cursor re-baselines to the newest item.
