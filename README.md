@@ -83,7 +83,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 
 | key | meaning |
 | --- | --- |
-| `groups` | per-group config: `[{id, required_channel_id?, channel_display?, channel_invite_url?, questions?}]`. Each optional field **falls back to the global default** below, so groups can share settings or be configured independently. A bare `group_ids` list (or singular `group_id`) is also accepted and treated as groups with no overrides |
+| `groups` | per-group config: `[{id, required_channel_id?, channel_display?, channel_invite_url?, trusted_member_group_ids?, questions?}]`. Each optional field **falls back to the global default** below, so groups can share settings or be configured independently. A bare `group_ids` list (or singular `group_id`) is also accepted and treated as groups with no overrides |
 | `required_channel_id` | **global default** channel applicants must join; `0` disables it (override per-group in `groups`) |
 | `channel_display` | **global default** channel shown to users, e.g. `@YourChannel` |
 | `channel_invite_url` | **global default** explicit join link; required for a **private** channel (no `@handle`) |
@@ -97,6 +97,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `verify_retry_seconds` | a declined applicant must wait this long before re-applying (default 180; negative = no cooldown) |
 | `verify_max_fails` | failed verifications before an applicant is auto-banned (default 3; negative = never auto-ban) |
 | `required_channel_fail_open` | when the bot can't read the required channel's membership, let verified applicants through (`true`, default) or hold them back (`false`). Admins are alerted either way |
+| `trusted_member_group_ids` | **trusted-member bypass**: an applicant who is **already a member of any of these chats** is auto-approved without a quiz (e.g. a sub-group trusting the main group's members). **Global default; override per-group** in `groups`. Use real chat ids (groups are `-100…`); the bot must be in each listed chat to read membership (they're treated as known chats, never auto-left). Unlike a required channel this **fails closed** — if membership can't be confirmed, the applicant just does the normal verification |
 | `admin_log_chat_id` | optional chat that receives a line per moderation / failed-approve event |
 | `overlays` | `/pkg` GitHub overlays `[{name,repo,branch}]` (default: gentoo-zh + guru) |
 | `news_url` | `/news` source index URL (default: gentoo.org news-items) |

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.0] - 2026-06-23
+
+### Added
+- **Trusted-member group bypass** (`trusted_member_group_ids`) — an applicant who is **already a member
+  of a configured trusted group** is auto-approved without the quiz, so verified members of a trusted
+  group (e.g. the main group) don't re-verify when joining a sub-group. Global default + per-group
+  override (same style as `required_channel_id`). Treated as an **access-control bypass, not a required
+  channel**: it **fails CLOSED** — if the source-group membership can't be confirmed (lookup error / bot
+  not in the group / non-member), the applicant just runs the normal verification; a failed auto-approve
+  is logged + alerted and also falls back, so a request is never left stuck. On a successful bypass it
+  clears any prior failed-verify strikes and records the approval — creating no pending and posting no
+  quiz. The trusted source groups are treated as **known chats** (`IsKnownChat`), so the auto-leave logic
+  never kicks the bot out of a group it needs to read membership from. A startup probe logs whether the
+  bot can read each trusted group's membership.
+
 ## [3.8.1] - 2026-06-23
 
 ### Changed

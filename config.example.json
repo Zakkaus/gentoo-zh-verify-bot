@@ -1,7 +1,8 @@
 {
   "groups": [
     {"id": -1001234567890},
-    {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"}
+    {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"},
+    {"id": -1005556667778, "trusted_member_group_ids": [-1001234567890]}
   ],
   "required_channel_id": 0,
   "channel_display": "@YourChannel",
@@ -16,6 +17,7 @@
   "verify_retry_seconds": 180,
   "verify_max_fails": 3,
   "required_channel_fail_open": true,
+  "trusted_member_group_ids": [],
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",

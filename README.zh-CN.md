@@ -68,7 +68,7 @@ GITHUB_TOKEN=ghp_xxx
 
 | 键 | 含义 |
 | --- | --- |
-| `groups` | 每个群单独配置:`[{id, required_channel_id?, channel_display?, channel_invite_url?, questions?}]`。每个可选字段**缺省时回落到下面的全局默认**,所以两个群既能共享设置、也能各自独立配置。也接受裸 `group_ids` 列表(或单数 `group_id`),当作无覆盖的群 |
+| `groups` | 每个群单独配置:`[{id, required_channel_id?, channel_display?, channel_invite_url?, trusted_member_group_ids?, questions?}]`。每个可选字段**缺省时回落到下面的全局默认**,所以两个群既能共享设置、也能各自独立配置。也接受裸 `group_ids` 列表(或单数 `group_id`),当作无覆盖的群 |
 | `required_channel_id` | **全局默认**:申请人必须关注的频道数字 id;`0` 关闭(可在 `groups` 里按群覆盖) |
 | `channel_display` | **全局默认**:展示给用户的频道,如 `@YourChannel` |
 | `channel_invite_url` | **全局默认**:频道邀请链接;**私有频道**(无 `@` 用户名)必填 |
@@ -82,6 +82,7 @@ GITHUB_TOKEN=ghp_xxx
 | `verify_retry_seconds` | 被拒申请人需等待多久才能重新申请(默认 180;负数 = 无冷却) |
 | `verify_max_fails` | 连续验证失败多少次后自动封禁(默认 3;负数 = 永不自动封禁) |
 | `required_channel_fail_open` | 当 bot 读不到必关频道成员状态时,放行已答题的申请人(`true`,默认)还是拦下(`false`)。两种情况都会告警管理员 |
+| `trusted_member_group_ids` | **可信成员免验证**:申请人若**已经是这些群之一的成员**,直接批准、跳过答题(例:子群信任主群的成员)。**全局默认,可在 `groups` 里按群覆盖**。用真实 chat id(群是 `-100…`);bot 必须在每个列出的群里才能读成员状态(它们会被当作已知聊天、不会被自动退出)。与必关频道不同,这里**fail-closed**——读不到成员身份就走正常验证,绝不直接放行 |
 | `admin_log_chat_id` | 可选:接收每次管理操作 / 批准失败的日志 |
 | `overlays` | `/pkg` 的 GitHub overlay `[{name,repo,branch}]`(默认 gentoo-zh + guru) |
 | `news_url` | `/news` 源索引 URL(默认 gentoo.org) |
