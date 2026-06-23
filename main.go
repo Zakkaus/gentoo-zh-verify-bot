@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -113,8 +114,13 @@ func main() {
 			log.Printf("WARNING: a feed entry has chat_id=0 (missing/invalid) — it is disabled; set its chat_id to the target channel")
 		}
 	}
+	var feedDone chan struct{}
 	if len(feeds) > 0 {
-		go runFeeds(ctx, bot, feeds, sd)
+		feedDone = make(chan struct{})
+		go func() {
+			defer close(feedDone)
+			runFeeds(ctx, bot, feeds, sd)
+		}()
 	}
 
 	go pkgC.refresh(ctx) // warm the package-search cache in the background (cancelled on shutdown)
@@ -128,4 +134,13 @@ func main() {
 	_ = bh.Stop()
 	v.save()
 	v.saveVerifyFails()
+	if feedDone != nil {
+		// Let the feed loop flush its final cursor/tracking state, but don't let a stuck network
+		// call hold up shutdown past a short grace period.
+		select {
+		case <-feedDone:
+		case <-time.After(5 * time.Second):
+			log.Printf("shutdown: feed state flush timed out")
+		}
+	}
 }

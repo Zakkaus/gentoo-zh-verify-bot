@@ -377,6 +377,9 @@ func writeJSONFile(path string, val any) {
 	}
 	tmp := f.Name()
 	_, werr := f.Write(data)
+	if werr == nil {
+		werr = f.Sync() // flush data to disk before the rename so a crash can't leave a torn/zero file
+	}
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
@@ -388,6 +391,12 @@ func writeJSONFile(path string, val any) {
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		log.Printf("state: rename %s: %v", path, err)
+		return
+	}
+	// fsync the directory so the rename itself is durable across a power loss.
+	if d, derr := os.Open(filepath.Dir(path)); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 }
 
