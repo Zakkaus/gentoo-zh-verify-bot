@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.4] - 2026-06-23
+
+### Changed / Fixed
+Feed reliability & sustainability pass (addresses a multi-agent review of the feed; two adversarial
+review rounds, 0 ship-blockers, 24 feed tests under `-race`):
+- **Edits paced + capped** — `refreshTracked` does at most 20 edits/cycle, each paced (cancellable, so
+  shutdown isn't held up), and stops the cycle on a Telegram 429. A large backlog (e.g. a mass re-mark)
+  now drains over several cycles instead of bursting past the rate limit.
+- **Resolved bugs stay tracked** so a later reopen/re-resolution re-renders the marker; eviction drops
+  the lowest-id RESOLVED bug before any open one, so a long-lived open bug isn't lost before its
+  resolution edit. Born-resolved bugs are tracked too.
+- **No silent losses** — a tracked bug gone from Bugzilla for 10 whole-fetch cycles, or failing a
+  non-rate-limit edit 10 times, is dropped (can't wedge a slot); the newest-bugs window is 100 (was 30)
+  with a WARNING if a one-interval burst still exceeds it; the news re-baseline and cursor baseline now
+  log; a corrupt state file is backed up to `.corrupt` instead of silently re-baselining.
+- **Durability** — state writes are `fsync`'d (file + dir); `fetchBugsByID` is chunked and a failed
+  chunk no longer ages out live bugs; the feed flushes its state on shutdown (main waits up to 5s).
+- Internal: the closed-bug marker is threaded as a parameter instead of a fragile `🐞`→mark replace.
+
 ## [3.7.3] - 2026-06-23
 
 ### Changed
