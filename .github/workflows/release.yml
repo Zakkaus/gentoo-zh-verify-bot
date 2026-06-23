@@ -13,14 +13,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
-      - name: Test gate (never publish binaries from a broken commit)
+      - name: Test gate (never publish binaries from a broken commit — same gate as CI)
         run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
           go vet ./...
-          go test ./...
+          go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+          go build ./...
+          go test -race ./...
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G304,G703,G706 ./...
       - name: Build static linux binaries (amd64, arm64)
         run: |
           set -euo pipefail
@@ -34,7 +42,7 @@ jobs:
           ( cd dist && sha256sum gentoo-zh-verify-bot-* > SHA256SUMS )
           ls -l dist
       - name: Publish release with binaries + checksums
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           files: |
