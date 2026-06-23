@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.1] - 2026-06-23
+
+### Changed
+Release / ops hardening (no runtime behavior change):
+- **The release workflow's Test gate now matches CI** — gofmt check, `go vet`, staticcheck, `go build`,
+  `go test -race`, govulncheck, and gosec all must pass before any release binary is built or uploaded
+  (it previously ran only `go vet` + `go test`).
+- **GitHub Actions are SHA-pinned** — `actions/checkout`, `actions/setup-go`, and
+  `softprops/action-gh-release` are pinned to commit SHAs (version in a trailing comment); Dependabot
+  continues to track and bump them.
+
+### Added (tests, no logic change)
+- **`writeJSONFile` unit tests** — the atomic-write primitive behind every restart-critical state file
+  (pending / warns / feed / settings): clean round-trip, a marshal failure leaves the prior file intact
+  (no torn/empty state), and concurrent writers stay corruption-free under `-race`.
+- **Fixture parser tests** for the drift-prone upstream parsers — `/news` (index HTML), `/use` (ebuild
+  IUSE + metadata.xml flags), `/pkg` (search-results HTML + ranking). `parseNews` and `rankSearchHits`
+  were extracted from their fetch wrappers so a fixed sample of the real page guards the regexes
+  against a silent "0 results" if a site's markup drifts. Coverage 31.4% → 33.4%.
+
 ## [3.8.0] - 2026-06-23
 
 ### Added
