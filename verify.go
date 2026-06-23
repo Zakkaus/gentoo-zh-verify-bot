@@ -40,6 +40,20 @@ type verifyBot interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 }
 
+// modBot is the wider slice of the telego.Bot API the admin-gate + moderation paths use — a superset
+// of verifyBot. Threading it instead of a concrete *telego.Bot lets the admin gate (adminStatus /
+// isGroupAdmin), the mute/unmute helpers, and the warn-limit kick be unit-tested with a fake; so the
+// security-critical "who is allowed / does the deny path act" branches get regression coverage.
+// *telego.Bot satisfies it, so callers are unchanged — pure compile-checked type-widening.
+type modBot interface {
+	verifyBot
+	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
+	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
+	RestrictChatMember(ctx context.Context, params *telego.RestrictChatMemberParams) error
+	UnbanChatMember(ctx context.Context, params *telego.UnbanChatMemberParams) error
+	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
+}
+
 type pending struct {
 	groupMsgID int
 	qText      string

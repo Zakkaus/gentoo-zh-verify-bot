@@ -32,7 +32,7 @@ func (v *Verifier) pruneAdminCacheLocked(now time.Time) {
 // adminStatus returns whether userID is an admin/creator of chatID, surfacing any API error so
 // callers can fail-closed where it matters. A confirmed admin is cached for adminCacheTTL so the
 // hot path (admin buttons, moderation commands) skips a ~0.5s GetChatMember round-trip on repeat use.
-func (v *Verifier) adminStatus(c context.Context, bot *telego.Bot, chatID, userID int64) (bool, error) {
+func (v *Verifier) adminStatus(c context.Context, bot modBot, chatID, userID int64) (bool, error) {
 	key := pkey{chatID, userID}
 	v.adminMu.Lock()
 	exp, cached := v.adminCache[key]
@@ -60,7 +60,7 @@ func (v *Verifier) adminStatus(c context.Context, bot *telego.Bot, chatID, userI
 
 // isGroupAdmin is the fail-safe form (error => not admin), suitable for checking
 // whether the COMMAND INVOKER is allowed (denying on error is safe).
-func (v *Verifier) isGroupAdmin(c context.Context, bot *telego.Bot, chatID, userID int64) bool {
+func (v *Verifier) isGroupAdmin(c context.Context, bot modBot, chatID, userID int64) bool {
 	ok, err := v.adminStatus(c, bot, chatID, userID)
 	if err != nil {
 		log.Printf("isGroupAdmin getChatMember chat=%d user=%d: %v", chatID, userID, err)
@@ -94,7 +94,7 @@ func missingModRights(cm telego.ChatMember) []string {
 // a group it hasn't been granted admin in yet is visible in the logs rather than silently
 // inert. Telegram only delivers join requests to admins, so a non-admin group is harmless
 // — the bot just can't verify there until granted admin. Safe to run in the background.
-func (v *Verifier) logGroupAdmin(c context.Context, bot *telego.Bot, selfID int64) {
+func (v *Verifier) logGroupAdmin(c context.Context, bot modBot, selfID int64) {
 	for i := range v.cfg.Groups {
 		gid := v.cfg.Groups[i].ID
 		switch ok, err := v.adminStatus(c, bot, gid, selfID); {
@@ -131,7 +131,7 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot *telego.Bot, selfID int6
 }
 
 // notify sends a transient message to chatID and auto-deletes it after NotifyTTLSeconds.
-func (v *Verifier) notify(c context.Context, bot *telego.Bot, chatID int64, text string) {
+func (v *Verifier) notify(c context.Context, bot modBot, chatID int64, text string) {
 	m, err := bot.SendMessage(c, tu.Message(tu.ID(chatID), text))
 	if err != nil || m == nil {
 		return
@@ -173,7 +173,7 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
 
-	target := v.warnPrecheck(ctx, msg, cmd, true) // shared admin-gate + reply-target + skip-admins
+	target := v.warnPrecheck(c, bot, msg, cmd, true) // shared admin-gate + reply-target + skip-admins
 	if target == nil {
 		return nil
 	}

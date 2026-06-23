@@ -15,7 +15,7 @@ import (
 // applyMute restricts uid in gid from sending anything until now+secs; Telegram automatically
 // lifts the restriction when it expires (so there's no separate unmute to schedule). An empty
 // ChatPermissions{} means every "can send …" flag is false — a full mute. secs must be > 0.
-func (v *Verifier) applyMute(c context.Context, bot *telego.Bot, gid, uid int64, secs int) error {
+func (v *Verifier) applyMute(c context.Context, bot modBot, gid, uid int64, secs int) error {
 	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{
 		ChatID:      tu.ID(gid),
 		UserID:      uid,
@@ -29,7 +29,7 @@ func (v *Verifier) applyMute(c context.Context, bot *telego.Bot, gid, uid int64,
 // whether those defaults were actually read; if GetChat fails it falls back to a permissive set
 // (the common case where members post freely) and returns restoredDefault=false so the caller can
 // say so honestly rather than silently over-granting in a restrictive group.
-func (v *Verifier) applyUnmute(c context.Context, bot *telego.Bot, gid, uid int64) (restoredDefault bool, err error) {
+func (v *Verifier) applyUnmute(c context.Context, bot modBot, gid, uid int64) (restoredDefault bool, err error) {
 	perms := telego.ChatPermissions{
 		CanSendMessages: telego.ToPtr(true), CanSendAudios: telego.ToPtr(true), CanSendDocuments: telego.ToPtr(true),
 		CanSendPhotos: telego.ToPtr(true), CanSendVideos: telego.ToPtr(true), CanSendVideoNotes: telego.ToPtr(true),
@@ -59,7 +59,7 @@ func (v *Verifier) onMute(ctx *th.Context, update telego.Update) error {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
 
-	target := v.warnPrecheck(ctx, msg, "/mute", true) // admin gate + reply target + skip admins
+	target := v.warnPrecheck(c, bot, msg, "/mute", true) // admin gate + reply target + skip admins
 	if target == nil {
 		return nil
 	}
@@ -104,7 +104,7 @@ func (v *Verifier) onUnmute(ctx *th.Context, update telego.Update) error {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
 
-	target := v.warnPrecheck(ctx, msg, "/unmute", false) // admin gate + reply target
+	target := v.warnPrecheck(c, bot, msg, "/unmute", false) // admin gate + reply target
 	if target == nil {
 		return nil
 	}

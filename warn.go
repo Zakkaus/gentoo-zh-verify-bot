@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -62,9 +63,7 @@ func (v *Verifier) saveWarns() {
 // warnPrecheck shares the admin-gate + reply-target resolution of /warn and /clearwarn.
 // It returns the target user, or nil if the caller should stop (it has already replied
 // with the reason). The invoking command message is removed by the caller's defer.
-func (v *Verifier) warnPrecheck(ctx *th.Context, msg *telego.Message, cmd string, checkTargetAdmin bool) *telego.User {
-	bot := ctx.Bot()
-	c := ctx.Context()
+func (v *Verifier) warnPrecheck(c context.Context, bot modBot, msg *telego.Message, cmd string, checkTargetAdmin bool) *telego.User {
 	gid := msg.Chat.ID
 	if !v.isGroupAdmin(c, bot, gid, msg.From.ID) {
 		v.notify(c, bot, gid, fmt.Sprintf("⛔ %s 只能由群管理员使用。", cmd))
@@ -87,6 +86,21 @@ func (v *Verifier) warnPrecheck(ctx *th.Context, msg *telego.Message, cmd string
 	return target
 }
 
+// warnKick is the warn-limit auto-kick: it bans uid in gid then immediately unbans (OnlyIfBanned)
+// so the kick is REJOINABLE; rejoinable=false when that unban failed (the ban stuck). err is non-nil
+// only when the ban itself failed. Seamed on modBot so this access action is unit-testable.
+func (v *Verifier) warnKick(c context.Context, bot modBot, gid, uid int64) (rejoinable bool, err error) {
+	if err = bot.BanChatMember(c, &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+		return false, err
+	}
+	rejoinable = true
+	if uerr := bot.UnbanChatMember(c, &telego.UnbanChatMemberParams{ChatID: tu.ID(gid), UserID: uid, OnlyIfBanned: true}); uerr != nil {
+		rejoinable = false // ban stuck: report honestly rather than claiming a re-joinable kick
+		log.Printf("/warn unban %d in %d: %v", uid, gid, uerr)
+	}
+	return rejoinable, nil
+}
+
 // onWarn handles /warn — reply to a user, add a warning; auto-kick (rejoinable) at the limit.
 func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -100,7 +114,7 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
 
-	target := v.warnPrecheck(ctx, msg, "/warn", true)
+	target := v.warnPrecheck(c, bot, msg, "/warn", true)
 	if target == nil {
 		return nil
 	}
@@ -111,15 +125,11 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 	v.mu.Unlock()
 
 	if n >= limit {
-		if err := bot.BanChatMember(c, &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: target.ID}); err != nil {
+		rejoinable, err := v.warnKick(c, bot, gid, target.ID)
+		if err != nil {
 			log.Printf("/warn kick %d in %d: %v", target.ID, gid, err)
 			v.notify(c, bot, gid, "⚠️ 已达警告上限,但踢出失败:bot 可能缺少「封禁用户」权限。")
 			return nil
-		}
-		rejoinable := true
-		if err := bot.UnbanChatMember(c, &telego.UnbanChatMemberParams{ChatID: tu.ID(gid), UserID: target.ID, OnlyIfBanned: true}); err != nil {
-			rejoinable = false // ban stuck: report honestly rather than claiming a re-joinable kick
-			log.Printf("/warn unban %d in %d: %v", target.ID, gid, err)
 		}
 		v.mu.Lock()
 		delete(v.warns, pkey{gid, target.ID})
@@ -153,7 +163,7 @@ func (v *Verifier) onClearWarn(ctx *th.Context, update telego.Update) error {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
 
-	target := v.warnPrecheck(ctx, msg, "/clearwarn", false)
+	target := v.warnPrecheck(c, bot, msg, "/clearwarn", false)
 	if target == nil {
 		return nil
 	}
