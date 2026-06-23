@@ -223,6 +223,9 @@ func LoadConfig(path string) (*Config, error) {
 	if c.TimeoutSeconds <= 0 {
 		c.TimeoutSeconds = 240
 	}
+	if c.TimeoutSeconds < 30 {
+		c.TimeoutSeconds = 30 // a too-short timeout makes the challenge unwinnable and strikes real users
+	}
 	if c.TimeoutSeconds > 1800 {
 		c.TimeoutSeconds = 1800
 	}

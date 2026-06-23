@@ -89,6 +89,32 @@ func TestLoadConfigValidation(t *testing.T) {
 	}
 }
 
+// TestTimeoutSecondsClamp verifies the verification timeout is clamped sane: a too-small value (a
+// typo) is raised to the 30s floor so the challenge stays winnable, an oversized one is capped, and
+// an omitted one takes the default.
+func TestTimeoutSecondsClamp(t *testing.T) {
+	load := func(ts any) *Config {
+		m := map[string]any{"group_ids": []int{-100}, "questions": sampleQ}
+		if ts != nil {
+			m["timeout_seconds"] = ts
+		}
+		c, err := LoadConfig(writeConfig(t, m))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if c := load(1); c.TimeoutSeconds != 30 {
+		t.Errorf("timeout_seconds:1 should clamp to the 30s floor, got %d", c.TimeoutSeconds)
+	}
+	if c := load(nil); c.TimeoutSeconds != 240 {
+		t.Errorf("omitted timeout_seconds should default to 240, got %d", c.TimeoutSeconds)
+	}
+	if c := load(99999); c.TimeoutSeconds != 1800 {
+		t.Errorf("oversized timeout_seconds should cap at 1800, got %d", c.TimeoutSeconds)
+	}
+}
+
 // TestWarnLimitDefault verifies the documented default is applied when omitted.
 func TestWarnLimitDefault(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
