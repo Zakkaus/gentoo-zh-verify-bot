@@ -539,6 +539,51 @@ func (v *Verifier) onMyChatMember(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
+// isChatMember reports whether uid is currently in chatID (creator/admin/member, or restricted but
+// still a member). Returns false on ANY lookup error and for left/kicked/banned, so an exempt check
+// fails SAFE — an unconfirmable membership just falls through to the normal verification.
+func (v *Verifier) isChatMember(c context.Context, bot modBot, chatID, uid int64) bool {
+	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(chatID), UserID: uid})
+	if err != nil {
+		log.Printf("exempt: getChatMember(chat=%d user=%d): %v", chatID, uid, err)
+		return false
+	}
+	switch cm.MemberStatus() {
+	case "creator", "administrator", "member":
+		return true
+	default:
+		return cm.MemberIsMember()
+	}
+}
+
+// tryTrustedBypass approves the join request WITHOUT a quiz when the applicant is already a member of
+// one of group gid's configured trusted groups (config: trusted_member_group_ids) — so a verified
+// member of a trusted group (e.g. the main group) doesn't re-verify in a sub-group. Returns true only
+// when it approved. Fails SAFE: a membership-lookup error or a non-member never approves; a FAILED
+// approval is logged + alerted and returns false so the caller runs the NORMAL verification (the
+// request is never left stuck). On a successful bypass it clears any prior failed-verify strikes and
+// records the approval — but creates no pending and posts no quiz.
+func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) bool {
+	for _, src := range v.cfg.trustedGroups(gid) {
+		if src == 0 || src == gid {
+			continue // ignore a blank or self-referential entry
+		}
+		if !v.isChatMember(c, bot, src, uid) { // fail-closed: error / non-member / unreadable => no bypass
+			continue
+		}
+		if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+			log.Printf("trusted-bypass: approve %d in %d failed (%v) — falling back to normal verification", uid, gid, err)
+			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 是可信群 %d 成员,在群 %d 自动免验证放行失败(%v);将走正常验证流程", uid, src, gid, err))
+			return false
+		}
+		v.clearVerifyFails(gid, uid) // a now-trusted member starts with a clean slate
+		v.recordDecision(true)
+		log.Printf("verify: trusted-bypass auto-approved %d in %d (already a member of trusted group %d)", uid, gid, src)
+		return true
+	}
+	return false
+}
+
 func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	jr := update.ChatJoinRequest
 	if jr == nil || !v.cfg.IsGroup(jr.Chat.ID) {
@@ -560,6 +605,12 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
 		}
 		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, int(wait.Seconds())+1)
+		return nil
+	}
+	// Trusted-member fast path: if the applicant already belongs to one of this group's configured
+	// trusted groups (trusted_member_group_ids), approve without a quiz. Fails safe — an unconfirmable
+	// membership (or a failed auto-approve) falls through to the normal challenge below.
+	if v.tryTrustedBypass(c, bot, gid, uid) {
 		return nil
 	}
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)

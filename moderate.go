@@ -128,6 +128,23 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot modBot, selfID int64) {
 			log.Printf("required channel %d: bot can read membership ✓", rc)
 		}
 	}
+	// Probe each distinct trusted-member source group: if the bot can't read its membership there,
+	// the bypass can't be applied (applicants just fall back to verifying) — surface it now.
+	trusted := append([]int64{}, v.cfg.TrustedMemberGroupIDs...)
+	for i := range v.cfg.Groups {
+		trusted = append(trusted, v.cfg.Groups[i].TrustedMemberGroupIDs...)
+	}
+	for _, src := range trusted {
+		if src == 0 || seen[src] {
+			continue
+		}
+		seen[src] = true
+		if _, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(src), UserID: selfID}); err != nil {
+			log.Printf("trusted group %d: bot CANNOT read membership (%v) — its members can't be auto-approved; add the bot there (member/admin)", src, err)
+		} else {
+			log.Printf("trusted group %d: bot can read membership ✓ — its members skip verification", src)
+		}
+	}
 }
 
 // notify sends a transient message to chatID and auto-deletes it after NotifyTTLSeconds.

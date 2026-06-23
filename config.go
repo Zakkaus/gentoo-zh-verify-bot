@@ -32,6 +32,13 @@ type GroupConfig struct {
 	ChannelDisplay    string     `json:"channel_display"`     // "" => global channel_display
 	ChannelInviteURL  string     `json:"channel_invite_url"`  // "" => global channel_invite_url
 	Questions         []Question `json:"questions"`           // empty => global questions
+	// TrustedMemberGroupIDs lists OTHER chats whose existing members skip THIS group's join
+	// verification: an applicant already in any of them is auto-approved (no quiz). Use it so
+	// verified members of a trusted group (e.g. the main group) don't re-verify in a sub-group.
+	// nil/empty => fall back to the global trusted_member_group_ids. Fails SAFE — an unconfirmable
+	// membership falls back to the normal challenge. The bot must be able to read each listed chat's
+	// membership (be a member/admin there); those chats are also treated as known (no auto-leave).
+	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 }
 
 // FeedConfig configures the optional auto-feed: the bot polls Gentoo Bugzilla + news
@@ -73,6 +80,11 @@ type Config struct {
 	// RequiredChannelID: applicants must have joined this channel (0 = disabled).
 	RequiredChannelID int64  `json:"required_channel_id"`
 	ChannelDisplay    string `json:"channel_display"`
+	// TrustedMemberGroupIDs: global default for the trusted-member bypass — an applicant already in
+	// any of these chats is auto-approved without a quiz. A per-group trusted_member_group_ids
+	// overrides this. Use real chat ids (groups/supergroups are -100…). NOT a required_channel: a
+	// failed/unreadable membership check falls back to normal verification (never auto-approves).
+	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 	// ChannelInviteURL: explicit join link for the required channel — needed for
 	// PRIVATE channels (no public @handle). If empty, an @handle channel_display
 	// is turned into a t.me link automatically.
@@ -303,6 +315,16 @@ func (c *Config) requiredChannel(id int64) int64 {
 	return c.RequiredChannelID
 }
 
+// trustedGroups returns the chats whose existing members skip group id's join verification: the
+// per-group trusted_member_group_ids if set, otherwise the global default. (Per-group override style,
+// like requiredChannel.)
+func (c *Config) trustedGroups(id int64) []int64 {
+	if g := c.group(id); g != nil && len(g.TrustedMemberGroupIDs) > 0 {
+		return g.TrustedMemberGroupIDs
+	}
+	return c.TrustedMemberGroupIDs
+}
+
 // failOpenChannel reports whether to let a verified applicant through when the required
 // channel's membership can't be read (default true). See RequiredChannelFailOpen.
 func (c *Config) failOpenChannel() bool {
@@ -339,9 +361,21 @@ func (c *Config) IsKnownChat(id int64) bool {
 		(c.AdminLogChatID != 0 && id == c.AdminLogChatID) {
 		return true
 	}
+	// Trusted-member source groups (global + per-group) — the bot must stay in them to read
+	// membership for the bypass, so they must NOT be auto-left.
+	for _, t := range c.TrustedMemberGroupIDs {
+		if t == id {
+			return true
+		}
+	}
 	for i := range c.Groups {
 		if c.Groups[i].RequiredChannelID != nil && *c.Groups[i].RequiredChannelID == id {
 			return true
+		}
+		for _, t := range c.Groups[i].TrustedMemberGroupIDs {
+			if t == id {
+				return true
+			}
 		}
 	}
 	for i := range c.Feeds {
