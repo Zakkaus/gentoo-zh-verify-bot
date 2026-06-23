@@ -16,9 +16,29 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// maxTracked bounds how many recently-posted open bugs a feed follows for in-place state-change
-// edits (older ones drop off — these edits are best-effort for recent bugs).
+// maxTracked bounds how many recently-posted bugs a feed follows for in-place state-change edits.
+// When full, trackBug evicts an already-resolved tracked bug first (terminal-ish), only sacrificing
+// a still-OPEN bug — whose eventual resolution we still want to catch — when no resolved one remains.
 const maxTracked = 200
+
+// recentBugsLimit is the newest-bugs page size. A gap (more new bugs in one interval than this) is
+// detected and logged rather than silently skipped (see postFeedItems).
+const recentBugsLimit = 100
+
+// maxEditsPerCycle caps how many tracked-bug edits one refresh does, so a large backlog (e.g. after
+// downtime, or a mass re-mark) drains over several cycles instead of bursting past Telegram's
+// per-chat edit rate limit. The remainder stays tracked and is picked up next cycle.
+const maxEditsPerCycle = 20
+
+// maxTrackMisses drops a tracked bug after this many CONSECUTIVE cycles absent from a (non-empty)
+// refetch — i.e. it vanished from Bugzilla (deleted / moved to a restricted product) — so it can't
+// wedge a tracking slot forever. Generous, so a transient partial-fetch can't evict a live bug.
+const maxTrackMisses = 10
+
+// maxEditFails drops a tracked bug after this many CONSECUTIVE non-rate-limit transient edit
+// failures (e.g. a misclassified-permanent error), so one un-editable message can't burn an edit
+// every cycle forever. Rate-limit (429) failures are NOT counted (they're not the bug's fault).
+const maxEditFails = 10
 
 // feedBot is the slice of the telego.Bot API the feed uses to post and edit messages. Threading
 // this interface (rather than *telego.Bot) through postFeed and refreshTracked lets the send/edit
@@ -32,6 +52,23 @@ type feedBot interface {
 // can zero it; production keeps the gentle 1s pacing.
 var feedSendPause = time.Second
 
+// paceFeed waits feedSendPause to space out feed API calls, but returns early (false) if ctx is
+// cancelled — so a shutdown isn't held up by pacing, which would otherwise blow past the final
+// state-flush grace period and risk re-posting already-delivered items on the next start.
+func paceFeed(ctx context.Context) bool {
+	if feedSendPause <= 0 {
+		return true
+	}
+	t := time.NewTimer(feedSendPause)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // feedState is the on-disk dedup cursor so a restart doesn't re-post or miss items. Tracked
 // records the message id of each recently-posted OPEN bug so the feed can edit it to show
 // "resolved" once Bugzilla closes it.
@@ -42,9 +79,20 @@ type feedState struct {
 }
 
 type trackedBug struct {
-	MsgID  int    `json:"msg_id"`
-	State  string `json:"state"`            // last-rendered state key (status|resolution); edit when it changes
-	Status string `json:"status,omitempty"` // legacy pre-v3.4.3 field; folded into State by migrateFeedState on load
+	MsgID     int    `json:"msg_id"`
+	State     string `json:"state"`                // last-rendered state key (status|resolution); edit when it changes
+	Misses    int    `json:"misses,omitempty"`     // consecutive cycles absent from a non-empty refetch (vanished bug)
+	EditFails int    `json:"edit_fails,omitempty"` // consecutive non-rate-limit transient edit failures
+	Status    string `json:"status,omitempty"`     // legacy pre-v3.4.3 field; folded into State by migrateFeedState on load
+}
+
+// resolvedState reports whether a tracked bug's stored state key (status|resolution) is closed —
+// the resolution component is non-empty. Mirrors bugResolved for a persisted state key.
+func resolvedState(stateKey string) bool {
+	if i := strings.IndexByte(stateKey, '|'); i >= 0 {
+		return strings.TrimSpace(stateKey[i+1:]) != ""
+	}
+	return false
 }
 
 // bugStateKey captures a bug's *displayed* state (status + resolution) so the feed only edits a
@@ -60,29 +108,53 @@ func statusOf(stateKey string) string {
 	return stateKey
 }
 
-// trackBug remembers the message posted for an OPEN bug so a later status change / resolution can
-// edit it in place. Resolved bugs aren't tracked (nothing left to update); the map is bounded by
-// maxTracked, dropping the lowest (oldest) bug id when full.
+// trackBug remembers the message posted for a bug so a later status change, resolution, OR reopen
+// can edit it in place. Both open and born-resolved bugs are tracked (a resolved bug can be reopened
+// and re-resolved differently). The map is bounded by maxTracked; when full evictOne drops a
+// resolved bug before an open one, so a long-lived open bug isn't lost before its resolution edit.
 func (st *feedState) trackBug(b recentBug, msgID int) {
-	if msgID == 0 || bugResolved(b) {
+	if msgID == 0 {
 		return
 	}
 	if st.Tracked == nil {
 		st.Tracked = map[string]*trackedBug{}
 	}
 	for len(st.Tracked) >= maxTracked {
-		oldest := 0
-		for k := range st.Tracked {
-			if id, err := strconv.Atoi(k); err == nil && (oldest == 0 || id < oldest) {
-				oldest = id
-			}
-		}
-		if oldest == 0 {
+		if !st.evictOne() {
 			break
 		}
-		delete(st.Tracked, strconv.Itoa(oldest))
 	}
 	st.Tracked[strconv.Itoa(b.ID)] = &trackedBug{MsgID: msgID, State: bugStateKey(b)}
+}
+
+// evictOne removes one tracked bug to make room: the lowest-id RESOLVED bug if any exists, else the
+// lowest-id open bug (a junk entry is cleared eagerly). Returns false only if there was nothing to
+// evict. Preferring resolved over open means an old open bug keeps its slot until it finally closes.
+func (st *feedState) evictOne() bool {
+	bestResolved, bestOpen := 0, 0
+	for k, tb := range st.Tracked {
+		id, err := strconv.Atoi(k)
+		if err != nil || tb == nil {
+			delete(st.Tracked, k) // junk entry — clearing it makes room
+			return true
+		}
+		if resolvedState(tb.State) {
+			if bestResolved == 0 || id < bestResolved {
+				bestResolved = id
+			}
+		} else if bestOpen == 0 || id < bestOpen {
+			bestOpen = id
+		}
+	}
+	evict := bestResolved
+	if evict == 0 {
+		evict = bestOpen
+	}
+	if evict == 0 {
+		return false
+	}
+	delete(st.Tracked, strconv.Itoa(evict))
+	return true
 }
 
 type bugUser struct {
@@ -137,7 +209,8 @@ const bugFields = "id,summary,status,resolution,product,component,priority,sever
 	"keywords,creation_time,cf_stabilisation_atoms,assigned_to_detail,creator_detail"
 
 func fetchRecentBugs(ctx context.Context) []recentBug {
-	u := "https://bugs.gentoo.org/rest/bug?order=bug_id%20DESC&limit=30&include_fields=" + bugFields
+	u := "https://bugs.gentoo.org/rest/bug?order=bug_id%20DESC&limit=" +
+		strconv.Itoa(recentBugsLimit) + "&include_fields=" + bugFields
 	var br struct {
 		Bugs []recentBug `json:"bugs"`
 	}
@@ -148,25 +221,34 @@ func fetchRecentBugs(ctx context.Context) []recentBug {
 	return br.Bugs // newest first (order=bug_id DESC)
 }
 
-// fetchBugsByID fetches the current state of specific bugs (used to detect when a previously
-// posted bug has been resolved/closed, so its feed message can be edited).
-func fetchBugsByID(ctx context.Context, ids []int) []recentBug {
-	if len(ids) == 0 {
-		return nil
+// fetchBugsByID fetches the current state of specific bugs (to detect when a posted bug has been
+// resolved/reopened, so its message can be edited). Requested in chunks so one oversized/failing
+// request can't lose the whole batch. Returns allOK=false if ANY chunk failed, so refreshTracked
+// can avoid mistaking a bug that was in a failed chunk for one that vanished from Bugzilla.
+func fetchBugsByID(ctx context.Context, ids []int) (bugs []recentBug, allOK bool) {
+	const chunkSize = 50
+	allOK = true
+	for i := 0; i < len(ids); i += chunkSize {
+		end := i + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		parts := make([]string, end-i)
+		for j, id := range ids[i:end] {
+			parts[j] = strconv.Itoa(id)
+		}
+		u := "https://bugs.gentoo.org/rest/bug?include_fields=" + bugFields + "&id=" + strings.Join(parts, ",")
+		var br struct {
+			Bugs []recentBug `json:"bugs"`
+		}
+		if err := httpGetJSON(ctx, u, nil, &br); err != nil {
+			log.Printf("feed: tracked-bug refetch chunk [%d:%d]: %v", i, end, err)
+			allOK = false
+			continue
+		}
+		bugs = append(bugs, br.Bugs...)
 	}
-	parts := make([]string, len(ids))
-	for i, id := range ids {
-		parts[i] = strconv.Itoa(id)
-	}
-	u := "https://bugs.gentoo.org/rest/bug?include_fields=" + bugFields + "&id=" + strings.Join(parts, ",")
-	var br struct {
-		Bugs []recentBug `json:"bugs"`
-	}
-	if err := httpGetJSON(ctx, u, nil, &br); err != nil {
-		log.Printf("feed: tracked-bug refetch: %v", err)
-		return nil
-	}
-	return br.Bugs
+	return bugs, allOK
 }
 
 // bugResolved reports whether a bug is closed (a resolution has been set: RESOLVED/VERIFIED/…);
@@ -178,7 +260,13 @@ func loadFeedState(path string) feedState {
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &st); err != nil {
-				log.Printf("feed state load %s: %v", path, err)
+				// Don't silently clobber: a corrupt file would otherwise re-baseline (losing all
+				// tracking, the very failure that froze old markers). Preserve it for inspection.
+				log.Printf("feed state load %s: %v — backing up to %s.corrupt and starting fresh (tracking re-baselines)", path, err, path)
+				st = feedState{}
+				if rerr := os.Rename(path, path+".corrupt"); rerr != nil {
+					log.Printf("feed state: could not back up corrupt %s: %v", path, rerr)
+				}
 			}
 		}
 	}
@@ -228,7 +316,7 @@ func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silen
 		log.Printf("feed: post to %d: %v", chatID, err)
 		return 0, false
 	}
-	time.Sleep(feedSendPause) // gentle pacing for catch-up bursts
+	paceFeed(ctx) // gentle pacing for catch-up bursts; interruptible so shutdown isn't delayed
 	return msgID(sent), true
 }
 
@@ -261,10 +349,16 @@ func flattenAtoms(s string) string {
 	return out
 }
 
-// formatBug renders a Bugzilla bug for the feed. lang "en" uses English field labels,
-// otherwise (default) Chinese. Optional fields appear only when present, so simple bugs
-// stay short and keywording bugs stay rich.
+// formatBug renders a Bugzilla bug for the feed behind the default open marker (🐞).
 func formatBug(b recentBug, lang string) string {
+	return formatBugMarked(b, lang, "🐞")
+}
+
+// formatBugMarked renders a Bugzilla bug for the feed behind the given leading marker (🐞 open,
+// ✅/❌ resolved — passed in rather than string-replaced, so a 🐞 inside a summary can't be hit and
+// the marker can't depend on byte ordering). lang "en" uses English field labels, otherwise (default)
+// Chinese. Optional fields appear only when present, so simple bugs stay short and rich ones rich.
+func formatBugMarked(b recentBug, lang, marker string) string {
 	en := strings.EqualFold(lang, "en")
 	sep := "："
 	if en {
@@ -280,7 +374,7 @@ func formatBug(b recentBug, lang string) string {
 	var sb strings.Builder
 	// Cap the free-text summary by rune (Bugzilla summaries are short, but the field is
 	// free-form) so a pathological bug can't push the message past Telegram's 4096-char limit.
-	fmt.Fprintf(&sb, "🐞 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a>\n%s", b.ID, b.ID, esc(capRunes(b.Summary, 600)))
+	fmt.Fprintf(&sb, "%s <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a>\n%s", marker, b.ID, b.ID, esc(capRunes(b.Summary, 600)))
 	line := func(label, val string) {
 		if val != "" {
 			fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", label, sep, esc(val))
@@ -331,10 +425,10 @@ func resolvedMark(b recentBug) string {
 }
 
 // formatBugResolved re-renders a now-closed bug for the edited message: the status line shows the
-// resolution, and the 🐞 marker becomes ✅ (FIXED) or ❌ (closed without a fix) so the outcome is
+// resolution, and the leading marker is ✅ (FIXED) or ❌ (closed without a fix) so the outcome is
 // obvious at a glance.
 func formatBugResolved(b recentBug, lang string) string {
-	return strings.Replace(formatBug(b, lang), "🐞", resolvedMark(b), 1)
+	return formatBugMarked(b, lang, resolvedMark(b))
 }
 
 // formatNewBug renders a freshly-seen bug for the feed and whether to post it silently. A bug that
@@ -349,12 +443,19 @@ func formatNewBug(b recentBug, lang string, baseSilent bool) (text string, silen
 	return formatBug(b, lang), baseSilent
 }
 
-// refreshTracked edits the feed message of any tracked bug whose displayed state changed since
-// it was posted — a status transition (e.g. an UNCONFIRMED bug becoming CONFIRMED / IN_PROGRESS)
-// or a resolution (🐞 -> ✅, after which the bug is untracked). Runs per feed, in the feed's own
-// language. Best-effort: a transient edit failure keeps the bug tracked for a retry; a permanent
-// one (message deleted / uneditable) drops it.
-func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedState, byID map[int]recentBug) {
+// refreshTracked edits the feed message of any tracked bug whose displayed state changed since it
+// was last rendered — a status transition (UNCONFIRMED -> CONFIRMED/IN_PROGRESS), a resolution
+// (🐞 -> ✅/❌), or a reopen/re-resolution. Runs per feed, in the feed's own language.
+//
+// Bounded + best-effort: at most maxEditsPerCycle edits per call (a large backlog drains over
+// several cycles instead of bursting past Telegram's per-chat edit limit), each paced by
+// feedSendPause; a 429 stops the cycle early and retries next time. A bug that vanishes from the
+// refetch for maxTrackMisses cycles, hits maxEditFails consecutive non-rate-limit edit failures, or
+// gets a permanent edit error is dropped so it can't wedge a tracking slot. RESOLVED bugs stay
+// tracked (so a later reopen/re-resolution re-renders); evictOne ages them out under maxTracked.
+func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedState, byID map[int]recentBug, fetchOK bool) {
+	edits := 0
+refresh:
 	for idStr, tb := range st.Tracked {
 		id, err := strconv.Atoi(idStr)
 		if err != nil || tb == nil { // bad id or a null entry (e.g. hand-edited state) — drop it
@@ -363,16 +464,31 @@ func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedSta
 		}
 		b, ok := byID[id]
 		if !ok {
-			continue // not in this refresh batch — keep tracking
+			// Absent from the refetch. Only treat it as "vanished from Bugzilla" when the WHOLE
+			// fetch succeeded; if a chunk failed this cycle the bug may simply have been in it, so
+			// leave it untouched (no miss) and retry next cycle — a partial fetch can't drop a live bug.
+			if !fetchOK {
+				continue
+			}
+			tb.Misses++
+			if tb.Misses >= maxTrackMisses {
+				log.Printf("feed: drop tracked bug %d in %d (gone from Bugzilla %d cycles)", id, f.ChatID, tb.Misses)
+				delete(st.Tracked, idStr)
+			}
+			continue
 		}
+		tb.Misses = 0 // present again
 		cur := bugStateKey(b)
 		if cur == tb.State {
 			continue // nothing visible changed
 		}
+		if edits >= maxEditsPerCycle {
+			break // backlog cap — the rest keep their old state and are picked up next cycle
+		}
 		wasUnconfirmed := strings.EqualFold(statusOf(tb.State), "UNCONFIRMED")
 		text := formatBug(b, f.Lang)
 		if bugResolved(b) {
-			text = formatBugResolved(b, f.Lang) // 🐞 -> ✅
+			text = formatBugResolved(b, f.Lang) // 🐞 -> ✅/❌
 		}
 		edit := htmlMessage(f.ChatID, text)
 		_, eerr := bot.EditMessageText(ctx, &telego.EditMessageTextParams{
@@ -382,30 +498,39 @@ func refreshTracked(ctx context.Context, bot feedBot, f *FeedConfig, st *feedSta
 			ParseMode:          edit.ParseMode,
 			LinkPreviewOptions: edit.LinkPreviewOptions,
 		})
+		edits++
 		switch {
 		case eerr == nil || isNotModified(eerr): // edited (or already current) — sync our state
-			switch {
-			case bugResolved(b):
-				delete(st.Tracked, idStr) // terminal — stop tracking
-			case wasUnconfirmed && !strings.EqualFold(b.Status, "UNCONFIRMED") && !f.bugSilent(b):
-				// The UNCONFIRMED post was silent; it has now moved OUT of UNCONFIRMED (CONFIRMED /
-				// IN_PROGRESS / …, but not resolved — handled above). Send the fresh non-silent
-				// notice the silent original never gave, for ANY such transition rather than only
-				// exactly CONFIRMED — so a bug that races past CONFIRMED to IN_PROGRESS before the
-				// ping lands still notifies. Advance state only once the ping is delivered, so a
-				// transient send failure retries next cycle (the re-edit is then a harmless "message
-				// is not modified"). A silent_bugs feed skips the ping entirely.
+			tb.EditFails = 0
+			if wasUnconfirmed && !bugResolved(b) && !strings.EqualFold(b.Status, "UNCONFIRMED") && !f.bugSilent(b) {
+				// The silent UNCONFIRMED post has moved OUT of UNCONFIRMED (but not straight to
+				// resolved) — send the non-silent notice the silent original never gave. Advance
+				// state only once the ping lands, so a transient send failure retries next cycle (the
+				// re-edit is then a harmless "message is not modified"). A silent_bugs feed skips it.
 				if _, ok := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false, tb.MsgID); ok {
 					tb.State = cur
 				}
-			default:
+			} else {
+				// Resolved bugs are KEPT (not deleted) so a later reopen/re-resolution is detected;
+				// evictOne ages them out under the cap.
 				tb.State = cur
 			}
+		case isRateLimited(eerr):
+			log.Printf("feed: edit tracked bug %d in %d rate-limited (%v) — pausing edits this cycle", id, f.ChatID, eerr)
+			break refresh
 		case permanentEditErr(eerr):
 			log.Printf("feed: drop tracked bug %d in %d (uneditable): %v", id, f.ChatID, eerr)
 			delete(st.Tracked, idStr)
 		default:
-			log.Printf("feed: edit tracked bug %d in %d: %v", id, f.ChatID, eerr) // transient — retry next cycle
+			tb.EditFails++
+			log.Printf("feed: edit tracked bug %d in %d (transient %d/%d): %v", id, f.ChatID, tb.EditFails, maxEditFails, eerr)
+			if tb.EditFails >= maxEditFails {
+				log.Printf("feed: drop tracked bug %d in %d after %d consecutive edit failures", id, f.ChatID, maxEditFails)
+				delete(st.Tracked, idStr)
+			}
+		}
+		if !paceFeed(ctx) {
+			return // shutdown mid-refresh: stop editing; pollAll still persists the advanced cursor
 		}
 	}
 }
@@ -418,12 +543,22 @@ func isNotModified(err error) bool {
 
 // permanentEditErr reports whether a message edit can never succeed (the message was deleted or
 // is otherwise uneditable), so the bug should be dropped from tracking rather than retried.
+// "chat not found" is intentionally NOT permanent — it's usually a transient channel/network blip,
+// not a per-message defect; a genuinely dead chat is surfaced by probeFeedPerms and its bugs are
+// eventually dropped via maxEditFails. Dropping every changed bug on a blip would be worse.
 func permanentEditErr(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "message to edit not found") ||
 		strings.Contains(s, "message can't be edited") ||
-		strings.Contains(s, "message_id_invalid") ||
-		strings.Contains(s, "chat not found")
+		strings.Contains(s, "message_id_invalid")
+}
+
+// isRateLimited reports whether an edit/send failed because Telegram throttled us (429). Such a
+// failure is transient and not the bug's fault, so refreshTracked stops editing for the cycle
+// (rather than hammering) and does NOT count it toward maxEditFails.
+func isRateLimited(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "too many requests") || strings.Contains(s, "retry after")
 }
 
 func formatNews(n newsItem) string {
@@ -475,7 +610,15 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 	if f.bugsOn() && len(bugs) > 0 {
 		if st.LastBugID == 0 {
 			st.LastBugID = bugs[0].ID // first run: record a baseline, don't backfill history
+			log.Printf("feed: %d baselining bug cursor at #%d (no prior bug state — first run or reset)", f.ChatID, bugs[0].ID)
 		} else {
+			// A FULL page whose oldest bug is still above the cursor means more new bugs were filed
+			// in one interval than the fetch window holds — the gap below the page is unreachable and
+			// the cursor would jump past it. Log loudly so the loss is recoverable, not invisible.
+			if len(bugs) == recentBugsLimit && bugs[len(bugs)-1].ID > st.LastBugID+1 {
+				log.Printf("feed: WARNING %d: >%d new bugs since #%d (oldest fetched #%d) exceed the fetch window — #%d..#%d not posted; backfill manually if needed",
+					f.ChatID, recentBugsLimit, st.LastBugID, bugs[len(bugs)-1].ID, st.LastBugID+1, bugs[len(bugs)-1].ID-1)
+			}
 			var nb []recentBug
 			for _, b := range bugs {
 				if b.ID > st.LastBugID && f.matchesBug(b) {
@@ -501,6 +644,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 	if f.newsOn() && len(news) > 0 {
 		if st.LastNewsURL == "" {
 			st.LastNewsURL = news[0].url // first run: baseline only
+			log.Printf("feed: %d baselining news cursor (no prior news state — first run or reset)", f.ChatID)
 		} else {
 			found := false
 			var nn []newsItem
@@ -512,9 +656,11 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 				nn = append(nn, n)
 			}
 			if !found {
-				// The cursor item is no longer in the fetched list (the index/URL format
-				// changed or it scrolled off the page). Re-baseline to the newest item
-				// instead of re-broadcasting the entire news archive.
+				// The cursor item is no longer in the fetched list (the index/URL format changed or
+				// it scrolled off the page). Re-baseline to the newest item rather than re-broadcast
+				// the whole archive — but log it, so a genuine miss (vs a benign format change) is
+				// visible instead of silent.
+				log.Printf("feed: WARNING %d: news cursor %s not on the fetched page — re-baselining (any items newer than it are skipped, not re-posted)", f.ChatID, st.LastNewsURL)
 				st.LastNewsURL = news[0].url
 				nn = nil
 			}
@@ -573,23 +719,26 @@ func pollAll(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, states m
 		news, _ = fetchNews(fctx)
 	}
 	var byID map[int]recentBug
+	fetchOK := false
 	if len(trackedSet) > 0 {
 		ids := make([]int, 0, len(trackedSet))
 		for id := range trackedSet {
 			ids = append(ids, id)
 		}
 		byID = map[int]recentBug{}
-		for _, b := range fetchBugsByID(fctx, ids) {
+		fetched, ok := fetchBugsByID(fctx, ids)
+		for _, b := range fetched {
 			byID[b.ID] = b
 		}
+		fetchOK = ok
 	}
 	cancel()
 
 	for _, f := range due {
 		st := states[f.ChatID]
 		postFeedItems(ctx, bot, f, st, bugs, news)
-		if len(byID) > 0 {
-			refreshTracked(ctx, bot, f, st, byID)
+		if len(st.Tracked) > 0 {
+			refreshTracked(ctx, bot, f, st, byID, fetchOK)
 		}
 		saveFeedState(feedStatePath(stateDir, f.ChatID), *st)
 		nextDue[f.ChatID] = now.Add(f.interval()) // honour THIS feed's own interval
@@ -695,6 +844,12 @@ func runFeeds(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, stateDi
 	for {
 		select {
 		case <-ctx.Done():
+			// Final flush so the latest cursor/tracking is persisted before exit (best-effort;
+			// writeJSONFile is atomic + fsync'd). Each cycle already saves, so this only captures
+			// state changed since the last save.
+			for _, f := range feeds {
+				saveFeedState(feedStatePath(stateDir, f.ChatID), *states[f.ChatID])
+			}
 			return
 		case <-t.C:
 			safePoll()
