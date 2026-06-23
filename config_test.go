@@ -115,6 +115,69 @@ func TestTimeoutSecondsClamp(t *testing.T) {
 	}
 }
 
+// TestTrustedGroupsResolver: a per-group trusted_member_group_ids overrides the global default;
+// otherwise (and for unknown groups) the global default applies.
+func TestTrustedGroupsResolver(t *testing.T) {
+	c := &Config{
+		TrustedMemberGroupIDs: []int64{-100},
+		Groups: []GroupConfig{
+			{ID: -1},
+			{ID: -2, TrustedMemberGroupIDs: []int64{-200, -300}},
+		},
+	}
+	if got := c.trustedGroups(-1); len(got) != 1 || got[0] != -100 {
+		t.Errorf("group -1 (no override) should get the global [-100], got %v", got)
+	}
+	if got := c.trustedGroups(-2); len(got) != 2 || got[0] != -200 {
+		t.Errorf("group -2 should use its per-group override, got %v", got)
+	}
+	if got := c.trustedGroups(-999); len(got) != 1 || got[0] != -100 {
+		t.Errorf("an unknown group should get the global default, got %v", got)
+	}
+}
+
+// TestIsKnownChatTrusted: trusted source groups (global + per-group) must count as known chats, so
+// the auto-leave logic never kicks the bot out of a group it needs to read membership from.
+func TestIsKnownChatTrusted(t *testing.T) {
+	c := &Config{
+		GroupIDs:              []int64{-1, -2},
+		Groups:                []GroupConfig{{ID: -1}, {ID: -2, TrustedMemberGroupIDs: []int64{-500}}},
+		TrustedMemberGroupIDs: []int64{-400},
+	}
+	for _, id := range []int64{-400, -500} {
+		if !c.IsKnownChat(id) {
+			t.Errorf("trusted source group %d must be a known chat (never auto-left)", id)
+		}
+	}
+	if c.IsKnownChat(-99999) {
+		t.Error("an unrelated chat must NOT be known")
+	}
+}
+
+// TestLoadConfigTrustedGroups proves the new field round-trips through LoadConfig (top-level + per-group)
+// and that the source group is then a known chat.
+func TestLoadConfigTrustedGroups(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{
+		"trusted_member_group_ids": []int64{-1001163306055},
+		"groups": []map[string]any{
+			{"id": -1003265952923, "trusted_member_group_ids": []int64{-1001163306055}},
+		},
+		"questions": sampleQ,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.TrustedMemberGroupIDs) != 1 || c.TrustedMemberGroupIDs[0] != -1001163306055 {
+		t.Errorf("top-level trusted_member_group_ids not parsed: %v", c.TrustedMemberGroupIDs)
+	}
+	if got := c.trustedGroups(-1003265952923); len(got) != 1 || got[0] != -1001163306055 {
+		t.Errorf("per-group trusted_member_group_ids not resolved: %v", got)
+	}
+	if !c.IsKnownChat(-1001163306055) {
+		t.Error("the trusted source group must be a known chat (so auto-leave won't kick the bot)")
+	}
+}
+
 // TestWarnLimitDefault verifies the documented default is applied when omitted.
 func TestWarnLimitDefault(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))

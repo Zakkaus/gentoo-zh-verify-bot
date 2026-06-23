@@ -348,6 +348,61 @@ func TestStopForShutdownFreezesPending(t *testing.T) {
 	}
 }
 
+// TestTrustedBypass covers the trusted-member group bypass: a member of a configured trusted group is
+// auto-approved (strikes cleared, no quiz); a non-member, a GetChatMember error, and a failed
+// auto-approve all fall back to normal verification (never auto-approve on doubt, never leave stuck).
+func TestTrustedBypass(t *testing.T) {
+	ctx := context.Background()
+	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
+	mkV := func() *Verifier {
+		return &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{},
+			cfg: &Config{Groups: []GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
+	}
+
+	// member of the trusted group -> approved, prior strikes cleared, exactly one approve
+	v := mkV()
+	v.vfail[pkey{gid, uid}] = &vfailRec{} // a stale failed-verify strike
+	member := newFakeMod()
+	member.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
+	if !v.tryTrustedBypass(ctx, member, gid, uid) {
+		t.Fatal("a member of the trusted group must be auto-approved")
+	}
+	if member.approves != 1 {
+		t.Errorf("must call ApproveChatJoinRequest exactly once, got %d", member.approves)
+	}
+	if _, still := v.vfail[pkey{gid, uid}]; still {
+		t.Error("a successful bypass must clearVerifyFails (clean slate)")
+	}
+
+	// not a member -> no bypass, no approve
+	left := newFakeMod()
+	left.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
+	if mkV().tryTrustedBypass(ctx, left, gid, uid) || left.approves != 0 {
+		t.Error("a non-member must NOT be bypassed")
+	}
+
+	// GetChatMember error -> fail-closed (no bypass, no approve)
+	errBot := newFakeMod()
+	errBot.memberErr = errors.New("bot not in the trusted group")
+	if mkV().tryTrustedBypass(ctx, errBot, gid, uid) || errBot.approves != 0 {
+		t.Error("a membership-lookup error must NOT bypass — fail-closed to normal verification")
+	}
+
+	// auto-approve fails -> return false so the caller runs normal verification (request not stuck)
+	fail := newFakeMod()
+	fail.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
+	fail.approveErr = errors.New("no rights")
+	if mkV().tryTrustedBypass(ctx, fail, gid, uid) {
+		t.Error("a FAILED auto-approve must return false (fall back to normal verification)")
+	}
+
+	// no trusted config (and no global) -> no bypass, no membership lookup
+	plain := &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{}, cfg: &Config{Groups: []GroupConfig{{ID: gid}}}}
+	if plain.tryTrustedBypass(ctx, newFakeMod(), gid, uid) {
+		t.Error("with no trusted config there must be no bypass")
+	}
+}
+
 // TestReopenPendingRestoresRetryable covers the failed-approve restore: reopenPending re-opens a
 // claimed pending (done=false, timer re-armed) so the applicant stays retryable, but refuses to
 // touch one that a newer request has since replaced.
