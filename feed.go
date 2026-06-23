@@ -320,16 +320,28 @@ func formatBug(b recentBug, lang string) string {
 	return sb.String()
 }
 
-// formatBugResolved re-renders a now-closed bug for the edited message: the status line shows
-// the resolution, and the 🐞 marker becomes ✅ so the closure is obvious at a glance.
+// resolvedMark is the marker for a CLOSED bug: ✅ only when it was actually FIXED, otherwise ❌ — a
+// bug closed as INVALID (误报) / WONTFIX / DUPLICATE / WORKSFORME / OBSOLETE / … was NOT fixed, so a
+// green check would misrepresent it.
+func resolvedMark(b recentBug) string {
+	if strings.EqualFold(strings.TrimSpace(b.Resolution), "FIXED") {
+		return "✅"
+	}
+	return "❌"
+}
+
+// formatBugResolved re-renders a now-closed bug for the edited message: the status line shows the
+// resolution, and the 🐞 marker becomes ✅ (FIXED) or ❌ (closed without a fix) so the outcome is
+// obvious at a glance.
 func formatBugResolved(b recentBug, lang string) string {
-	return strings.Replace(formatBug(b, lang), "🐞", "✅", 1)
+	return strings.Replace(formatBug(b, lang), "🐞", resolvedMark(b), 1)
 }
 
 // formatNewBug renders a freshly-seen bug for the feed and whether to post it silently. A bug that
 // is ALREADY resolved the first time the feed sees it (filed and closed within one poll cycle — e.g.
-// resolved INVALID) gets the ✅ marker, not 🐞, and is posted silently: it is not an actionable new
-// open bug, so it shouldn't look open or ping. An open bug keeps 🐞 and the status-aware silence.
+// resolved INVALID) gets the resolved marker (✅ fixed / ❌ not), not 🐞, and is posted silently: it
+// is not an actionable new open bug, so it shouldn't look open or ping. An open bug keeps 🐞 and the
+// status-aware silence.
 func formatNewBug(b recentBug, lang string, baseSilent bool) (text string, silent bool) {
 	if bugResolved(b) {
 		return formatBugResolved(b, lang), true

@@ -44,8 +44,25 @@ func TestFormatNewBug(t *testing.T) {
 		t.Errorf("an open new bug should be 🐞 and not forced silent (silent=%v)", silent)
 	}
 	text, silent = formatNewBug(recentBug{ID: 2, Summary: "x", Status: "RESOLVED", Resolution: "INVALID"}, "en", false)
-	if strings.Contains(text, "🐞") || !strings.Contains(text, "✅") || !silent {
-		t.Errorf("a born-resolved bug should be ✅ and silent (silent=%v)", silent)
+	if strings.Contains(text, "🐞") || !strings.Contains(text, "❌") || !silent {
+		t.Errorf("a born-resolved INVALID (误报) bug should be ❌ and silent (silent=%v)", silent)
+	}
+	text, silent = formatNewBug(recentBug{ID: 3, Summary: "x", Status: "RESOLVED", Resolution: "FIXED"}, "en", false)
+	if !strings.Contains(text, "✅") || strings.Contains(text, "🐞") || !silent {
+		t.Errorf("a born-resolved FIXED bug should be ✅ and silent (silent=%v)", silent)
+	}
+}
+
+// TestResolvedMark: only an actually-FIXED bug gets ✅; everything else closed (INVALID 误报,
+// WONTFIX, DUPLICATE, WORKSFORME, …) gets ❌. Case-insensitive on the resolution.
+func TestResolvedMark(t *testing.T) {
+	if resolvedMark(recentBug{Resolution: "FIXED"}) != "✅" || resolvedMark(recentBug{Resolution: "fixed"}) != "✅" {
+		t.Error("FIXED (any case) should be ✅")
+	}
+	for _, r := range []string{"INVALID", "WONTFIX", "DUPLICATE", "WORKSFORME", "OBSOLETE", ""} {
+		if got := resolvedMark(recentBug{Resolution: r}); got != "❌" {
+			t.Errorf("resolution %q should be ❌, got %s", r, got)
+		}
 	}
 }
 
