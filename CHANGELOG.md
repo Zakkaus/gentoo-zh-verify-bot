@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.6] - 2026-06-23
+
+### Fixed
+Lookup-module robustness pass (from the audit's lookup-cluster review — all polish, no critical):
+- **/armpkgs**: a transient AUR / Arch-Linux-ARM fetch failure (timeout / 5xx / network) was reported
+  as a definitive "❌ 不在 AUR" / "❌ 未打包"; it now distinguishes a real 404 from a transient failure
+  (⚠️ 查询失败) via a typed `httpStatusError`.
+- **/bbs**: a pathologically long query made a DuckDuckGo button URL exceed Telegram's limit and sink
+  the whole reply (including the Arch CN hits already fetched); the button query is now capped and the
+  send falls back to text-only if the buttons still fail.
+- **/news**: a legitimately empty news page was never cached, so `/news` re-hit upstream on every call;
+  freshness is now gated on the fetch time, so an empty fetch is cached like any other.
+
 ## [3.7.5] - 2026-06-23
 
 ### Fixed
