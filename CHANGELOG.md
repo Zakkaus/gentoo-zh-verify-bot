@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.2] - 2026-06-23
+
+### Fixed
+A whole-repo reliability / safe-default review (multi-agent adversarial audit) found 0 P0, 1 P1, 5 P2.
+All are fixed here, each with a test.
+
+**P1 — verification critical path:**
+- **A transient failure on the bot's OWN approve call no longer charges the applicant a strike.** A
+  user who answered correctly but whose `ApproveChatJoinRequest` hit a transient Telegram error was
+  re-declined within ~1s, given a real verification strike (pushing them toward the auto-ban), and
+  silently blocked from re-applying by the cooldown. Now a decline caused by our own failed approve
+  (`approve-retry`) or by a deadline that lapsed while the bot was DOWN (`restart-lapsed`) records NO
+  strike, and the user gets a 60s grace window to retry instead of a ~1s bounce.
+
+**P2 — fail-safe boundaries / false-negatives / CI:**
+- **Corrupt state files are no longer silently overwritten.** A shared `loadJSONFile` helper backs a
+  corrupt file up to `<path>.corrupt` before the next save (the hardening the feed already had),
+  across all five loaders (pending / warns / verifyfail / settings / antispam).
+- **A failing feed confirm-ping can't pin a bug into an endless re-edit loop.** State advances once the
+  edit lands; the owed (best-effort) ping retries over a bounded `maxConfirmTries` and is then dropped.
+- **`postFeed` surfaces a rate-limited signal** so a 429 on a confirm send pauses the cycle, like a 429
+  on an edit already did, instead of re-attempting every cycle.
+- **`/wiki` and `/bbs` no longer report a transient fetch failure as a definitive "no results".** The
+  search helpers now signal fetch success, so an all-sources-failed case shows "暂时取不到…稍后再试".
+- **CI/release analysis tools pinned** off floating `@latest` (staticcheck v0.7.0, govulncheck v1.4.0,
+  gosec v2.27.1) in both workflows, so an upstream tool release can't turn a green commit red or block
+  a tagged release.
+
+**Also (P3, low-risk):** restored pendings for a removed group / out-of-range question are skipped; a
+warning is persisted the moment it's issued (survives a failed at-limit kick + restart); a failed
+at-limit kick and a failed `/ban`/`/sb` now alert admins; the unattended feed logs a news-fetch
+failure; CONTRIBUTING lists the full CI gate.
+
 ## [3.9.1] - 2026-06-23
 
 ### Fixed
