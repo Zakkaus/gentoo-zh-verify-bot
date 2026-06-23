@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.2] - 2026-06-23
+
+### Fixed
+- **Bug feed: a bug that is already resolved the first time the feed sees it now renders with ✅ and
+  posts silently, instead of the 🐞 "open bug" marker (and a ping).** A bug filed *and* closed within
+  one poll cycle (e.g. resolved INVALID, like #977918) was shown as a fresh open bug; it now uses the
+  resolved formatting and doesn't notify — it isn't an actionable new open bug. (`formatNewBug`.)
+
 ## [3.7.1] - 2026-06-22
 
 ### Docs
