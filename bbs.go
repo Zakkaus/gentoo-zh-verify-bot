@@ -18,9 +18,10 @@ const archcnForum = "https://forum.archlinuxcn.org"
 
 type forumTopic struct{ title, url string }
 
-// searchArchcn searches the Arch Linux CN Discourse forum (clean JSON API) and returns
-// the top matching topics — the Chinese, inline part of /bbs.
-func searchArchcn(ctx context.Context, query string, limit int) []forumTopic {
+// searchArchcn searches the Arch Linux CN Discourse forum (clean JSON API) and returns the top
+// matching topics, plus ok=false if the FETCH failed (transient — distinct from a successful search
+// with no matches) so the caller doesn't report a transient blip as a definitive "no results".
+func searchArchcn(ctx context.Context, query string, limit int) (topics []forumTopic, ok bool) {
 	u := archcnForum + "/search.json?q=" + url.QueryEscape(query)
 	var resp struct {
 		Topics []struct {
@@ -30,7 +31,7 @@ func searchArchcn(ctx context.Context, query string, limit int) []forumTopic {
 		} `json:"topics"`
 	}
 	if err := httpGetJSON(ctx, u, nil, &resp); err != nil {
-		return nil
+		return nil, false // transient fetch failure — NOT a genuine "no results"
 	}
 	out := make([]forumTopic, 0, limit)
 	for _, t := range resp.Topics {
@@ -39,7 +40,7 @@ func searchArchcn(ctx context.Context, query string, limit int) []forumTopic {
 			break
 		}
 	}
-	return out
+	return out, true
 }
 
 // forumLinks are the major English Linux forums offered as one-tap search buttons (a
@@ -75,12 +76,16 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "💬 <b>%s</b> 的论坛搜索", html.EscapeString(q))
-	if hits := searchArchcn(hc, q, 5); len(hits) > 0 {
+	hits, archcnOK := searchArchcn(hc, q, 5)
+	switch {
+	case len(hits) > 0:
 		b.WriteString("\n\n<b>Arch Linux CN 论坛</b>")
 		for _, h := range hits {
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(h.url), html.EscapeString(h.title))
 		}
-	} else {
+	case !archcnOK: // the fetch failed — honest transient message, not a false "no results"
+		b.WriteString("\n\nArch Linux CN 论坛暂时取不到结果(稍后再试)。")
+	default:
 		b.WriteString("\n\nArch Linux CN 论坛暂无匹配结果。")
 	}
 	b.WriteString("\n\n其它论坛(点按钮搜索):")

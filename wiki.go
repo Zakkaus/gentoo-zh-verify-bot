@@ -91,7 +91,10 @@ func cleanDisplayTitle(s string) string {
 }
 
 // searchTitles queries one MediaWiki site and returns matching page titles in rank order.
-func searchTitles(ctx context.Context, w wikiSource, query string, limit int) []string {
+// searchTitles returns the matching page titles, and ok=false when the FETCH failed (a transient
+// error, distinct from a successful search that genuinely found nothing) — so the caller can tell a
+// "no entries" answer from a "couldn't reach the wiki" one.
+func searchTitles(ctx context.Context, w wikiSource, query string, limit int) (titles []string, ok bool) {
 	u := fmt.Sprintf("%s?action=query&list=search&srsearch=%s&srlimit=%d&srprop=&format=json",
 		w.api, url.QueryEscape(query), limit)
 	var resp struct {
@@ -102,13 +105,13 @@ func searchTitles(ctx context.Context, w wikiSource, query string, limit int) []
 		} `json:"query"`
 	}
 	if err := httpGetJSON(ctx, u, nil, &resp); err != nil {
-		return nil
+		return nil, false // transient fetch failure — NOT a genuine "no results"
 	}
 	out := make([]string, 0, len(resp.Query.Search))
 	for _, s := range resp.Query.Search {
 		out = append(out, s.Title)
 	}
-	return out
+	return out, true
 }
 
 // displayTitles fetches the display title (the Chinese H1 for Gentoo /zh-cn pages) for the
@@ -197,12 +200,15 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 
 	titles := make([][]string, len(wikiSources))
 	dtitles := make([]map[string]string, len(wikiSources))
+	srcOK := make([]bool, len(wikiSources))
 	var wg sync.WaitGroup
 	for i, w := range wikiSources {
 		wg.Add(1)
 		go func(i int, w wikiSource) {
 			defer wg.Done()
-			titles[i] = w.pickWikiTitles(searchTitles(hc, w, q, 24), 4)
+			raw, ok := searchTitles(hc, w, q, 24)
+			srcOK[i] = ok
+			titles[i] = w.pickWikiTitles(raw, 4)
 			dtitles[i] = displayTitles(hc, w, titles[i])
 		}(i, w)
 	}
@@ -210,8 +216,11 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "📚 <b>%s</b> 的 wiki 搜索", html.EscapeString(q))
-	found := false
+	found, anyOK := false, false
 	for i, w := range wikiSources {
+		if srcOK[i] {
+			anyOK = true
+		}
 		if len(titles[i]) == 0 {
 			continue
 		}
@@ -226,7 +235,11 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if !found {
-		b.WriteString("\n\n没找到相关条目,换个关键词试试?")
+		if anyOK { // at least one wiki answered (just no match) -> a definitive "not found"
+			b.WriteString("\n\n没找到相关条目,换个关键词试试?")
+		} else { // every source's fetch failed -> honest transient message, not a false negative
+			b.WriteString("\n\n暂时取不到 wiki 搜索结果,稍后再试。")
+		}
 	}
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
