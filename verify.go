@@ -556,29 +556,57 @@ func (v *Verifier) isChatMember(c context.Context, bot modBot, chatID, uid int64
 	}
 }
 
-// tryTrustedBypass approves the join request WITHOUT a quiz when the applicant is already a member of
-// one of group gid's configured trusted groups (config: trusted_member_group_ids) — so a verified
-// member of a trusted group (e.g. the main group) doesn't re-verify in a sub-group. Returns true only
-// when it approved. Fails SAFE: a membership-lookup error or a non-member never approves; a FAILED
-// approval is logged + alerted and returns false so the caller runs the NORMAL verification (the
-// request is never left stuck). On a successful bypass it clears any prior failed-verify strikes and
-// records the approval — but creates no pending and posts no quiz.
-func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) bool {
+// tryTrustedBypass tries the trusted-member fast path for a join request: if the applicant is already
+// a member of one of group gid's configured trusted groups (config: trusted_member_group_ids), it
+// approves WITHOUT a quiz. It reports two things: handled (the request was approved — caller should
+// stop) and trusted (the applicant was CONFIRMED to be in a trusted group). Fails SAFE — a
+// membership-lookup error or a non-member yields trusted=false (so the caller runs the ordinary flow,
+// including the failure cooldown). A confirmed member whose auto-approve FAILS yields handled=false,
+// trusted=true (logged + admin-alerted): the caller runs the NORMAL verification but, because the
+// member is trusted, must NOT decline it under the cooldown. On success it clears prior failed-verify
+// strikes and records the approval — creating no pending and posting no quiz.
+func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) (handled, trusted bool) {
 	for _, src := range v.cfg.trustedGroups(gid) {
 		if src == 0 || src == gid {
 			continue // ignore a blank or self-referential entry
 		}
-		if !v.isChatMember(c, bot, src, uid) { // fail-closed: error / non-member / unreadable => no bypass
+		if !v.isChatMember(c, bot, src, uid) { // fail-closed: error / non-member / unreadable => not trusted
 			continue
 		}
+		// Confirmed member of a trusted group — this takes PRIORITY over the failure cooldown.
 		if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 			log.Printf("trusted-bypass: approve %d in %d failed (%v) — falling back to normal verification", uid, gid, err)
 			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 是可信群 %d 成员,在群 %d 自动免验证放行失败(%v);将走正常验证流程", uid, src, gid, err))
-			return false
+			return false, true
 		}
 		v.clearVerifyFails(gid, uid) // a now-trusted member starts with a clean slate
 		v.recordDecision(true)
 		log.Printf("verify: trusted-bypass auto-approved %d in %d (already a member of trusted group %d)", uid, gid, src)
+		return true, true
+	}
+	return false, false
+}
+
+// joinGate runs the pre-challenge handling for a join request and reports whether it was fully handled
+// (the caller should stop). The trusted-member fast path takes PRIORITY over the failure cooldown: a
+// confirmed trusted member is approved (handled), and even if its auto-approve fails it proceeds to the
+// normal verification WITHOUT being declined by the cooldown. Only a non-member / unconfirmable
+// applicant is subject to the ordinary failed-applicant cooldown.
+func (v *Verifier) joinGate(c context.Context, bot modBot, gid, uid int64) (done bool) {
+	handled, trusted := v.tryTrustedBypass(c, bot, gid, uid)
+	if handled {
+		return true
+	}
+	if trusted {
+		return false // confirmed trusted member, approve failed -> normal verification, skip the cooldown
+	}
+	// Anti-spam cooldown: a recently-failed applicant must wait out cfg.VerifyRetrySeconds before
+	// re-applying. Decline an early re-try silently rather than reposting a challenge.
+	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
+		if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
+		}
+		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, int(wait.Seconds())+1)
 		return true
 	}
 	return false
@@ -597,20 +625,9 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	gid := jr.Chat.ID
 	uid := jr.From.ID
-	// Anti-spam cooldown: a recently-failed applicant must wait out cfg.VerifyRetrySeconds
-	// before re-applying (they were told the wait time when declined). Decline early re-tries
-	// silently rather than reposting a challenge.
-	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
-		if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
-			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
-		}
-		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, int(wait.Seconds())+1)
-		return nil
-	}
-	// Trusted-member fast path: if the applicant already belongs to one of this group's configured
-	// trusted groups (trusted_member_group_ids), approve without a quiz. Fails safe — an unconfirmable
-	// membership (or a failed auto-approve) falls through to the normal challenge below.
-	if v.tryTrustedBypass(c, bot, gid, uid) {
+	// Pre-challenge gate: the trusted-member fast path (which takes priority over the failure
+	// cooldown), then the anti-spam cooldown for everyone else. Returns true if fully handled.
+	if v.joinGate(c, bot, gid, uid) {
 		return nil
 	}
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)

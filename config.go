@@ -35,9 +35,11 @@ type GroupConfig struct {
 	// TrustedMemberGroupIDs lists OTHER chats whose existing members skip THIS group's join
 	// verification: an applicant already in any of them is auto-approved (no quiz). Use it so
 	// verified members of a trusted group (e.g. the main group) don't re-verify in a sub-group.
-	// nil/empty => fall back to the global trusted_member_group_ids. Fails SAFE — an unconfirmable
-	// membership falls back to the normal challenge. The bot must be able to read each listed chat's
-	// membership (be a member/admin there); those chats are also treated as known (no auto-leave).
+	// OMITTED (nil) => inherit the global trusted_member_group_ids; explicit [] => DISABLE the bypass
+	// for this group (opt out of a global trusted source); non-empty => override the global. Fails
+	// SAFE — an unconfirmable membership falls back to the normal challenge. The bot must be able to
+	// read each listed chat's membership (be a member/admin there); those chats are also treated as
+	// known (no auto-leave).
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 }
 
@@ -315,11 +317,12 @@ func (c *Config) requiredChannel(id int64) int64 {
 	return c.RequiredChannelID
 }
 
-// trustedGroups returns the chats whose existing members skip group id's join verification: the
-// per-group trusted_member_group_ids if set, otherwise the global default. (Per-group override style,
-// like requiredChannel.)
+// trustedGroups returns the chats whose existing members skip group id's join verification. A
+// per-group trusted_member_group_ids that is PRESENT (non-nil) overrides the global default — INCLUDING
+// an explicit empty [], which disables the bypass for that group so a sensitive group can opt out of a
+// global trusted source. Only an OMITTED (nil) field inherits the global default.
 func (c *Config) trustedGroups(id int64) []int64 {
-	if g := c.group(id); g != nil && len(g.TrustedMemberGroupIDs) > 0 {
+	if g := c.group(id); g != nil && g.TrustedMemberGroupIDs != nil {
 		return g.TrustedMemberGroupIDs
 	}
 	return c.TrustedMemberGroupIDs
