@@ -1,9 +1,24 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
+
+// TestSearchTransientNotDefinitive: a FETCH failure (forced with an already-cancelled context, so no
+// network is touched) must yield ok=false from the search helpers — so the caller renders "暂时取不到
+// …稍后再试" rather than a false definitive "no results". Mirrors /news /use /armpkgs.
+func TestSearchTransientNotDefinitive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := searchTitles(ctx, wikiSources[0], "anything", 4); ok {
+		t.Error("searchTitles must return ok=false on a fetch failure (not a false 'no entries')")
+	}
+	if _, ok := searchArchcn(ctx, "anything", 5); ok {
+		t.Error("searchArchcn must return ok=false on a fetch failure (not a false 'no results')")
+	}
+}
 
 // TestPickWikiTitlesDedup verifies case-insensitive dedupe by base topic (so "NVIDIA" vs "NVidia"
 // collapse to one entry) with the simplified-Chinese page preferred, other-language pages dropped,

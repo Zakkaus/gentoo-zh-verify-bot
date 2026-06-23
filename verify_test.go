@@ -457,6 +457,54 @@ func TestJoinGate(t *testing.T) {
 	}
 }
 
+// TestStrikesUser: a genuine timeout / wrong answer counts a strike, but a decline caused by OUR OWN
+// failed approve ("approve-retry") or a deadline that lapsed while the bot was down ("restart-lapsed")
+// must NOT — those aren't the user's fault.
+func TestStrikesUser(t *testing.T) {
+	for _, r := range []string{"timeout", "wrong answer", "something-else"} {
+		if !strikesUser(r) {
+			t.Errorf("%q should count a strike", r)
+		}
+	}
+	for _, r := range []string{"approve-retry", "restart-lapsed"} {
+		if strikesUser(r) {
+			t.Errorf("%q must NOT count a strike (not the user's fault)", r)
+		}
+	}
+}
+
+// TestDeclineNoStrike: decline still removes the pending + declines the join request for the no-fault
+// reasons, but records NO verification strike (so a transient approve failure or a restart can't push
+// a legitimate user toward the auto-ban); a genuine timeout still strikes.
+func TestDeclineNoStrike(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	mkV := func() *Verifier {
+		return &Verifier{loc: time.UTC, cfg: &Config{}, pend: map[pkey]*pending{}, vfail: map[pkey]*vfailRec{}}
+	}
+	for _, reason := range []string{"approve-retry", "restart-lapsed"} {
+		v := mkV()
+		v.pend[pkey{gid, uid}] = &pending{nonce: "n", deadline: time.Now().Add(time.Hour)}
+		fb := &fakeVerifyBot{}
+		v.decline(context.Background(), fb, gid, uid, "n", reason)
+		if _, struck := v.vfail[pkey{gid, uid}]; struck {
+			t.Errorf("decline(%q) must NOT record a strike", reason)
+		}
+		if fb.declines != 1 {
+			t.Errorf("decline(%q) should still decline the join request, got %d", reason, fb.declines)
+		}
+		if _, still := v.pend[pkey{gid, uid}]; still {
+			t.Errorf("decline(%q) should still consume the pending", reason)
+		}
+	}
+	// a genuine timeout still strikes
+	v := mkV()
+	v.pend[pkey{gid, uid}] = &pending{nonce: "n", deadline: time.Now().Add(time.Hour)}
+	v.decline(context.Background(), &fakeVerifyBot{}, gid, uid, "n", "timeout")
+	if r := v.vfail[pkey{gid, uid}]; r == nil || r.count != 1 {
+		t.Errorf("decline(timeout) must record a strike, got %+v", r)
+	}
+}
+
 // TestReopenPendingRestoresRetryable covers the failed-approve restore: reopenPending re-opens a
 // claimed pending (done=false, timer re-armed) so the applicant stays retryable, but refuses to
 // touch one that a newer request has since replaced.

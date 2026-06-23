@@ -601,6 +601,36 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 	})
 }
 
+// TestRefreshTrackedConfirmRetry guards the confirm-ping send-failure handling: a failed ping does
+// NOT advance state (so it retries) but is bounded by ConfirmTries; a rate-limited ping stops the
+// cycle without an endless re-edit; after maxConfirmTries the ping is abandoned and state advances.
+func TestRefreshTrackedConfirmRetry(t *testing.T) {
+	feedSendPause = 0
+	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	b := map[int]recentBug{700: {ID: 700, Status: "CONFIRMED", Summary: "x"}}
+
+	// rate-limited confirm send: edit lands, ping 429s -> state stays UNCONFIRMED|, ConfirmTries=1
+	st := &feedState{Tracked: map[string]*trackedBug{"700": {MsgID: 9, State: "UNCONFIRMED|"}}}
+	fb := &fakeFeedBot{sendErr: errors.New("Too Many Requests: retry after 5")}
+	refreshTracked(context.Background(), fb, f, st, b, true)
+	tb := st.Tracked["700"]
+	if tb == nil || tb.State != "UNCONFIRMED|" {
+		t.Fatalf("a failed confirm ping must NOT advance state (so it retries), got %+v", tb)
+	}
+	if tb.ConfirmTries != 1 || fb.edits != 1 {
+		t.Errorf("expected one edit + ConfirmTries=1, got edits=%d tries=%d", fb.edits, tb.ConfirmTries)
+	}
+
+	// at the retry budget: a further failure abandons the (best-effort) ping and advances state, so a
+	// send-only outage can't pin the bug into an endless re-edit loop.
+	st2 := &feedState{Tracked: map[string]*trackedBug{"700": {MsgID: 9, State: "UNCONFIRMED|", ConfirmTries: maxConfirmTries - 1}}}
+	fb2 := &fakeFeedBot{sendErr: errors.New("Bad Gateway")}
+	refreshTracked(context.Background(), fb2, f, st2, b, true)
+	if tb := st2.Tracked["700"]; tb == nil || tb.State != "CONFIRMED|" {
+		t.Errorf("after maxConfirmTries the ping is abandoned and state advances, got %+v", tb)
+	}
+}
+
 // TestConfirmNotice guards the confirm-notice wording: it names the bug's ACTUAL status
 // (localized in zh, raw in en), never always "confirmed", and falls back to the raw status for an
 // unmapped value.

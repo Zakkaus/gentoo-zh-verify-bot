@@ -59,6 +59,41 @@ func TestWriteJSONFileMarshalFailureKeepsPrior(t *testing.T) {
 	}
 }
 
+// TestLoadJSONFileCorruptBackup: the shared loader treats a missing file as a clean first run, loads
+// a valid file, and — the fix — renames a CORRUPT file to .corrupt before returning the error, so the
+// next save can't silently overwrite it. Covers all five state loaders that now use it.
+func TestLoadJSONFileCorruptBackup(t *testing.T) {
+	dir := t.TempDir()
+
+	var dst []int
+	if err := loadJSONFile(dir+"/missing.json", &dst); err != nil {
+		t.Errorf("a missing file must not be an error (first run), got %v", err)
+	}
+
+	okPath := dir + "/ok.json"
+	if err := os.WriteFile(okPath, []byte("[1,2,3]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst = nil
+	if err := loadJSONFile(okPath, &dst); err != nil || len(dst) != 3 {
+		t.Errorf("a valid file must load: err=%v dst=%v", err, dst)
+	}
+
+	bad := dir + "/bad.json"
+	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadJSONFile(bad, &dst); err == nil {
+		t.Error("a corrupt file must return an error")
+	}
+	if _, err := os.Stat(bad + ".corrupt"); err != nil {
+		t.Errorf("the corrupt file must be backed up to .corrupt: %v", err)
+	}
+	if _, err := os.Stat(bad); !os.IsNotExist(err) {
+		t.Error("the corrupt file must be renamed away from the live path (so the next save can't clobber it)")
+	}
+}
+
 func TestWriteJSONFileConcurrent(t *testing.T) {
 	dir := t.TempDir()
 	var wg sync.WaitGroup
