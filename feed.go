@@ -40,6 +40,11 @@ const maxTrackMisses = 10
 // every cycle forever. Rate-limit (429) failures are NOT counted (they're not the bug's fault).
 const maxEditFails = 10
 
+// maxConfirmTries bounds how many cycles the feed retries an UNCONFIRMED->confirmed ping that keeps
+// failing to send, so an edits-work-but-sends-fail outage can't pin a bug into an endless re-edit
+// loop; after this it gives up the (best-effort, observability-only) ping and advances state.
+const maxConfirmTries = 10
+
 // feedBot is the slice of the telego.Bot API the feed uses to post and edit messages. Threading
 // this interface (rather than *telego.Bot) through postFeed and refreshTracked lets the send/edit
 // success and error branches be unit-tested with a fake; *telego.Bot satisfies it.
@@ -79,11 +84,12 @@ type feedState struct {
 }
 
 type trackedBug struct {
-	MsgID     int    `json:"msg_id"`
-	State     string `json:"state"`                // last-rendered state key (status|resolution); edit when it changes
-	Misses    int    `json:"misses,omitempty"`     // consecutive cycles absent from a non-empty refetch (vanished bug)
-	EditFails int    `json:"edit_fails,omitempty"` // consecutive non-rate-limit transient edit failures
-	Status    string `json:"status,omitempty"`     // legacy pre-v3.4.3 field; folded into State by migrateFeedState on load
+	MsgID        int    `json:"msg_id"`
+	State        string `json:"state"`                   // last-rendered state key (status|resolution); edit when it changes
+	Misses       int    `json:"misses,omitempty"`        // consecutive cycles absent from a non-empty refetch (vanished bug)
+	EditFails    int    `json:"edit_fails,omitempty"`    // consecutive non-rate-limit transient edit failures
+	ConfirmTries int    `json:"confirm_tries,omitempty"` // consecutive failed confirm-ping sends (bounded by maxConfirmTries)
+	Status       string `json:"status,omitempty"`        // legacy pre-v3.4.3 field; folded into State by migrateFeedState on load
 }
 
 // resolvedState reports whether a tracked bug's stored state key (status|resolution) is closed —
@@ -303,7 +309,7 @@ func saveFeedState(path string, st feedState) {
 // replyTo (0 = none) ties the message to an earlier feed post — used for the confirm notice, which
 // replies to the original bug message so the notice links back to it; AllowSendingWithoutReply
 // keeps the send working even if that original was deleted.
-func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silent bool, replyTo int) (int, bool) {
+func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silent bool, replyTo int) (id int, ok, rateLimited bool) {
 	m := htmlMessage(chatID, text)
 	if silent {
 		m = m.WithDisableNotification()
@@ -314,10 +320,10 @@ func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silen
 	sent, err := bot.SendMessage(ctx, m)
 	if err != nil {
 		log.Printf("feed: post to %d: %v", chatID, err)
-		return 0, false
+		return 0, false, isRateLimited(err) // surface a 429 so the caller can pause like the edit path does
 	}
 	paceFeed(ctx) // gentle pacing for catch-up bursts; interruptible so shutdown isn't delayed
-	return msgID(sent), true
+	return msgID(sent), true, false
 }
 
 // dateOnly turns "2026-02-26T04:42:47Z" into "2026-02-26".
@@ -503,12 +509,22 @@ refresh:
 		case eerr == nil || isNotModified(eerr): // edited (or already current) — sync our state
 			tb.EditFails = 0
 			if wasUnconfirmed && !bugResolved(b) && !strings.EqualFold(b.Status, "UNCONFIRMED") && !f.bugSilent(b) {
-				// The silent UNCONFIRMED post has moved OUT of UNCONFIRMED (but not straight to
-				// resolved) — send the non-silent notice the silent original never gave. Advance
-				// state only once the ping lands, so a transient send failure retries next cycle (the
-				// re-edit is then a harmless "message is not modified"). A silent_bugs feed skips it.
-				if _, ok := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false, tb.MsgID); ok {
+				// The silent UNCONFIRMED post moved OUT of UNCONFIRMED (but not straight to resolved) —
+				// owe the non-silent notice the silent original never gave. The edit already landed;
+				// retry the ping over a bounded number of cycles, then give up (best-effort) and advance
+				// state — so an edits-work-but-sends-fail outage can't pin this bug into an endless loop.
+				if _, ok, rl := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false, tb.MsgID); ok {
+					tb.ConfirmTries = 0
 					tb.State = cur
+				} else {
+					tb.ConfirmTries++
+					if tb.ConfirmTries >= maxConfirmTries {
+						log.Printf("feed: giving up confirm ping for bug %d in %d after %d tries", id, f.ChatID, tb.ConfirmTries)
+						tb.State = cur // abandon the ping; advance so the bug isn't re-edited forever
+					} else if rl {
+						break refresh // rate-limited send: retry next cycle, stop hammering (state un-advanced, the re-edit is a harmless no-op)
+					}
+					// else (transient non-429, under budget): leave state un-advanced to retry next cycle
 				}
 			} else {
 				// Resolved bugs are KEPT (not deleted) so a later reopen/re-resolution is detected;
@@ -628,7 +644,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 			delivered := true
 			for i := len(nb) - 1; i >= 0; i-- { // oldest first
 				text, silent := formatNewBug(nb[i], f.Lang, f.bugSilent(nb[i]))
-				mid, ok := postFeed(ctx, bot, f.ChatID, text, silent, 0)
+				mid, ok, _ := postFeed(ctx, bot, f.ChatID, text, silent, 0)
 				if !ok {
 					delivered = false // leave the cursor so the next cycle retries this item
 					break
@@ -666,7 +682,7 @@ func postFeedItems(ctx context.Context, bot *telego.Bot, f *FeedConfig, st *feed
 			}
 			delivered := true
 			for i := len(nn) - 1; i >= 0; i-- { // oldest first
-				if _, ok := postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false, 0); !ok {
+				if _, ok, _ := postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false, 0); !ok {
 					delivered = false
 					break
 				}
@@ -716,7 +732,10 @@ func pollAll(ctx context.Context, bot *telego.Bot, feeds []*FeedConfig, states m
 		bugs = fetchRecentBugs(fctx)
 	}
 	if needNews {
-		news, _ = fetchNews(fctx)
+		var nerr error
+		if news, nerr = fetchNews(fctx); nerr != nil {
+			log.Printf("feed: news fetch: %v", nerr) // mirror the bug-fetch log; the cursor is left intact (postFeedItems guards len>0)
+		}
 	}
 	var byID map[int]recentBug
 	fetchOK := false
