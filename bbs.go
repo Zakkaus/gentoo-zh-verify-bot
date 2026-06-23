@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -84,17 +85,30 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 	}
 	b.WriteString("\n\n其它论坛(点按钮搜索):")
 
+	// Cap the query used in the button URLs: a pathologically long /bbs query would make a DuckDuckGo
+	// button URL exceed Telegram's limit, which rejects the WHOLE reply — taking the Arch CN hits we
+	// already fetched down with it. The buttons are a convenience; the inline results matter more.
+	qBtn := q
+	if r := []rune(qBtn); len(r) > 200 {
+		qBtn = string(r[:200])
+	}
 	var rows [][]telego.InlineKeyboardButton
 	for i := 0; i < len(forumLinks); i += 2 {
 		var row []telego.InlineKeyboardButton
 		for j := i; j < i+2 && j < len(forumLinks); j++ {
-			row = append(row, telego.InlineKeyboardButton{Text: forumLinks[j].name, URL: ddgSiteSearch(forumLinks[j].site, q)})
+			row = append(row, telego.InlineKeyboardButton{Text: forumLinks[j].name, URL: ddgSiteSearch(forumLinks[j].site, qBtn)})
 		}
 		rows = append(rows, row)
 	}
-	sent, _ := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).
+	sent, err := bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).
 		WithReplyMarkup(tu.InlineKeyboard(rows...)).
 		WithReplyParameters(replyParams(msg.MessageID)))
+	if err != nil {
+		// The buttons sank the send (e.g. a still-too-long URL) — fall back to the inline results
+		// alone so the user at least gets the Arch CN hits.
+		log.Printf("/bbs send with buttons failed (%v) — retrying text-only", err)
+		sent, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
+	}
 	v.scheduleLookupCleanup(bot, msg.Chat.ID, msg.MessageID, msgID(sent))
 	return nil
 }
