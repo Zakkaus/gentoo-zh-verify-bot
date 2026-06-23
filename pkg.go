@@ -426,6 +426,18 @@ func searchMainTree(ctx context.Context, name string) []string {
 		log.Printf("main tree search: %v", err)
 		return nil
 	}
+	return rankSearchHits(body, name)
+}
+
+// rankSearchHits extracts package atoms from the search-results HTML and re-ranks them by relevance
+// to the query (deduped, capped at maxHitsPerSource). Split from the fetch so a fixture of the page
+// guards the href regex against a silent "0 hits" if packages.gentoo.org's markup drifts.
+//
+// Re-rank rationale: a package literally named the query, or whose CATEGORY contains it (sys-kernel/*
+// for "kernel"), is more relevant than an incidental substring match (dev-ml/core_kernel). We do NOT
+// drop non-matches — Gentoo strips version suffixes (fcitx5 → app-i18n/fcitx) — so the server's fuzzy
+// hits stay (score 0) in page order.
+func rankSearchHits(body []byte, name string) []string {
 	seen := map[string]bool{}
 	low := strings.ToLower(name)
 	type scored struct {
@@ -433,11 +445,6 @@ func searchMainTree(ctx context.Context, name string) []string {
 		score int
 	}
 	var items []scored
-	// Re-rank the server's results: a package literally named the query, or whose
-	// CATEGORY contains it (sys-kernel/* for "kernel", dev-python/* for "python"), is
-	// more relevant than an incidental substring match (dev-ml/core_kernel). We do NOT
-	// drop non-matches — Gentoo strips version suffixes (fcitx5 → app-i18n/fcitx), so
-	// the server's fuzzy hits stay (score 0) in page order.
 	for _, m := range pkgHrefRe.FindAllStringSubmatch(string(body), -1) {
 		atom := m[1]
 		if seen[atom] || !isPkgPath(atom) {

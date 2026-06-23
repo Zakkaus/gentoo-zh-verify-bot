@@ -49,6 +49,18 @@ func fetchNews(c context.Context) ([]newsItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	items := parseNews(body)
+	if len(items) == 0 && len(body) > 0 {
+		// We fetched a page but matched nothing — most likely the index HTML structure changed
+		// and newsRe needs updating. Log loudly rather than silently returning "no news".
+		log.Printf("fetchNews: parsed 0 items from %d bytes of %s — the news page layout may have changed (update newsRe)", len(body), newsURL)
+	}
+	return items, nil
+}
+
+// parseNews extracts the (deduped) news items from the index HTML. Split out from the fetch so a
+// fixture of the real page structure can guard the regex against a silent "0 items" if it drifts.
+func parseNews(body []byte) []newsItem {
 	seen := map[string]bool{}
 	var items []newsItem
 	for _, m := range newsRe.FindAllStringSubmatch(string(body), -1) {
@@ -59,12 +71,7 @@ func fetchNews(c context.Context) ([]newsItem, error) {
 		seen[path] = true
 		items = append(items, newsItem{date: date, title: title, url: newsBase + path})
 	}
-	if len(items) == 0 && len(body) > 0 {
-		// We fetched a page but matched nothing — most likely the index HTML structure changed
-		// and newsRe needs updating. Log loudly rather than silently returning "no news".
-		log.Printf("fetchNews: parsed 0 items from %d bytes of %s — the news page layout may have changed (update newsRe)", len(body), newsURL)
-	}
-	return items, nil
+	return items
 }
 
 func getNews(c context.Context) []newsItem {
