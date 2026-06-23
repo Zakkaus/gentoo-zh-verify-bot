@@ -121,15 +121,19 @@ func TestTrustedGroupsResolver(t *testing.T) {
 	c := &Config{
 		TrustedMemberGroupIDs: []int64{-100},
 		Groups: []GroupConfig{
-			{ID: -1},
-			{ID: -2, TrustedMemberGroupIDs: []int64{-200, -300}},
+			{ID: -1}, // omitted (nil) -> inherit global
+			{ID: -2, TrustedMemberGroupIDs: []int64{-200, -300}}, // non-empty -> override
+			{ID: -3, TrustedMemberGroupIDs: []int64{}},           // explicit [] -> DISABLE (opt out of global)
 		},
 	}
 	if got := c.trustedGroups(-1); len(got) != 1 || got[0] != -100 {
-		t.Errorf("group -1 (no override) should get the global [-100], got %v", got)
+		t.Errorf("group -1 (omitted) should inherit the global [-100], got %v", got)
 	}
 	if got := c.trustedGroups(-2); len(got) != 2 || got[0] != -200 {
 		t.Errorf("group -2 should use its per-group override, got %v", got)
+	}
+	if got := c.trustedGroups(-3); len(got) != 0 {
+		t.Errorf("group -3 with explicit [] must DISABLE the bypass (no inheritance), got %v", got)
 	}
 	if got := c.trustedGroups(-999); len(got) != 1 || got[0] != -100 {
 		t.Errorf("an unknown group should get the global default, got %v", got)
@@ -175,6 +179,28 @@ func TestLoadConfigTrustedGroups(t *testing.T) {
 	}
 	if !c.IsKnownChat(-1001163306055) {
 		t.Error("the trusted source group must be a known chat (so auto-leave won't kick the bot)")
+	}
+}
+
+// TestLoadConfigTrustedDisable proves the nil-vs-[] distinction survives JSON: an omitted field
+// inherits the global default, while an explicit empty array disables the bypass for that group.
+func TestLoadConfigTrustedDisable(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{
+		"trusted_member_group_ids": []int64{-1001163306055},
+		"groups": []map[string]any{
+			{"id": -100}, // omitted -> inherit global
+			{"id": -200, "trusted_member_group_ids": []int64{}}, // explicit [] -> disable
+		},
+		"questions": sampleQ,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.trustedGroups(-100); len(got) != 1 || got[0] != -1001163306055 {
+		t.Errorf("group -100 (omitted) should inherit the global, got %v", got)
+	}
+	if got := c.trustedGroups(-200); len(got) != 0 {
+		t.Errorf("group -200 with explicit [] must DISABLE the bypass (no inheritance), got %v", got)
 	}
 }
 

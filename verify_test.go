@@ -348,9 +348,10 @@ func TestStopForShutdownFreezesPending(t *testing.T) {
 	}
 }
 
-// TestTrustedBypass covers the trusted-member group bypass: a member of a configured trusted group is
-// auto-approved (strikes cleared, no quiz); a non-member, a GetChatMember error, and a failed
-// auto-approve all fall back to normal verification (never auto-approve on doubt, never leave stuck).
+// TestTrustedBypass covers tryTrustedBypass's (handled, trusted) result: a member of a trusted group
+// is approved (handled+trusted, strikes cleared); a non-member / lookup error is (false,false)
+// fail-closed; a confirmed member whose approve fails is (false,true) — confirmed-trusted so the caller
+// skips the cooldown but runs normal verification.
 func TestTrustedBypass(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
@@ -359,47 +360,100 @@ func TestTrustedBypass(t *testing.T) {
 			cfg: &Config{Groups: []GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
 	}
 
-	// member of the trusted group -> approved, prior strikes cleared, exactly one approve
 	v := mkV()
-	v.vfail[pkey{gid, uid}] = &vfailRec{} // a stale failed-verify strike
+	v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()} // a prior failed-verify strike
 	member := newFakeMod()
 	member.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
-	if !v.tryTrustedBypass(ctx, member, gid, uid) {
-		t.Fatal("a member of the trusted group must be auto-approved")
+	if handled, trusted := v.tryTrustedBypass(ctx, member, gid, uid); !handled || !trusted {
+		t.Fatalf("a member must be approved: handled=%v trusted=%v", handled, trusted)
 	}
 	if member.approves != 1 {
-		t.Errorf("must call ApproveChatJoinRequest exactly once, got %d", member.approves)
+		t.Errorf("must approve exactly once, got %d", member.approves)
 	}
 	if _, still := v.vfail[pkey{gid, uid}]; still {
 		t.Error("a successful bypass must clearVerifyFails (clean slate)")
 	}
 
-	// not a member -> no bypass, no approve
 	left := newFakeMod()
 	left.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
-	if mkV().tryTrustedBypass(ctx, left, gid, uid) || left.approves != 0 {
-		t.Error("a non-member must NOT be bypassed")
+	if handled, trusted := mkV().tryTrustedBypass(ctx, left, gid, uid); handled || trusted || left.approves != 0 {
+		t.Errorf("a non-member must be (false,false): handled=%v trusted=%v", handled, trusted)
 	}
 
-	// GetChatMember error -> fail-closed (no bypass, no approve)
 	errBot := newFakeMod()
 	errBot.memberErr = errors.New("bot not in the trusted group")
-	if mkV().tryTrustedBypass(ctx, errBot, gid, uid) || errBot.approves != 0 {
-		t.Error("a membership-lookup error must NOT bypass — fail-closed to normal verification")
+	if handled, trusted := mkV().tryTrustedBypass(ctx, errBot, gid, uid); handled || trusted || errBot.approves != 0 {
+		t.Errorf("a lookup error must be (false,false) — fail-closed: handled=%v trusted=%v", handled, trusted)
 	}
 
-	// auto-approve fails -> return false so the caller runs normal verification (request not stuck)
 	fail := newFakeMod()
 	fail.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
 	fail.approveErr = errors.New("no rights")
-	if mkV().tryTrustedBypass(ctx, fail, gid, uid) {
-		t.Error("a FAILED auto-approve must return false (fall back to normal verification)")
+	if handled, trusted := mkV().tryTrustedBypass(ctx, fail, gid, uid); handled || !trusted {
+		t.Errorf("a confirmed member with a failed approve must be (false,true): handled=%v trusted=%v", handled, trusted)
 	}
 
-	// no trusted config (and no global) -> no bypass, no membership lookup
 	plain := &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{}, cfg: &Config{Groups: []GroupConfig{{ID: gid}}}}
-	if plain.tryTrustedBypass(ctx, newFakeMod(), gid, uid) {
-		t.Error("with no trusted config there must be no bypass")
+	if handled, trusted := plain.tryTrustedBypass(ctx, newFakeMod(), gid, uid); handled || trusted {
+		t.Errorf("no trusted config -> (false,false): handled=%v trusted=%v", handled, trusted)
+	}
+}
+
+// TestJoinGate covers the onJoinRequest-level ordering: a confirmed trusted member takes PRIORITY over
+// the failure cooldown (approved, never declined; if its approve fails it proceeds to normal
+// verification, still not declined), while a non-member is subject to the ordinary cooldown.
+func TestJoinGate(t *testing.T) {
+	ctx := context.Background()
+	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
+	mkV := func() *Verifier {
+		return &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{},
+			cfg: &Config{VerifyRetrySeconds: 600, Groups: []GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
+	}
+	cooldown := func(v *Verifier) { v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()} }
+
+	// trusted member IN cooldown -> bypassed (handled), approved, NOT declined
+	v := mkV()
+	cooldown(v)
+	bot := newFakeMod()
+	bot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
+	if !v.joinGate(ctx, bot, gid, uid) {
+		t.Error("a trusted member in cooldown must be handled (bypassed)")
+	}
+	if bot.approves != 1 || bot.declines != 0 {
+		t.Errorf("a trusted member in cooldown must be APPROVED, not declined: approves=%d declines=%d", bot.approves, bot.declines)
+	}
+
+	// trusted member in cooldown whose approve FAILS -> not handled (proceed to quiz), NOT declined
+	vf := mkV()
+	cooldown(vf)
+	failBot := newFakeMod()
+	failBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
+	failBot.approveErr = errors.New("no rights")
+	if vf.joinGate(ctx, failBot, gid, uid) {
+		t.Error("a confirmed trusted member whose approve failed must proceed to verification (not be handled by the cooldown)")
+	}
+	if failBot.declines != 0 {
+		t.Errorf("a confirmed trusted member must NOT be cooldown-declined, got %d declines", failBot.declines)
+	}
+
+	// NON-member in cooldown -> declined (the ordinary cooldown applies)
+	vn := mkV()
+	cooldown(vn)
+	nonBot := newFakeMod()
+	nonBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
+	if !vn.joinGate(ctx, nonBot, gid, uid) {
+		t.Error("a non-member in cooldown must be handled (declined)")
+	}
+	if nonBot.declines != 1 || nonBot.approves != 0 {
+		t.Errorf("a non-member in cooldown must be DECLINED: declines=%d approves=%d", nonBot.declines, nonBot.approves)
+	}
+
+	// non-member, NO cooldown -> proceed to the challenge (not handled)
+	vp := mkV()
+	pBot := newFakeMod()
+	pBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
+	if vp.joinGate(ctx, pBot, gid, uid) {
+		t.Error("a non-member with no cooldown must proceed to the challenge (not handled)")
 	}
 }
 
