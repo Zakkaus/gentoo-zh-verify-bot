@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.5] - 2026-06-23
+
+### Fixed
+Whole-codebase audit follow-up (the audit found 0 critical issues — the non-feed modules are
+"fundamentally sound" like the feed; these are the two concrete defects it surfaced):
+- **Verification: a timeout timer firing during graceful shutdown could wrongly decline — and, at the
+  strike threshold, auto-ban — a user still mid-verification.** The per-pending timeout
+  `time.AfterFunc` runs on `context.Background()` (independent of the SIGTERM context) and shutdown
+  didn't stop them. `stopForShutdown` now flags shutting-down (so `consumeNonce` refuses) and stops
+  every pending timer before the final save, so in-progress verifications persist intact across the
+  restart (the documented guarantee).
+- **Config: `timeout_seconds` is now floored at 30** so a typo like `timeout_seconds: 1` can't create
+  an unwinnable challenge that strikes real users (mirrors the existing ≤0→240 and >1800→1800 clamps).
+
 ## [3.7.4] - 2026-06-23
 
 ### Changed / Fixed
