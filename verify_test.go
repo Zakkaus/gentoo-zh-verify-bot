@@ -322,6 +322,32 @@ func TestApproveClaimBlocksTimeoutDecline(t *testing.T) {
 	}
 }
 
+// TestStopForShutdownFreezesPending guards the shutdown-timer race: after stopForShutdown, a timeout
+// timer that fires must NOT decline/strike/ban — consumeNonce refuses while shutting down and the
+// pending stays intact so it persists across the restart (the README guarantee).
+func TestStopForShutdownFreezesPending(t *testing.T) {
+	v := &Verifier{pend: map[pkey]*pending{}}
+	key := pkey{gid: -100, uid: 42}
+	tmr := time.AfterFunc(time.Hour, func() {}) // a live timer that stopForShutdown should stop
+	v.pend[key] = &pending{nonce: "n1", deadline: time.Now().Add(time.Hour), timer: tmr}
+
+	v.stopForShutdown()
+
+	if !v.shuttingDown {
+		t.Error("stopForShutdown must set the shutting-down flag")
+	}
+	if _, ok := v.pend[key]; !ok {
+		t.Fatal("stopForShutdown must NOT remove pendings — they must persist across the restart")
+	}
+	// a timeout timer firing now reaches consumeNonce, which must refuse while shutting down.
+	if _, ok := v.consumeNonce(-100, 42, "n1"); ok {
+		t.Error("consumeNonce must refuse while shutting down, so a firing timeout can't decline/strike/ban")
+	}
+	if _, ok := v.pend[key]; !ok {
+		t.Error("the pending must remain intact after the refused consumeNonce")
+	}
+}
+
 // TestReopenPendingRestoresRetryable covers the failed-approve restore: reopenPending re-opens a
 // claimed pending (done=false, timer re-armed) so the applicant stays retryable, but refuses to
 // touch one that a newer request has since replaced.

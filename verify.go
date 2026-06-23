@@ -88,6 +88,7 @@ type Verifier struct {
 	pend         map[pkey]*pending
 	warns        map[pkey]int // group+user -> warning count (persisted)
 	enabled      bool
+	shuttingDown bool // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
 	rich         bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
 	nameSpoiler  bool // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
 	statDate     string
@@ -922,6 +923,9 @@ func (v *Verifier) consume(gid, uid int64) (*pending, bool) {
 func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.shuttingDown {
+		return nil, false // shutting down: leave the pending intact so it persists across the restart
+	}
 	key := pkey{gid, uid}
 	p, ok := v.pend[key]
 	if !ok || p.done || p.nonce != nonce {
@@ -933,6 +937,21 @@ func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	}
 	delete(v.pend, key)
 	return p, true
+}
+
+// stopForShutdown freezes verification for a clean exit: it flags shutting-down (so a timeout timer
+// that fires during the exit window no-ops in consumeNonce instead of declining/striking/banning a
+// user who is still mid-verification) and stops every pending timer. Call it before the final save()
+// so in-progress verifications persist intact across the restart (the README's documented guarantee).
+func (v *Verifier) stopForShutdown() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.shuttingDown = true
+	for _, p := range v.pend {
+		if p != nil && p.timer != nil {
+			p.timer.Stop()
+		}
+	}
 }
 
 func (v *Verifier) deleteChallenge(c context.Context, bot verifyBot, gid int64, msgID int) {

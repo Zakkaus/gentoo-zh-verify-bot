@@ -132,6 +132,7 @@ func main() {
 	// decline/timeout AfterFunc that updated the maps but whose own save() was cut short still lands
 	// on disk — keeping pending.json / verifyfail.json consistent with the action already taken.
 	_ = bh.Stop()
+	v.stopForShutdown() // freeze pending timers so a verification deadline firing during exit can't wrongly decline/ban
 	v.save()
 	v.saveVerifyFails()
 	if feedDone != nil {
