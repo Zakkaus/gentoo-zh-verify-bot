@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.0] - 2026-06-23
+
+### Added
+- **`modBot` test seam + regression coverage for the security-critical moderation glue** (the audit's
+  top recommendation). A `modBot` interface (a superset of `verifyBot`) is now threaded through the
+  admin gate (`adminStatus` / `isGroupAdmin`), the mute / unmute helpers, the shared `warnPrecheck`
+  gate, and a newly-extracted `warnKick` — compile-checked type-widening with **zero behavior change**.
+  New table tests cover the highest-risk branches: the admin gate **fails CLOSED** on a lookup error,
+  a non-admin caller is **denied with no ban/restrict issued**, an admin target is skipped, mute
+  restricts, unmute restores the group default (and falls back permissively but **still lifts the
+  mute** when GetChat fails), and the warn-limit kick is rejoinable / honest when the unban sticks.
+  Coverage 29.7% → 31.4%.
+
 ## [3.7.6] - 2026-06-23
 
 ### Fixed
