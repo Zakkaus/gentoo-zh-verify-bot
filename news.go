@@ -69,7 +69,10 @@ func fetchNews(c context.Context) ([]newsItem, error) {
 
 func getNews(c context.Context) []newsItem {
 	newsC.mu.Lock()
-	fresh := len(newsC.items) > 0 && time.Since(newsC.fetched) < newsTTL
+	// Gate freshness on the fetch TIME, not on having items: a legitimately empty fetch is still a
+	// successful fetch, so caching it (rather than re-checking len>0) stops /news from re-hitting
+	// upstream on every call when the page genuinely has no items.
+	fresh := !newsC.fetched.IsZero() && time.Since(newsC.fetched) < newsTTL
 	if fresh || newsC.loading {
 		items := newsC.items
 		newsC.mu.Unlock()
