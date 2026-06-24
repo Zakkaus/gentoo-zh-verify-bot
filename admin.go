@@ -152,7 +152,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/mute — 禁言(留群不能发言,到期自动解除);默认1h,可 /mute 30m\n" +
 			"/unmute — 解除禁言\n" +
 			"/ban — 封禁(踢出群,仅删该条消息)\n" +
-			"/sb — 举报并封禁(踢出群 + 清除其全部消息)\n" +
+			"/sb — 封禁并清空消息(踢出群 + 清除其全部消息)\n" +
 			fmt.Sprintf("/warn — 警告(满 %d 次自动踢出);/clearwarn — 清除警告\n", v.cfg.WarnLimit) +
 			"\n其它管理指令:\n" +
 			"/bantime — 设定封禁时长(0=永久;如 7d/12h/30m)\n" +

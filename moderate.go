@@ -172,7 +172,7 @@ func (v *Verifier) onBan(ctx *th.Context, update telego.Update) error {
 
 // moderate implements the two reply-to-a-message moderation commands; both ban the user for
 // the configured duration (banDuration / /bantime; 0 = permanent) and log to the admin chat:
-//   - /sb  = 举报并封禁 (report + ban): deletes ALL of the user's messages in the group
+//   - /sb  = 封禁并清空 (ban + purge): deletes ALL of the user's messages in the group
 //     (revoke_messages) — for spam cleanup — then bans.
 //   - /ban = 封禁 (ban): deletes only the replied-to message, then bans.
 //
@@ -208,7 +208,7 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
 	verb := "封禁"
 	if cmd == "/sb" {
-		verb = "举报并封禁(已清除其全部消息)" // /sb is the report-and-ban variant + message purge
+		verb = "封禁并清空(已清除其全部消息)" // /sb is the ban-and-purge variant + message purge
 	}
 	action := fmt.Sprintf("已%s(%s)", verb, banDurationText(secs))
 

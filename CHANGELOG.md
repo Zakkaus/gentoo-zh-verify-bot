@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.3] - 2026-06-24
+
+### Changed
+- **Wording: dropped the misleading "举报" (report) labels — no behavior change.** The Telegram Bot
+  API has no report method, so these moderation actions never reported anything; they decline/ban.
+  Renamed to match what they actually do: the join-challenge admin button is now **「拒绝并封禁」**
+  (decline + ban the applicant) and `/sb` is **「封禁并清空」** (ban + purge the user's messages).
+  Same actions, accurate names; touches only button text, `/help`, and command descriptions.
+
 ## [3.9.2] - 2026-06-23
 
 ### Fixed

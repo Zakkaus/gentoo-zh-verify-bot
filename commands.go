@@ -32,7 +32,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "stop", Description: "[管理] 关闭入群验证"},
 		{Command: "mute", Description: "[管理] 回复:禁言(默认1h,可 /mute 30m)"},
 		{Command: "unmute", Description: "[管理] 回复:解除禁言"},
-		{Command: "sb", Description: "[管理] 回复:举报+封禁并清空其消息"},
+		{Command: "sb", Description: "[管理] 回复:封禁并清空其消息"},
 		{Command: "ban", Description: "[管理] 回复:封禁(踢出群)"},
 		{Command: "warn", Description: fmt.Sprintf("[管理] 回复:警告(满 %d 次自动踢)", warnLimit)},
 		{Command: "clearwarn", Description: "[管理] 回复:清除警告"},

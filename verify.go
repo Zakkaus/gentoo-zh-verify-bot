@@ -689,7 +689,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
 		telego.InlineKeyboardButton{Text: "👮 管理员直接通过", CallbackData: adminPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: "🚫 举报并封禁", CallbackData: adminPrefix + "ban:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: "🚫 拒绝并封禁", CallbackData: adminPrefix + "ban:" + gidStr + ":" + uidStr},
 	))
 
 	msgID := 0
