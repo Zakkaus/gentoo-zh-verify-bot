@@ -158,6 +158,44 @@ func TestIsKnownChatTrusted(t *testing.T) {
 	}
 }
 
+// TestIsKnownChatExtra: known_chat_ids keeps the bot in a chat it only posts to (e.g. an announcement
+// channel) WITHOUT making it a trusted bypass source — the bot neither auto-leaves it nor skips its members.
+func TestIsKnownChatExtra(t *testing.T) {
+	c := &Config{
+		GroupIDs:     []int64{-1},
+		Groups:       []GroupConfig{{ID: -1}},
+		KnownChatIDs: []int64{-1001166068646},
+	}
+	if !c.IsKnownChat(-1001166068646) {
+		t.Error("a known_chat_ids chat must be a known chat (never auto-left)")
+	}
+	if len(c.trustedGroups(-1)) != 0 {
+		t.Error("known_chat_ids must NOT add a trusted bypass source")
+	}
+	if c.IsKnownChat(-77777) {
+		t.Error("an unrelated chat must NOT be known")
+	}
+}
+
+// TestLoadConfigKnownChats proves known_chat_ids round-trips through LoadConfig and makes the chat
+// known (no auto-leave) without turning it into a trusted source.
+func TestLoadConfigKnownChats(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{
+		"known_chat_ids": []int64{-1001166068646},
+		"groups":         []map[string]any{{"id": -1003265952923}},
+		"questions":      sampleQ,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.IsKnownChat(-1001166068646) {
+		t.Error("a known_chat_ids chat must be a known chat")
+	}
+	if len(c.TrustedMemberGroupIDs) != 0 {
+		t.Error("known_chat_ids must not populate trusted sources")
+	}
+}
+
 // TestLoadConfigTrustedGroups proves the new field round-trips through LoadConfig (top-level + per-group)
 // and that the source group is then a known chat.
 func TestLoadConfigTrustedGroups(t *testing.T) {

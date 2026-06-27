@@ -18,6 +18,7 @@
   "verify_max_fails": 3,
   "required_channel_fail_open": true,
   "trusted_member_group_ids": [],
+  "known_chat_ids": [],
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",

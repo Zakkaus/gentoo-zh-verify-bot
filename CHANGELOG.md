@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.10.0] - 2026-06-27
+
+### Added
+- **`known_chat_ids` — extra chats the bot stays in without any verification role.** A new top-level
+  config list of chats the bot must never auto-leave (so it can post announcements / be present)
+  WITHOUT treating them as a guarded group, a required channel, or a trusted-member source. Unlike a
+  `trusted_member_group_ids` entry these are NOT a bypass source (their members do not skip
+  verification), and unlike a guarded group the bot runs no join-verification there — it simply won't
+  remove itself. Use it for an announcement channel the bot only publishes to (e.g. a directory post).
+  Wired into `IsKnownChat`; covered by `TestIsKnownChatExtra` + a `LoadConfig` round-trip test.
+
 ## [3.9.3] - 2026-06-24
 
 ### Changed

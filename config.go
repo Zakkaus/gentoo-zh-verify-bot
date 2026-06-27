@@ -87,6 +87,11 @@ type Config struct {
 	// overrides this. Use real chat ids (groups/supergroups are -100…). NOT a required_channel: a
 	// failed/unreadable membership check falls back to normal verification (never auto-approves).
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
+	// KnownChatIDs: extra chats the bot stays in (never auto-leaves) WITHOUT any verification role —
+	// e.g. a channel the bot only POSTS to (announcements / a directory post). Unlike a
+	// trusted_member_group these are NOT a bypass source (their members do NOT skip verification), and
+	// unlike a guarded group the bot runs no join-verification there; it simply won't remove itself.
+	KnownChatIDs []int64 `json:"known_chat_ids"`
 	// ChannelInviteURL: explicit join link for the required channel — needed for
 	// PRIVATE channels (no public @handle). If empty, an @handle channel_display
 	// is turned into a t.me link automatically.
@@ -355,14 +360,22 @@ func (c *Config) questions(id int64) []Question {
 	return c.Questions
 }
 
-// IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded
-// group, a (global or per-group) required channel, a feed target, or the admin-log
-// chat. Any other group/channel is unauthorized and the bot auto-leaves it.
+// IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded group, a
+// (global or per-group) required channel, a trusted-member source, a feed target, the
+// admin-log chat, or an explicit known_chat_ids entry (a chat the bot only posts to). Any
+// other group/channel is unauthorized and the bot auto-leaves it.
 func (c *Config) IsKnownChat(id int64) bool {
 	if c.IsGroup(id) ||
 		(c.RequiredChannelID != 0 && id == c.RequiredChannelID) ||
 		(c.AdminLogChatID != 0 && id == c.AdminLogChatID) {
 		return true
+	}
+	// Explicit stay-in chats (known_chat_ids): the bot posts to / is present in these but runs no
+	// verification on them — still must never be auto-left.
+	for _, k := range c.KnownChatIDs {
+		if k == id {
+			return true
+		}
 	}
 	// Trusted-member source groups (global + per-group) — the bot must stay in them to read
 	// membership for the bypass, so they must NOT be auto-left.
