@@ -18,6 +18,19 @@ import (
 // -ldflags "-X main.version=$(git describe --tags)"; "dev" for a plain `go build`.
 var version = "dev"
 
+// pollRetryInterval pins how long the long poller waits before retrying getUpdates after an error.
+// telego already retries by default (its own ~8s); we set it explicitly so the behaviour is pinned to
+// this value (and a little snappier) rather than depending on a library default. With a non-zero retry
+// the poller keeps the update stream open across a transient Telegram/network hiccup instead of exiting.
+const pollRetryInterval = 5 * time.Second
+
+// streamEndedUnexpectedly reports whether bh.Start() returned for a reason OTHER than our own shutdown
+// signal. With the poll retry set, the update stream normally only ends when ctx is cancelled by
+// SIGINT/SIGTERM; if it ended while ctx is still live, something else stopped it, so main exits
+// non-zero to let systemd (Restart=on-failure) restart us instead of falling through to a clean exit 0
+// and silently staying offline. Defensive — not reached in normal operation.
+func streamEndedUnexpectedly(ctxErr error) bool { return ctxErr == nil }
+
 func main() {
 	configPath := flag.String("config", "/etc/gentoo-zh-verify-bot/config.json", "path to config.json")
 	flag.Parse()
@@ -49,7 +62,7 @@ func main() {
 	updates, err := bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 		Timeout:        30,
 		AllowedUpdates: []string{"chat_join_request", "callback_query", "message", "my_chat_member"},
-	})
+	}, telego.WithLongPollingRetryTimeout(pollRetryInterval)) // survive a transient poll error instead of closing the stream
 	if err != nil {
 		log.Fatalf("start long polling: %v", err)
 	}
@@ -69,6 +82,7 @@ func main() {
 	}
 	v.botUsername = me.Username
 	v.botID = me.ID
+	v.probe = bot // liveness prober for the on-demand reachability check in the expiry path
 	log.Printf("verify bot @%s (%s) started — groups=%d timeout=%ds", me.Username, version, len(cfg.Groups), cfg.TimeoutSeconds)
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
@@ -93,6 +107,7 @@ func main() {
 			log.Printf("swept %d leftover state temp file(s) in %s", len(leftover), sd)
 		}
 		v.statePath = sd + "/pending.json"
+		v.hbPath = sd + "/heartbeat.json"
 		v.load(bot)
 		v.warnPath = sd + "/warns.json"
 		v.loadWarns()
@@ -123,10 +138,14 @@ func main() {
 		}()
 	}
 
-	go pkgC.refresh(ctx) // warm the package-search cache in the background (cancelled on shutdown)
+	go pkgC.refresh(ctx)        // warm the package-search cache in the background (cancelled on shutdown)
+	go v.runHeartbeat(ctx, bot) // liveness probe: pause verification timeouts during a Telegram/network outage and refresh on recovery
 
 	if err := bh.Start(); err != nil {
 		log.Fatalf("handler stopped: %v", err)
+	}
+	if streamEndedUnexpectedly(ctx.Err()) {
+		log.Fatal("update stream ended without a shutdown signal — exiting non-zero so systemd restarts us")
 	}
 	// Graceful shutdown (SIGINT/SIGTERM): stop handlers, then flush the latest in-memory state so a
 	// decline/timeout AfterFunc that updated the maps but whose own save() was cut short still lands
@@ -135,6 +154,7 @@ func main() {
 	v.stopForShutdown() // freeze pending timers so a verification deadline firing during exit can't wrongly decline/ban
 	v.save()
 	v.saveVerifyFails()
+	v.saveHeartbeat() // record a clean exit time so the next start sees a recent heartbeat, not a false outage
 	if feedDone != nil {
 		// Let the feed loop flush its final cursor/tracking state, but don't let a stuck network
 		// call hold up shutdown past a short grace period.

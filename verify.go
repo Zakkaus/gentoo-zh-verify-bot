@@ -55,14 +55,26 @@ type modBot interface {
 }
 
 type pending struct {
-	groupMsgID int
-	qText      string
-	qOpts      []string
-	correctIdx int
-	nonce      string // per-pending token; a quiz button only counts if its nonce matches
-	deadline   time.Time
-	timer      *time.Timer
-	done       bool
+	groupMsgID   int
+	qText        string
+	qOpts        []string
+	correctIdx   int
+	nonce        string // per-pending token; a quiz button only counts if its nonce matches
+	name         string // applicant display name, kept so a post-outage re-notify can address them
+	deadline     time.Time
+	timer        *time.Timer
+	epoch        uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
+	lastRenotify time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
+	done         bool
+}
+
+// renotifyItem is one applicant to re-notify after an outage — snapshotted under the lock, then
+// messaged outside it. Shared by the runtime-recovery (onRecovery) and restart-recovery (load) paths.
+type renotifyItem struct {
+	gid, uid int64
+	name     string
+	oldMsg   int
+	p        *pending
 }
 
 type pendingRec struct {
@@ -73,6 +85,7 @@ type pendingRec struct {
 	QOpts      []string `json:"q_opts"`
 	CorrectIdx int      `json:"correct_idx"`
 	Nonce      string   `json:"nonce"`
+	Name       string   `json:"name,omitempty"`
 	Deadline   int64    `json:"deadline"`
 }
 
@@ -122,6 +135,9 @@ type Verifier struct {
 	settingsPath string                // persistence path for runtime settings (verification enabled state)
 	adminMu      sync.Mutex            // guards adminCache
 	adminCache   map[pkey]time.Time    // group+user -> admin-status cache expiry; only ADMINS are cached (short TTL) so the verify/moderation admin checks skip a GetChatMember round-trip on repeat use
+	lastOnline   time.Time             // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
+	hbPath       string                // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
+	probe        liveProbe             // liveness prober (the bot) for reachable(); nil in tests => assume reachable
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -161,7 +177,8 @@ func NewVerifier(cfg *Config) *Verifier {
 		adminCache: map[pkey]time.Time{},
 		vfail:      map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders,
-		nameSpoiler: true} // default ON: spam joiners often set their NAME to an advert; hide it behind a spoiler
+		lastOnline:  time.Now(), // begin online; the heartbeat only flips us offline after missed contact
+		nameSpoiler: true}       // default ON: spam joiners often set their NAME to an advert; hide it behind a spoiler
 	for _, id := range cfg.ChannelWhitelist {
 		v.acWhite[id] = true
 	}
@@ -445,13 +462,13 @@ func (v *Verifier) save() {
 			continue
 		}
 		recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-			QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Deadline: p.deadline.Unix()})
+			QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 	}
 	v.mu.Unlock()
 	writeJSONFile(v.statePath, recs)
 }
 
-func (v *Verifier) load(bot *telego.Bot) {
+func (v *Verifier) load(bot verifyBot) {
 	if v.statePath == "" {
 		return
 	}
@@ -459,6 +476,18 @@ func (v *Verifier) load(bot *telego.Bot) {
 	if err := loadJSONFile(v.statePath, &recs); err != nil {
 		return // corrupt file backed up to .corrupt; start empty
 	}
+	// Estimate how long the bot was down from the last persisted heartbeat. A long gap means every
+	// in-progress window was eaten while we were away, so those pendings get a fresh full window and a
+	// re-notify; a quick restart keeps the existing (short) behaviour so a routine deploy is quiet.
+	var downtime time.Duration
+	if last := v.loadHeartbeat(); !last.IsZero() {
+		if d := time.Since(last); d > 0 {
+			downtime = d
+		}
+	}
+	longOutage := downtime > outageRecovery
+
+	var refresh []renotifyItem
 	for _, r := range recs {
 		gid, uid := r.GroupID, r.UserID
 		// Don't restore a pending for a group no longer configured (it would decline/strike against an
@@ -472,15 +501,24 @@ func (v *Verifier) load(bot *telego.Bot) {
 			continue
 		}
 		p := &pending{groupMsgID: r.GroupMsgID, qText: r.QText, qOpts: r.QOpts,
-			correctIdx: r.CorrectIdx, nonce: r.Nonce, deadline: time.Unix(r.Deadline, 0)}
+			correctIdx: r.CorrectIdx, nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
 		reason := "timeout"
-		if delay <= 0 {
-			// the deadline lapsed while the bot was down — give a returning user a fresh window and
-			// don't strike them if they still don't finish (they never had a chance after the restart).
+		switch {
+		case longOutage:
+			// Down long enough to eat the whole window: a fresh full one, don't strike if it lapses
+			// (the user never had a fair shot), and re-notify below.
+			delay = v.timeout()
+			p.deadline = time.Now().Add(delay)
+			p.lastRenotify = time.Now() // mark re-notified so a runtime recovery right after doesn't re-message
+			reason = "recovered"
+			refresh = append(refresh, renotifyItem{gid, uid, r.Name, r.GroupMsgID, p})
+		case delay <= 0:
+			// Deadline lapsed during a SHORT restart — a fresh grace window, no strike.
 			delay = noFaultGrace
+			p.deadline = time.Now().Add(delay)
 			reason = "restart-lapsed"
-		} else if delay < time.Second {
+		case delay < time.Second:
 			delay = time.Second
 		}
 		v.mu.Lock()
@@ -488,12 +526,25 @@ func (v *Verifier) load(bot *telego.Bot) {
 		// arm the timer with the entry already in the map (mirrors onJoinRequest), so a
 		// near-immediate fire can't decline()->consume() before the entry exists. The captured
 		// nonce makes the decline a no-op if a fresh request has since replaced this pending.
-		nonce := p.nonce
-		p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, reason) })
+		v.armExpiry(bot, p, gid, uid, delay, reason)
 		v.mu.Unlock()
 	}
 	if len(recs) > 0 {
 		log.Printf("restored %d pending verification(s)", len(recs))
+	}
+	// After a real outage, proactively refresh the restored applicants (bounded) — a DM plus a fresh
+	// in-group challenge — instead of leaving them staring at a stale, already-expired one.
+	if longOutage && len(refresh) > 0 {
+		capped := 0
+		if len(refresh) > renotifyCap {
+			capped = len(refresh) - renotifyCap
+			refresh = refresh[:renotifyCap]
+		}
+		for _, it := range refresh {
+			v.renotifyPending(context.Background(), bot, it.gid, it.uid, it.name, it.oldMsg, it.p, downtime)
+		}
+		v.save() // persist the fresh deadlines so a further crash doesn't reload the stale ones
+		log.Printf("recovery: re-notified %d restored verification(s) after ~%s down%s", len(refresh), downtime.Round(time.Second), capNote(capped))
 	}
 }
 
@@ -660,46 +711,10 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	if v.joinGate(c, bot, gid, uid) {
 		return nil
 	}
-	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
-
 	q := v.cfg.randomQuestion(gid)
 	text, opts, correctIdx := shuffledQuestion(q)
-
-	mention := joinerLabel(uid, displayName(&jr.From), v.nameSpoilerOn())
-	link := ""
-	if v.botUsername != "" {
-		link = "https://t.me/" + v.botUsername + "?start=verify"
-	}
-	// Channel requirement is mentioned as plain text only — the actual follow
-	// button lives in the DM step, so users aren't sent away from the verify flow.
-	channelHint := ""
-	if v.cfg.requiredChannel(gid) != 0 {
-		channelHint = fmt.Sprintf("\n⚠️ 完成验证前还需先关注频道 %s。", html.EscapeString(v.cfg.channelDisplay(gid)))
-	}
-	linkText := ""
-	if link != "" {
-		linkText = fmt.Sprintf("(或 <a href=\"%s\">点此</a>)", link)
-	}
-	body := fmt.Sprintf("👋 %s 申请加入。请点下方「✅ 点此完成验证」%s 打开机器人私聊完成验证,%d 秒内未完成将被拒绝。%s",
-		mention, linkText, v.cfg.TimeoutSeconds, channelHint)
-
-	var rows [][]telego.InlineKeyboardButton
-	if link != "" {
-		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 点此完成验证", URL: link}))
-	}
-	rows = append(rows, tu.InlineKeyboardRow(
-		telego.InlineKeyboardButton{Text: "👮 管理员直接通过", CallbackData: adminPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: "🚫 拒绝并封禁", CallbackData: adminPrefix + "ban:" + gidStr + ":" + uidStr},
-	))
-
-	msgID := 0
-	if sent, err := bot.SendMessage(c, htmlMessage(gid, body).
-		WithReplyMarkup(tu.InlineKeyboard(rows...))); err != nil {
-		log.Printf("join %d in %d: post challenge failed: %v", uid, gid, err)
-		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 群 %d 未能发出用户 %d 的入群验证消息:%v;请手动处理该申请", gid, uid, err))
-	} else if sent != nil {
-		msgID = sent.MessageID
-	}
+	name := displayName(&jr.From)
+	groupMsgID := v.postGroupChallenge(c, bot, gid, uid, name)
 
 	key := pkey{gid, uid}
 	v.mu.Lock()
@@ -711,13 +726,12 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		}
 		oldMsgID = old.groupMsgID
 	}
-	p := &pending{groupMsgID: msgID, qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(),
-		deadline: time.Now().Add(time.Duration(v.cfg.TimeoutSeconds) * time.Second)}
-	nonce := p.nonce // captured so this pending's timeout only declines THIS pending (not a later one)
-	p.timer = time.AfterFunc(time.Until(p.deadline), func() { v.decline(context.Background(), bot, gid, uid, nonce, "timeout") })
+	p := &pending{groupMsgID: groupMsgID, qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(),
+		name: name, deadline: time.Now().Add(v.timeout())}
+	v.armExpiry(bot, p, gid, uid, v.timeout(), "timeout")
 	v.pend[key] = p
 	v.mu.Unlock()
-	if oldMsgID != 0 && oldMsgID != msgID {
+	if oldMsgID != 0 && oldMsgID != groupMsgID {
 		v.deleteChallenge(c, bot, gid, oldMsgID) // drop the stale challenge from a previous request
 	}
 	v.save()
@@ -1030,8 +1044,8 @@ func (v *Verifier) consume(gid, uid int64) (*pending, bool) {
 }
 
 // consumeNonce is consume but only claims the pending if its nonce still matches — used by the
-// timeout (and wrong-answer) path so a STALE timer/callback from a since-replaced request can't
-// decline/strike/ban a freshly re-issued pending under the same (gid,uid) key.
+// wrong-answer path so a STALE callback from a since-replaced request can't decline/strike/ban a
+// freshly re-issued pending under the same (gid,uid) key.
 func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1042,6 +1056,29 @@ func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	p, ok := v.pend[key]
 	if !ok || p.done || p.nonce != nonce {
 		return nil, false // gone, already handled, or a different (newer) pending now holds the key
+	}
+	p.done = true
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	delete(v.pend, key)
+	return p, true
+}
+
+// consumeExpiry is the timer path's claim: it takes the pending only if BOTH the nonce and the epoch
+// still match. The epoch is bumped on every (re-)arm, so a timer that fired just before a defer /
+// recovery re-armed the pending finds a stale epoch and no-ops here — closing the race where a
+// pre-recovery timeout could decline (and strike) the very applicant recovery just refreshed.
+func (v *Verifier) consumeExpiry(gid, uid int64, nonce string, epoch uint64) (*pending, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.shuttingDown {
+		return nil, false
+	}
+	key := pkey{gid, uid}
+	p, ok := v.pend[key]
+	if !ok || p.done || p.nonce != nonce || p.epoch != epoch {
+		return nil, false // gone, handled, replaced, or superseded by a newer timer
 	}
 	p.done = true
 	if p.timer != nil {
@@ -1180,9 +1217,8 @@ func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 	if delay < noFaultGrace {
 		delay = noFaultGrace // OUR approve failed — give the user a real retry window, not ~1s
 	}
-	nonce := p.nonce // mirror onJoinRequest: a background-context timer that only declines THIS pending
 	// "approve-retry": if this timer fires it must NOT strike the user — the original failure was ours.
-	p.timer = time.AfterFunc(delay, func() { v.decline(context.Background(), bot, gid, uid, nonce, "approve-retry") })
+	v.armExpiry(bot, p, gid, uid, delay, "approve-retry")
 }
 
 // wrongAnswerText is the callback alert shown after a wrong answer: a ban notice if this
@@ -1203,28 +1239,37 @@ func (v *Verifier) wrongAnswerText(banned bool) string {
 const noFaultGrace = 60 * time.Second
 
 // strikesUser reports whether a decline with this reason counts a verification strike against the
-// applicant. A genuine timeout or wrong answer does; a decline caused by OUR OWN failed approve
-// ("approve-retry") or by a deadline that lapsed while the bot was DOWN ("restart-lapsed") does NOT —
-// those aren't the user's fault, so they must never push a legitimate user toward the auto-ban.
+// applicant. A genuine timeout or wrong answer does; a decline that isn't the user's fault does NOT,
+// so it can never push a legitimate user toward the auto-ban: OUR OWN failed approve ("approve-retry"),
+// a deadline that lapsed while the bot was DOWN ("restart-lapsed"), or the first fresh window granted
+// right after the bot recovered from an outage ("recovered").
 func strikesUser(reason string) bool {
 	switch reason {
-	case "approve-retry", "restart-lapsed":
+	case "approve-retry", "restart-lapsed", "recovered":
 		return false
 	default:
 		return true
 	}
 }
 
-// decline rejects a failed verification (wrong answer / timeout). nonce identifies the exact
-// pending being rejected, so a stale timer can't decline a since-replaced one (see consumeNonce).
-// It records a strike (unless strikesUser(reason) is false); once an applicant reaches
-// cfg.VerifyMaxFails strikes it is banned (for the configured duration) instead of retrying forever.
-// Returns handled=false if there was no matching live pending, banned=true if this crossed the ban.
+// decline rejects a failed verification from the wrong-answer path — a live user action, so no offline
+// check is needed. nonce identifies the exact pending, so a stale callback can't decline a
+// since-replaced one (see consumeNonce). Returns handled=false if there was no matching live pending,
+// banned=true if this crossed the auto-ban. The timeout path goes through onExpiry -> consumeExpiry ->
+// finishDecline instead, so it can defer while the bot is offline.
 func (v *Verifier) decline(c context.Context, bot verifyBot, gid, uid int64, nonce, reason string) (handled, banned bool) {
 	p, ok := v.consumeNonce(gid, uid, nonce)
 	if !ok {
 		return false, false
 	}
+	return true, v.finishDecline(c, bot, gid, uid, p, reason)
+}
+
+// finishDecline performs the reject on an ALREADY-claimed pending: drop the challenge, record a strike
+// (unless strikesUser(reason) is false — a decline that isn't the user's fault), decline the join
+// request, and auto-ban once the applicant reaches cfg.VerifyMaxFails strikes. Returns whether the ban
+// itself succeeded. Shared by the wrong-answer path (decline) and the timeout path (onExpiry).
+func (v *Verifier) finishDecline(c context.Context, bot verifyBot, gid, uid int64, p *pending, reason string) (banned bool) {
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	var count int
 	var doBan bool
@@ -1252,7 +1297,7 @@ func (v *Verifier) decline(c context.Context, bot verifyBot, gid, uid int64, non
 	}
 	v.save()
 	log.Printf("decline user=%d group=%d (%s) fails=%d banned=%v", uid, gid, reason, count, banned)
-	return true, banned
+	return banned
 }
 
 // banApplicant declines the join request and bans the user. It returns handled=false if there
@@ -1283,4 +1328,303 @@ func (v *Verifier) executeBan(c context.Context, bot verifyBot, gid, uid int64, 
 	v.save()
 	log.Printf("banApplicant user=%d group=%d banned=%v (admin report)", uid, gid, banned)
 	return banned
+}
+
+// --- outage resilience: heartbeat, offline-aware expiry, and post-recovery re-notify ---
+
+const (
+	heartbeatInterval     = 25 * time.Second // how often the bot pings Telegram to confirm it is reachable
+	heartbeatProbeTimeout = 10 * time.Second // per-probe timeout for the GetMe liveness call
+	offlineThreshold      = 70 * time.Second // no successful contact within this => treat as offline (defer expiries)
+	outageRecovery        = 90 * time.Second // an outage longer than this triggers fresh windows + a re-notify on recovery
+	renotifyCap           = 30               // most applicants to re-notify per recovery, so a big backlog can't become a message storm
+)
+
+// timeout is the configured verification window as a Duration.
+func (v *Verifier) timeout() time.Duration { return time.Duration(v.cfg.TimeoutSeconds) * time.Second }
+
+// liveProbe is the slice of the bot used for a liveness check (a cheap GetMe). *telego.Bot satisfies
+// it; a fake satisfies it in tests.
+type liveProbe interface {
+	GetMe(ctx context.Context) (*telego.User, error)
+}
+
+// offlineNow reports whether the bot currently cannot reach Telegram: the heartbeat has had no
+// successful contact within offlineThreshold. Seeded online at startup, so before the first heartbeat
+// it reads online and normal declines proceed.
+func (v *Verifier) offlineNow() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return !v.lastOnline.IsZero() && time.Since(v.lastOnline) > offlineThreshold
+}
+
+// reachable does an on-demand liveness probe, so an expiry that fires in the detection-lag window at
+// the very START of an outage — before offlineNow flips true (the heartbeat only samples every
+// heartbeatInterval) — still isn't acted on if the bot really can't reach Telegram. No probe wired
+// (tests) => assume reachable, so the ordinary decline path is unchanged.
+func (v *Verifier) reachable(c context.Context) bool {
+	if v.probe == nil {
+		return true
+	}
+	pc, cancel := context.WithTimeout(c, heartbeatProbeTimeout)
+	defer cancel()
+	_, err := v.probe.GetMe(pc)
+	return err == nil
+}
+
+// armExpiry arms p's expiry timer to fire after delay. It BUMPS p.epoch and captures that epoch in the
+// callback, so a timer replaced by a later re-arm (defer / recovery) no-ops in consumeExpiry rather
+// than acting on the pending it was superseded on. The callback routes through onExpiry, which DEFERS
+// the expiry (re-arming a fresh window) whenever the bot can't reach Telegram, so an outage can't
+// decline or strike a user we simply couldn't hear from. Callers must hold v.mu.
+func (v *Verifier) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay time.Duration, reason string) {
+	p.epoch++
+	epoch := p.epoch
+	nonce := p.nonce
+	p.timer = time.AfterFunc(delay, func() { v.onExpiry(context.Background(), bot, gid, uid, nonce, epoch, reason) })
+}
+
+// onExpiry is the pending-timer callback. If the bot is offline (or a quick probe can't reach Telegram)
+// the expiry is not trusted — the user may have answered without us receiving it, and we couldn't
+// deliver a decline anyway — so it is DEFERRED for a fresh window rather than declining/striking. When
+// online it declines. The epoch guard (consumeExpiry) makes a superseded timer a no-op.
+func (v *Verifier) onExpiry(c context.Context, bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+	if v.offlineNow() || !v.reachable(c) {
+		v.deferExpiry(bot, gid, uid, nonce, epoch, reason)
+		return
+	}
+	p, ok := v.consumeExpiry(gid, uid, nonce, epoch)
+	if !ok {
+		return
+	}
+	v.finishDecline(c, bot, gid, uid, p, reason)
+}
+
+// deferExpiry re-arms an expiry for a fresh full window instead of acting on it, used when the bot is
+// offline at expiry. The pending is kept intact (no consume, no strike) and keeps its original reason,
+// so once the bot is back and the user still hasn't finished within a fresh window it is handled
+// normally. No-op if the pending was replaced/handled/superseded meanwhile (nonce + epoch guard).
+func (v *Verifier) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	if !ok || p.done || p.nonce != nonce || p.epoch != epoch {
+		return
+	}
+	if p.timer != nil {
+		p.timer.Stop() // stop the current timer before armExpiry installs the next (matches every other re-arm site)
+	}
+	p.deadline = time.Now().Add(v.timeout())
+	v.armExpiry(bot, p, gid, uid, v.timeout(), reason)
+	log.Printf("verify: bot offline — deferred %s for %d in %d, re-armed a fresh window", reason, uid, gid)
+}
+
+// postGroupChallenge posts the in-group verification challenge for an applicant — the "click to
+// verify" deep link, the admin pass/ban buttons, and an optional channel-follow hint — and returns the
+// sent message id (0 on failure, with an admin alert). Shared by onJoinRequest and the post-outage
+// re-notify so both render the challenge identically.
+func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string) int {
+	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
+	mention := joinerLabel(uid, name, v.nameSpoilerOn())
+	link := ""
+	if v.botUsername != "" {
+		link = "https://t.me/" + v.botUsername + "?start=verify"
+	}
+	// The channel requirement is plain text only — the actual follow button lives in the DM step, so
+	// users aren't sent away from the verify flow.
+	channelHint := ""
+	if v.cfg.requiredChannel(gid) != 0 {
+		channelHint = fmt.Sprintf("\n⚠️ 完成验证前还需先关注频道 %s。", html.EscapeString(v.cfg.channelDisplay(gid)))
+	}
+	linkText := ""
+	if link != "" {
+		linkText = fmt.Sprintf("(或 <a href=\"%s\">点此</a>)", link)
+	}
+	body := fmt.Sprintf("👋 %s 申请加入。请点下方「✅ 点此完成验证」%s 打开机器人私聊完成验证,%d 秒内未完成将被拒绝。%s",
+		mention, linkText, v.cfg.TimeoutSeconds, channelHint)
+
+	var rows [][]telego.InlineKeyboardButton
+	if link != "" {
+		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 点此完成验证", URL: link}))
+	}
+	rows = append(rows, tu.InlineKeyboardRow(
+		telego.InlineKeyboardButton{Text: "👮 管理员直接通过", CallbackData: adminPrefix + "pass:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: "🚫 拒绝并封禁", CallbackData: adminPrefix + "ban:" + gidStr + ":" + uidStr},
+	))
+	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
+	if err != nil {
+		log.Printf("join %d in %d: post challenge failed: %v", uid, gid, err)
+		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 群 %d 未能发出用户 %d 的入群验证消息:%v;请手动处理该申请", gid, uid, err))
+		return 0
+	}
+	return msgID(sent)
+}
+
+type heartbeatRec struct {
+	LastOnline int64 `json:"last_online"`
+}
+
+// saveHeartbeat records the last time the bot reached Telegram, so a later restart can estimate the
+// downtime. A no-op when the heartbeat path is unset (no STATE_DIRECTORY).
+func (v *Verifier) saveHeartbeat() {
+	if v.hbPath == "" {
+		return
+	}
+	v.mu.Lock()
+	t := v.lastOnline
+	v.mu.Unlock()
+	if t.IsZero() {
+		return
+	}
+	writeJSONFile(v.hbPath, heartbeatRec{LastOnline: t.Unix()})
+}
+
+// loadHeartbeat returns the last persisted online time, or the zero time if there is none / it is
+// unreadable (first run, or a corrupt file already backed up by loadJSONFile).
+func (v *Verifier) loadHeartbeat() time.Time {
+	if v.hbPath == "" {
+		return time.Time{}
+	}
+	var r heartbeatRec
+	if err := loadJSONFile(v.hbPath, &r); err != nil || r.LastOnline == 0 {
+		return time.Time{}
+	}
+	return time.Unix(r.LastOnline, 0)
+}
+
+// heartbeatBot is what the heartbeat needs: a liveness probe plus the verifyBot actions the recovery
+// re-notify uses. *telego.Bot satisfies it; a fake satisfies it in tests.
+type heartbeatBot interface {
+	liveProbe
+	verifyBot
+}
+
+// runHeartbeat ticks a liveness probe every heartbeatInterval until ctx is cancelled (shutdown).
+func (v *Verifier) runHeartbeat(ctx context.Context, bot heartbeatBot) {
+	t := time.NewTicker(heartbeatInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if !v.heartbeatTick(ctx, bot) && ctx.Err() != nil {
+				return // shutting down
+			}
+		}
+	}
+}
+
+// heartbeatTick runs one liveness probe (a cheap GetMe): on success it advances lastOnline (which
+// offlineNow / onExpiry read to pause timeouts during an outage) and, if that success ends an outage
+// longer than outageRecovery, refreshes + re-notifies in-progress verifications so an outage doesn't
+// quietly eat a legitimate applicant's window. Returns whether the probe succeeded.
+func (v *Verifier) heartbeatTick(ctx context.Context, bot heartbeatBot) bool {
+	pc, cancel := context.WithTimeout(ctx, heartbeatProbeTimeout)
+	_, err := bot.GetMe(pc)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("heartbeat: cannot reach Telegram (%v) — verification timeouts are paused until contact resumes", err)
+		}
+		return false
+	}
+	now := time.Now()
+	v.mu.Lock()
+	prev := v.lastOnline
+	v.lastOnline = now
+	v.mu.Unlock()
+	v.saveHeartbeat()
+	if !prev.IsZero() && now.Sub(prev) > outageRecovery {
+		log.Printf("heartbeat: back online after ~%s offline — refreshing in-progress verifications", now.Sub(prev).Round(time.Second))
+		v.onRecovery(ctx, bot, now.Sub(prev))
+	}
+	return true
+}
+
+// onRecovery refreshes every in-progress verification after the bot returns from an outage: each
+// pending gets a fresh full window (its old one was eaten by the downtime) and, unless it was already
+// re-notified within the last window, a best-effort re-notify — a DM to the applicant and a fresh
+// in-group challenge. Bounded by renotifyCap so a large backlog can't become a message storm, and the
+// per-pending cooldown keeps repeated flapping from re-messaging the same applicant every cycle. A
+// no-op during shutdown.
+func (v *Verifier) onRecovery(c context.Context, bot verifyBot, outage time.Duration) {
+	now := time.Now()
+	v.mu.Lock()
+	if v.shuttingDown {
+		v.mu.Unlock()
+		return
+	}
+	var items []renotifyItem
+	refreshed := 0
+	for k, p := range v.pend {
+		if p == nil || p.done {
+			continue
+		}
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		p.deadline = now.Add(v.timeout())
+		v.armExpiry(bot, p, k.gid, k.uid, v.timeout(), "recovered")
+		refreshed++
+		if !p.lastRenotify.IsZero() && now.Sub(p.lastRenotify) < v.timeout() {
+			continue // re-notified recently (flapping) — refresh the window silently, don't re-message
+		}
+		p.lastRenotify = now
+		items = append(items, renotifyItem{k.gid, k.uid, p.name, p.groupMsgID, p})
+	}
+	v.mu.Unlock()
+	if refreshed == 0 {
+		return
+	}
+	capped := 0
+	if len(items) > renotifyCap {
+		capped = len(items) - renotifyCap
+		items = items[:renotifyCap]
+	}
+	for _, it := range items {
+		v.renotifyPending(c, bot, it.gid, it.uid, it.name, it.oldMsg, it.p, outage)
+	}
+	v.save() // after renotifyPending so the persisted groupMsgIDs point at the re-posted challenges
+	log.Printf("recovery: refreshed %d verification(s), re-notified %d after ~%s offline%s", refreshed, len(items), outage.Round(time.Second), capNote(capped))
+}
+
+// renotifyPending re-notifies one applicant after a recovery: a best-effort DM (silently skipped if
+// they've never opened the bot, so Telegram rejects it) and a fresh in-group challenge that replaces
+// the stale one. Only network calls here — no lock is held across them; the pending's message id is
+// updated afterward if it is still the live one.
+func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
+	_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(
+		"🔄 抱歉,机器人刚才离线了约 %s,你的入群验证已重新计时。请回到本对话继续答题;若这里没有题目,回群里点「✅ 点此完成验证」重新获取。",
+		outageText(outage))))
+	newMsg := v.postGroupChallenge(c, bot, gid, uid, name)
+	if oldMsg != 0 && oldMsg != newMsg {
+		v.deleteChallenge(c, bot, gid, oldMsg)
+	}
+	v.mu.Lock()
+	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
+		cur.groupMsgID = newMsg
+	}
+	v.mu.Unlock()
+}
+
+// outageText renders an outage duration for a user-facing notice: whole seconds under a minute, whole
+// minutes under an hour, whole hours above that.
+func outageText(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%d 秒", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分钟", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%d 小时", int(d.Hours()))
+	}
+}
+
+// capNote renders the " (… over the cap)" suffix for a recovery log line, or "" when nothing was capped.
+func capNote(capped int) string {
+	if capped <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d more refreshed silently, over the re-notify cap)", capped)
 }

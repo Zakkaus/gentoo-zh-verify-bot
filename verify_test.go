@@ -55,12 +55,23 @@ func TestNameSpoilerDefaultAndToggle(t *testing.T) {
 type fakeVerifyBot struct {
 	approveErr   error
 	banErr       error
+	getMeErr     error
 	approves     int
 	declines     int
 	bans         int
 	deletes      int
 	sends        int
+	getMeCalls   int
 	lastSendChat int64
+}
+
+// GetMe lets the fake stand in for the heartbeat's liveness probe (liveProbe / heartbeatBot).
+func (b *fakeVerifyBot) GetMe(context.Context) (*telego.User, error) {
+	b.getMeCalls++
+	if b.getMeErr != nil {
+		return nil, b.getMeErr
+	}
+	return &telego.User{ID: 1, IsBot: true}, nil
 }
 
 func (b *fakeVerifyBot) ApproveChatJoinRequest(context.Context, *telego.ApproveChatJoinRequestParams) error {

@@ -39,7 +39,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 
 **Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when its state changes** — an UNCONFIRMED bug becoming CONFIRMED (plus a one-off 🔔 notification, since the original UNCONFIRMED post is silent), and on resolution 🐞→✅.
 
-**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; bot messages auto-delete after a TTL; **hides each new member's display name behind a spoiler by default** so spam accounts can't broadcast an advert via their name (`/spoiler`, persisted); optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/help`.
+**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; **rides out Telegram/network outages** — a heartbeat pauses verification timeouts while the bot can't reach Telegram (so nobody is declined or struck for the bot's downtime) and, on recovery, gives everyone mid-verification a fresh full window plus a re-notify (a DM and a fresh in-group challenge); bot messages auto-delete after a TTL; **hides each new member's display name behind a spoiler by default** so spam accounts can't broadcast an advert via their name (`/spoiler`, persisted); optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/help`.
 
 ## Telegram setup
 
@@ -155,6 +155,7 @@ Uses long polling — no inbound port or reverse proxy needed.
   | `verifyfail.json` | verification failure strikes / cooldowns |
   | `feed-<chat_id>.json` | feed dedup cursors + tracked bug message IDs |
   | `settings.json` | verification enabled/paused (`/start` · `/stop`) **and** the name-spoiler toggle (`/spoiler`) — both survive a restart |
+  | `heartbeat.json` | last time the bot reached Telegram, so a restart can tell a long outage from a quick redeploy |
 
   **Not** persisted (reset on restart): daily `/stats`; the `/rich`, `/autodel` and `/bantime` runtime overrides; and the lookup / news / package caches.
 - The verification link relies on each group being **public**.

@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.11.0] - 2026-07-12
+
+### Added
+- Outage resilience for verification, so a Telegram or network outage no longer punishes applicants for
+  the bot's own downtime. A heartbeat (a periodic `GetMe`) tracks whether Telegram is reachable; while
+  it isn't, a verification timeout re-arms a fresh window instead of declining and striking someone we
+  couldn't hear from, and an on-demand probe covers the first seconds before the heartbeat notices. On
+  recovery (detected live, or measured from a saved heartbeat at restart) everyone mid-verification gets
+  a fresh full window plus a re-notify: a DM and a new in-group challenge. A quick redeploy stays quiet;
+  a per-applicant cooldown and a cap keep repeated flapping from turning into a message storm.
+- New state file `heartbeat.json`, the last time the bot reached Telegram, used to size the downtime at
+  restart.
+
+### Changed
+- The long poller's retry interval is pinned explicitly, and an update stream that ends without a
+  shutdown signal now exits non-zero so systemd restarts the bot rather than sitting there dead.
+
 ## [3.10.2] - 2026-07-06
 
 ### Fixed
