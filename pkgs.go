@@ -335,6 +335,29 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 	return cands[0].name, found[cands[0].name], alts, false
 }
 
+// distroLine is one rendered row of /pkgs: a distro label, the version, an optional release
+// annotation (rel), and the link the label points to.
+type distroLine struct{ label, ver, rel, url string }
+
+// gentooDistroLines picks the Gentoo row(s) for /pkgs from packages.gentoo.org data: stable is
+// the newest amd64-stable version, latest the newest non-live version (latest >= stable, since
+// versions come newest-first). When a ~amd64 testing version sits ABOVE the newest stable
+// (latest != stable), both are shown. When the newest version is ITSELF amd64-stable
+// (stable == latest), only the stable line is shown, WITHOUT the tilde — this is the fix for
+// e.g. openssh 10.3_p1, which is stable amd64 but was mislabeled "~amd64". When there's no
+// amd64-stable at all, only the testing-only ~amd64 line is shown.
+func gentooDistroLines(stable, latest, url string) []distroLine {
+	switch {
+	case stable != "" && latest != "" && stable != latest:
+		return []distroLine{{"Gentoo amd64", stable, "", url}, {"Gentoo ~amd64", latest, "", url}}
+	case stable != "":
+		return []distroLine{{"Gentoo amd64", stable, "", url}}
+	case latest != "":
+		return []distroLine{{"Gentoo ~amd64", latest, "", url}}
+	}
+	return nil
+}
+
 // onPkgs handles /pkgs (and its alias /distro) — cross-distro package versions via Repology.
 func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -351,7 +374,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	ensureReleaseInfo(hc, time.Now()) // refresh Debian/Ubuntu stable/testing labels (cached, non-hardcoded)
-	proj, pkgs, alts, exact := fetchRepology(hc, name)
+	proj, pkgs, alts, exact := fetchRepology(hc, repologyQuery(name))
 	esc := html.EscapeString
 	if len(pkgs) == 0 {
 		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name))
@@ -371,21 +394,13 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	// data so amd64-stable and ~amd64 testing show on SEPARATE lines (Repology can't express
 	// Gentoo keyword status). All other families come from Repology, one line each, annotated
 	// with the release the version is from (so e.g. Debian shows it's from unstable/sid).
-	type distroLine struct{ label, ver, rel, url string }
 	var lines []distroLine
 	if atoms := searchMainTree(hc, proj); len(atoms) > 0 {
 		atom := atoms[0]
 		if pkgName := atom[strings.LastIndexByte(atom, '/')+1:]; strings.EqualFold(pkgName, proj) {
 			gURL := "https://packages.gentoo.org/packages/" + atom
-			stable, testing := pkgVersion(hc, atom)
-			switch {
-			case stable != "" && testing != "" && stable != testing:
-				lines = append(lines, distroLine{"Gentoo amd64", stable, "", gURL}, distroLine{"Gentoo ~amd64", testing, "", gURL})
-			case testing != "":
-				lines = append(lines, distroLine{"Gentoo ~amd64", testing, "", gURL})
-			case stable != "":
-				lines = append(lines, distroLine{"Gentoo amd64", stable, "", gURL})
-			}
+			stable, latest := pkgVersion(hc, atom)
+			lines = append(lines, gentooDistroLines(stable, latest, gURL)...)
 		}
 	}
 	qproj := neturl.QueryEscape(proj)

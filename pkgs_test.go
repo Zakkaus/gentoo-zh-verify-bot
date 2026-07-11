@@ -239,3 +239,84 @@ func TestSnapVersionAndUbuntuChannels(t *testing.T) {
 		t.Errorf("openSUSE Leap should show the newest release 16.0 (143.0), got %v", g)
 	}
 }
+
+// TestGentooDistroLines checks the Gentoo amd64/~amd64 labelling for /pkgs. The regression it
+// guards: when the newest version is itself amd64-stable (stable == latest, e.g. openssh
+// 10.3_p1) it must show one "Gentoo amd64" line WITHOUT the tilde — the old code mislabeled it
+// "~amd64" because it tested the latest/testing case before the stable case.
+func TestGentooDistroLines(t *testing.T) {
+	const u = "https://packages.gentoo.org/packages/net-misc/openssh"
+
+	// openssh: newest (10.3_p1) is stable amd64 -> single stable line, no tilde.
+	if g := gentooDistroLines("10.3_p1", "10.3_p1", u); len(g) != 1 ||
+		g[0].label != "Gentoo amd64" || g[0].ver != "10.3_p1" {
+		t.Errorf("stable==latest should be one 'Gentoo amd64' line, got %v", g)
+	}
+
+	// a ~amd64 testing version above the newest stable -> two lines (stable, then ~amd64).
+	g := gentooDistroLines("1.2.0", "1.3.0", u)
+	if len(g) != 2 || g[0] != (distroLine{"Gentoo amd64", "1.2.0", "", u}) ||
+		g[1] != (distroLine{"Gentoo ~amd64", "1.3.0", "", u}) {
+		t.Errorf("stable<latest should be amd64 + ~amd64, got %v", g)
+	}
+
+	// testing-only package (no amd64-stable at all) -> single ~amd64 line.
+	if g := gentooDistroLines("", "9999_pre1", u); len(g) != 1 ||
+		g[0].label != "Gentoo ~amd64" || g[0].ver != "9999_pre1" {
+		t.Errorf("no stable should be one 'Gentoo ~amd64' line, got %v", g)
+	}
+
+	// nothing found -> no line.
+	if g := gentooDistroLines("", "", u); g != nil {
+		t.Errorf("empty should yield no lines, got %v", g)
+	}
+}
+
+// TestOverlayPickVer guards the overlay version picker: an overlay package that ships both a
+// real release and a 9999 live ebuild (e.g. dev-util/opencode-bin: 1.17.13 + 9999) must show
+// the real version regardless of which ebuild the tree walk sees first — the bug was /pkg
+// showing "~9999" instead of "~1.17.13".
+func TestOverlayPickVer(t *testing.T) {
+	if v := overlayPickVer("9999", true, "1.17.13"); v != "1.17.13" {
+		t.Errorf("9999 then 1.17.13 -> %q, want 1.17.13", v)
+	}
+	if v := overlayPickVer("1.17.13", true, "9999"); v != "1.17.13" {
+		t.Errorf("1.17.13 then 9999 -> %q, want 1.17.13", v)
+	}
+	if v := overlayPickVer("", false, "9999"); v != "9999" { // 9999-only pkg still shows 9999
+		t.Errorf("9999-only -> %q, want 9999", v)
+	}
+	if v := overlayPickVer("1.17.12", true, "1.17.13"); v != "1.17.13" { // newer real wins
+		t.Errorf("1.17.12 then 1.17.13 -> %q, want 1.17.13", v)
+	}
+}
+
+// TestPkgRelevanceMeta checks that a real package outranks a same-name meta package, so /pkgs
+// resolves "openssh" to net-misc/openssh — not virtual/openssh (which is version 0-rN).
+func TestPkgRelevanceMeta(t *testing.T) {
+	if real, virt := pkgRelevance("net-misc/openssh", "openssh"), pkgRelevance("virtual/openssh", "openssh"); real <= virt {
+		t.Errorf("net-misc/openssh (%d) should outrank virtual/openssh (%d)", real, virt)
+	}
+	if real, acct := pkgRelevance("dev-libs/openct", "openct"), pkgRelevance("acct-group/openct", "openct"); real <= acct {
+		t.Errorf("dev-libs/openct (%d) should outrank acct-group/openct (%d)", real, acct)
+	}
+	// a meta package is still a positive match when nothing else has the name.
+	if s := pkgRelevance("virtual/opengl", "opengl"); s <= 0 {
+		t.Errorf("virtual/opengl alone should still score > 0, got %d", s)
+	}
+}
+
+// TestRepologyQuery checks that a "cat/pkg" atom is reduced to its bare name for Repology
+// (which has no categories), while other queries pass through unchanged.
+func TestRepologyQuery(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"net-misc/openssh", "openssh"},
+		{"openssh", "openssh"},
+		{"app-editors/vim", "vim"},
+		{"not-a-pkg/path/extra", "not-a-pkg/path/extra"}, // not a valid atom -> unchanged
+	} {
+		if got := repologyQuery(c.in); got != c.want {
+			t.Errorf("repologyQuery(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

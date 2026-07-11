@@ -35,7 +35,7 @@ func configurePkg(cfg *Config) {
 	}
 	if len(cfg.Overlays) == 0 {
 		overlays = []overlay{
-			{name: "gentoo-zh", repo: "microcai/gentoo-zh", branch: "master"},
+			{name: "gentoo-zh", repo: "gentoo-zh/overlay", branch: "master"},
 			{name: "guru", repo: "gentoo/guru", branch: "master"},
 		}
 		return
@@ -226,7 +226,19 @@ func (o overlay) treeURL(atom string) string {
 	return "https://github.com/" + o.repo + "/tree/" + o.branch + "/" + atom
 }
 
-// fetchOverlay returns atom -> latest version for one overlay, via the cached GitHub recursive tree.
+// overlayPickVer folds a newly-seen ebuild version into the current best version for an atom,
+// keeping the newest REAL release and never letting a 9999 live ebuild mask it (via betterVer's
+// tiering) — so an overlay pkg that ships both e.g. opencode-bin-1.17.13 and -9999 shows 1.17.13,
+// not 9999. A package that only has a 9999 ebuild still shows 9999.
+func overlayPickVer(cur string, seen bool, ver string) string {
+	if !seen || betterVer(cur, ver) {
+		return ver
+	}
+	return cur
+}
+
+// fetchOverlay returns atom -> newest real version for one overlay, via the cached GitHub
+// recursive tree (9999 live ebuilds don't mask real releases — see overlayPickVer).
 func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 	u := fmt.Sprintf("https://api.github.com/repos/%s/git/trees/%s?recursive=1", o.repo, o.branch)
 	hdr := http.Header{"Accept": {"application/vnd.github+json"}}
@@ -252,9 +264,8 @@ func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 		if !ok || !isPkgPath(atom) {
 			continue
 		}
-		if cur, seen := pkgs[atom]; !seen || verLess(cur, ver) {
-			pkgs[atom] = ver
-		}
+		cur, seen := pkgs[atom]
+		pkgs[atom] = overlayPickVer(cur, seen, ver)
 	}
 	if tree.Truncated {
 		log.Printf("pkg cache: %s tree truncated (%d entries)", o.repo, len(tree.Tree))
@@ -471,18 +482,37 @@ func pkgRelevance(atom, q string) int {
 		cat = strings.ToLower(atom[:i])
 	}
 	p := strings.ToLower(pn(atom))
+	var score int
 	switch {
 	case p == q:
-		return 100
+		score = 100
 	case strings.Contains(cat, q):
-		return 50
+		score = 50
 	case strings.HasPrefix(p, q):
-		return 30
+		score = 30
 	case strings.Contains(p, q):
-		return 10
-	default:
-		return 0
+		score = 10
 	}
+	// Demote meta packages (virtual/*, acct-group/*, acct-user/*) below a real package of the
+	// same name, so e.g. "openssh" resolves to net-misc/openssh — not virtual/openssh (0-rN),
+	// which is a meaningless "version" for /pkgs. A meta package still ranks when it's the only
+	// match.
+	switch cat {
+	case "virtual", "acct-group", "acct-user":
+		score -= 5
+	}
+	return score
+}
+
+// repologyQuery reduces a query to what Repology indexes by: a "cat/pkg" atom (e.g.
+// net-misc/openssh) becomes its bare package name, since Repology has no categories; any other
+// query is unchanged. /pkgs still resolves the full real atom for its Gentoo line via
+// searchMainTree, so a slashed query no longer returns "not found".
+func repologyQuery(name string) string {
+	if strings.Contains(name, "/") && isPkgPath(strings.ToLower(name)) {
+		return name[strings.LastIndexByte(name, '/')+1:]
+	}
+	return name
 }
 
 func commandArg(text string) string {

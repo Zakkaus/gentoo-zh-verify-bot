@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.10.2] - 2026-07-06
+
+### Fixed
+- **`/pkgs <name>` could resolve to a meta package.** The Gentoo line used the top search hit, but a
+  `virtual/`/`acct-*` package ties with the real one on name — so `/pkgs openssh` showed
+  `virtual/openssh` `0-r1` instead of `net-misc/openssh` `10.3_p1`. `pkgRelevance` now demotes
+  `virtual`/`acct-group`/`acct-user` below a real same-name package (still shown when it's the only
+  match). (`TestPkgRelevanceMeta`)
+- **`/pkgs cat/pkg` returned "not found".** A full atom like `net-misc/openssh` was sent verbatim to
+  Repology, which only indexes bare project names. `repologyQuery` now strips the category for the
+  Repology lookup; the Gentoo line still resolves the real atom via `searchMainTree`. (`TestRepologyQuery`)
+
+## [3.10.1] - 2026-07-06
+
+### Fixed
+- **`/pkgs` mislabeled stable Gentoo versions as `~amd64`.** `pkgVersion` returns `(amd64-stable, newest
+  non-live)`; the display switch tested the newest/testing case before the stable case, so whenever the
+  newest ebuild was itself amd64-stable (`stable == latest` — true for most stabilized packages, e.g.
+  net-misc/openssh 10.3_p1) it printed `~amd64` instead of `amd64`. Extracted to a tested
+  `gentooDistroLines`: newest-is-stable → one `amd64` line (no tilde); a `~amd64` testing bump above
+  stable → both lines; testing-only pkg → `~amd64` only. (`TestGentooDistroLines`)
+- **Overlay `/pkg` showed `~9999` instead of the real version.** `fetchOverlay` picked the highest
+  version by raw compare, so a `9999` live ebuild masked the real release (e.g. dev-util/opencode-bin
+  showed `~9999` despite shipping `1.17.13`). Now folds versions via `overlayPickVer` → `betterVer`,
+  which tiers `9999` below real releases; a 9999-only package still shows `9999`. (`TestOverlayPickVer`)
+
+### Changed
+- **gentoo-zh overlay repo moved `microcai/gentoo-zh` → `gentoo-zh/overlay`.** Updated the built-in
+  default and `config.example.json` (the old path only 301-redirects now); live config repointed too.
+
 ## [3.10.0] - 2026-06-27
 
 ### Added

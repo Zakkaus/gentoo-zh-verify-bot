@@ -32,7 +32,7 @@
   "stats_timezone": "Asia/Shanghai",
   "news_url": "https://www.gentoo.org/support/news-items/",
   "overlays": [
-    {"name": "gentoo-zh", "repo": "microcai/gentoo-zh", "branch": "master"},
+    {"name": "gentoo-zh", "repo": "gentoo-zh/overlay", "branch": "master"},
     {"name": "guru", "repo": "gentoo/guru", "branch": "master"}
   ],
   "questions": [
