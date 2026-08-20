@@ -696,7 +696,7 @@ func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int6
 		// Confirmed member of a trusted group — this takes PRIORITY over the failure cooldown.
 		if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 			log.Printf("trusted-bypass: approve %d in %d failed (%v) — falling back to normal verification", uid, gid, err)
-			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 是可信群 %d 成员,在群 %d 自动免验证放行失败(%v);将走正常验证流程", uid, src, gid, err))
+			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 是可信群 %d 的成员,但在群 %d 免验证批准失败(%v);将改用常规验证流程", uid, src, gid, err))
 			return false, true
 		}
 		v.clearVerifyFails(gid, uid) // a now-trusted member starts with a clean slate
@@ -1309,11 +1309,11 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot verifyBot, channelI
 	}
 	v.chanAlert[channelID] = time.Now()
 	v.mu.Unlock()
-	mode := "正在放行通过答题的用户(fail-open)" // matches the default
+	mode := "正在批准已通过答题的申请人(fail-open)" // matches the default
 	if !v.cfg.failOpenChannel() {
-		mode = "正在拦下这些申请、让用户稍后重试(fail-closed)"
+		mode = "正在拒绝这些申请,请申请人稍后重试(fail-closed)"
 	}
-	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必关频道 %d 的成员(可能已不是该频道管理员)——关注门槛暂时无法核验,%s。请把机器人重新设为该频道管理员。", channelID, mode))
+	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必需关注频道 %d 的成员状态(可能已不再是该频道管理员)——频道门槛暂时无法核验,%s。请重新把机器人设为该频道管理员。", channelID, mode))
 }
 
 // claimPending atomically marks a pending done and stops its timeout timer but KEEPS it in the map,

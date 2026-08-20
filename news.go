@@ -137,7 +137,7 @@ func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 	}
 	if n == 0 {
 		if len(items) == 0 {
-			b.WriteString("\n(暂时取不到新闻列表,稍后再试)")
+			b.WriteString("\n(暂时无法获取新闻列表,请稍后重试)")
 		} else {
 			b.WriteString("\n没找到匹配的新闻。")
 		}

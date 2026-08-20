@@ -116,7 +116,7 @@ func (v *Verifier) onUnmute(ctx *th.Context, update telego.Update) error {
 	}
 	notice := fmt.Sprintf("🔊 已解除 %s(id %d)的禁言。操作人 %s。", displayName(target), target.ID, displayName(msg.From))
 	if !restoredDefault { // GetChat failed — we applied a generic allow, which may exceed a restrictive group's default
-		notice += "\n⚠️ 暂时读不到本群默认权限,已按通用可发言权限解除;若本群有特殊发言限制,请手动核对该成员权限。"
+		notice += "\n⚠️ 暂时无法读取本群默认权限,已按通用发言权限解除禁言;若本群有特殊发言限制,请手动核对该成员权限。"
 		log.Printf("/unmute group=%d: GetChat default perms unavailable; applied permissive fallback", gid)
 	}
 	v.notify(c, bot, gid, notice)

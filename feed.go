@@ -409,10 +409,10 @@ func formatBugMarked(b recentBug, lang, marker string) string {
 	}
 
 	if a := b.AssignedTo.link("assigned_to"); a != "" {
-		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("负责", "Assigned"), sep, a)
+		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("负责人", "Assigned"), sep, a)
 	}
 	if c := b.Creator.link("reporter"); c != "" {
-		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("报告", "Reporter"), sep, c)
+		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("报告人", "Reporter"), sep, c)
 	}
 	if d := dateOnly(b.CreationTime); d != "" {
 		line(pick("日期", "Date"), d)

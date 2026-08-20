@@ -613,7 +613,7 @@ func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[st
 	if !found {
 		b.WriteString("\n\n没找到匹配的包,换个更短的关键词试试?")
 	} else {
-		b.WriteString("\n\n<i>~ 为测试版(~arch);无符号为 amd64 稳定版</i>")
+		b.WriteString("\n\n<i>~ 表示测试 keyword(~arch);无符号表示 amd64 稳定 keyword</i>")
 	}
 	return b.String()
 }
@@ -660,7 +660,7 @@ func renderPkgRich(q string, mainRes []string, vm map[string][2]string, ovRes ma
 	if !found {
 		b.WriteString("<p>没找到匹配的包,换个更短的关键词试试?</p>")
 	} else {
-		b.WriteString("<footer><i>~ 为测试版(~arch);无符号为 amd64 稳定版</i></footer>")
+		b.WriteString("<footer><i>~ 表示测试 keyword(~arch);无符号表示 amd64 稳定 keyword</i></footer>")
 	}
 	return b.String()
 }

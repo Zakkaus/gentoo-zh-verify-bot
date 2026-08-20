@@ -7,7 +7,7 @@ import (
 )
 
 // TestSearchTransientNotDefinitive: a FETCH failure (forced with an already-cancelled context, so no
-// network is touched) must yield ok=false from the search helpers — so the caller renders "暂时取不到
+// network is touched) must yield ok=false from the search helpers — so the caller renders "暂时无法获取
 // …稍后再试" rather than a false definitive "no results". Mirrors /news /use /armpkgs.
 func TestSearchTransientNotDefinitive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

@@ -81,15 +81,15 @@ func (v *Verifier) onArm(ctx *th.Context, update telego.Update) error {
 	fmt.Fprintf(&b, "🦾 <a href=\"%s\">%s</a> 在 arm64 (aarch64) 上:", esc(url), esc(atom))
 	switch {
 	case !ok:
-		fmt.Fprintf(&b, "\n⚠️ 暂时取不到 keyword 信息,稍后再试或直接看上面的链接。")
+		fmt.Fprintf(&b, "\n⚠️ 暂时无法获取 keyword 信息,请稍后重试,或直接查看上面的链接。")
 	case stable != "" && testing != "" && stable != testing:
 		fmt.Fprintf(&b, "\n✅ 稳定(arm64):%s\n🧪 测试(~arm64):%s", esc(stable), esc(testing))
 	case stable != "":
 		fmt.Fprintf(&b, "\n✅ 稳定(arm64):%s", esc(stable))
 	case testing != "":
-		fmt.Fprintf(&b, "\n🧪 仅测试(~arm64):%s(尚无 arm64 稳定版,需 accept ~arm64)", esc(testing))
+		fmt.Fprintf(&b, "\n🧪 仅测试(~arm64):%s(尚无 arm64 稳定版,需在 package.accept_keywords 中接受 ~arm64)", esc(testing))
 	default:
-		b.WriteString("\n❌ 未在 arm64 上 keyword —— Gentoo 官方树未对该包标注 aarch64(可能尚不支持/未测试)。")
+		b.WriteString("\n❌ 未设置 arm64 keyword —— Gentoo 官方树未给该包标记 arm64(可能尚不支持,或未经测试)。")
 	}
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil

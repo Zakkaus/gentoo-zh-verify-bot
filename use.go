@@ -362,9 +362,9 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 		fmt.Fprintf(&b, "\n<i>overlay 也有此包:%s</i>", overlayRefs(alsoIn, info.atom))
 	}
 	if overlay {
-		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i>")
+		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不完整;+ 表示默认启用</i>")
 	} else {
-		b.WriteString("\n\n<i>+ 为默认开启;~ 为测试版</i>")
+		b.WriteString("\n\n<i>+ 表示默认启用;~ 表示测试 keyword</i>")
 	}
 	return b.String()
 }
@@ -439,9 +439,9 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 		fmt.Fprintf(&b, "<p>overlay 也有此包:%s</p>", overlayRefs(alsoIn, info.atom))
 	}
 	if overlay {
-		b.WriteString("<footer><i>overlay · USE 取自最新 ebuild,可能不全;+ 为默认开启</i></footer>")
+		b.WriteString("<footer><i>overlay · USE 取自最新 ebuild,可能不完整;+ 表示默认启用</i></footer>")
 	} else {
-		b.WriteString("<footer><i>+ 为默认开启;~ 为测试版</i></footer>")
+		b.WriteString("<footer><i>+ 表示默认启用;~ 表示测试 keyword</i></footer>")
 	}
 	return b.String()
 }
@@ -640,7 +640,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if out == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("暂时取不到 %s 的信息,稍后再试。", atom))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("暂时无法获取 %s 的信息,请稍后重试。", atom))
 		return nil
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, outRich, out)

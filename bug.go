@@ -95,7 +95,7 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 		// Route through replyLookupPlain like every other lookup's not-found path: reply-linked
 		// + auto-deleted with the command, instead of lingering in the group forever.
 		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID,
-			fmt.Sprintf("❓ 取不到 Bug %s 的详情(可能不存在或非公开)。直接看:%s", id, link))
+			fmt.Sprintf("❓ 暂时无法获取 Bug %s 的详情(可能不存在或非公开)。可直接查看:%s", id, link))
 		return nil
 	}
 

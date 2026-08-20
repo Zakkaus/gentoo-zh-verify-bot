@@ -36,7 +36,7 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "ban", Description: "[管理] 回复:封禁(踢出群)"},
 		{Command: "warn", Description: fmt.Sprintf("[管理] 回复:警告(满 %d 次自动踢)", warnLimit)},
 		{Command: "clearwarn", Description: "[管理] 回复:清除警告"},
-		{Command: "bc", Description: "[管理] 频道马甲封禁 / 白名单"},
+		{Command: "bc", Description: "[管理] 频道身份发言封禁 / 白名单"},
 		{Command: "rich", Description: "[管理] 开关富文本(/pkg /use)"},
 		{Command: "spoiler", Description: "[管理] 开关:遮盖新成员名字(防广告)"},
 		{Command: "vmode", Description: "[管理] 切换验证方式(内核版本 / 选择题)"},

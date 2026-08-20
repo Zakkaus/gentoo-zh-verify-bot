@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- **Wording pass over every Chinese string the bot shows.** A Codex audit against the repository's
+  Chinese writing rules turned up 76 candidates; the ones that were factually wrong or that named
+  the wrong thing are fixed. The channel sock-puppet feature is called 频道身份发言 instead of the
+  slang 频道马甲; a Portage keyword is no longer described as a version type ("~ 表示测试 keyword",
+  "未设置 arm64 keyword"); a missing arm64 keyword no longer claims `ACCEPT_KEYWORDS="~arm64"` will
+  fix it; the Bugzilla assignee/reporter labels read 负责人/报告人; "取不到 / 读不到" became
+  "无法获取 / 无法读取" in every failure message. README.zh-CN caught up with the buttons it
+  documents (拒绝并封禁, not 举报并封禁), dropped the literal "武装定时器" and the repo shorthands
+  必关频道 / 守护群 / strike.
+- Two applicant-facing corrections worth calling out: the "you have no pending request" message told
+  people to 在群里发起加入申请 when they are not in the group yet, and the Traditional Chinese
+  catalog said 關注頻道 where Telegram's own Traditional interface says 加入頻道.
+
 ### Fixed
 - **The minute proof accepted a canned reply.** `minuteProofOK` read every number in the message,
   so a fixed string listing five of them ("no Linux device 1 4 7 10 13") matched at all 60 minutes
