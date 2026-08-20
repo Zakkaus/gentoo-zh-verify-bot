@@ -302,11 +302,13 @@ func mentionsOtherOS(text string) bool {
 
 var noLinuxPhrases = []string{
 	"还没装", "還沒裝", "没装", "沒裝", "没有装", "沒有裝", "未安装", "未安裝", "还没安装", "還沒安裝",
+	"没安装", "沒安裝", "没有安装", "沒有安裝", "还没有装", "還沒有裝", "不懂", "不懂linux", "没弄过", "沒弄過",
 	"没有linux", "沒有linux", "不用linux", "不用 linux", "没用linux", "沒用linux", "没跑linux",
 	"没用过", "沒用過", "没接触过", "沒接觸過", "不知道", "不會", "不会", "什么是", "什麼是",
 	"notinstalled", "haven'tinstalled", "haventinstalled", "nolinux", "don'thavelinux", "donthavelinux",
 	"don'tuselinux", "dontuselinux", "neverusedlinux", "notusinglinux",
-	"idontknow", "i don'tknow", "dunno", "idk", "whatis", "windows", "macos", "macbook",
+	"idontknow", "i don'tknow", "dunno", "idk", "whatis", "noidea", "noclue", "what?",
+	"windows", "macos", "macbook",
 }
 
 // saysNoLinux reports whether the reply is "I don't have Linux / I don't know what you mean" rather
