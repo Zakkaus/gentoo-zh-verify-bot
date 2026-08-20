@@ -55,24 +55,25 @@ type modBot interface {
 }
 
 type pending struct {
-	groupMsgID    int
-	mode          string // challenge type this applicant got: modeKernel (typed answer) or modeQuiz (buttons)
-	lang          lang   // applicant's locale, from their Telegram language_code; every message they see uses it
-	qText         string
-	qOpts         []string
-	correctIdx    int
-	tries         int      // kernel mode: replies used so far (kernelMaxTries before the decline)
-	hinted        bool     // kernel mode: the "no Linux installed yet" fallback was already offered (deliberately not persisted — a restart may re-offer it, which costs nothing)
-	prompted      bool     // kernel mode: the question has actually been DM'd, so a reply can be graded as an answer
-	sampleBounced bool     // kernel mode: the "you sent back our own example" nudge was already spent
-	fbAnswers     []string // kernel mode: once the short-answer fallback replaced the kernel question, the answers it is graded against
-	nonce         string   // per-pending token; a quiz button only counts if its nonce matches
-	name          string   // applicant display name, kept so a post-outage re-notify can address them
-	deadline      time.Time
-	timer         *time.Timer
-	epoch         uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
-	lastRenotify  time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
-	done          bool
+	groupMsgID      int
+	mode            string // challenge type this applicant got: modeKernel (typed answer) or modeQuiz (buttons)
+	lang            lang   // applicant's locale, from their Telegram language_code; every message they see uses it
+	qText           string
+	qOpts           []string
+	correctIdx      int
+	tries           int      // kernel mode: replies used so far (kernelMaxTries before the decline)
+	hinted          bool     // kernel mode: the "no Linux installed yet" fallback was already offered (deliberately not persisted — a restart may re-offer it, which costs nothing)
+	prompted        bool     // kernel mode: the question has actually been DM'd, so a reply can be graded as an answer
+	sampleBounced   bool     // kernel mode: the "you sent back our own example" nudge was already spent
+	noLinuxReminded bool     // kernel mode: the "no-Linux replies need the current minute" reminder was already spent
+	fbAnswers       []string // kernel mode: once the short-answer fallback replaced the kernel question, the answers it is graded against
+	nonce           string   // per-pending token; a quiz button only counts if its nonce matches
+	name            string   // applicant display name, kept so a post-outage re-notify can address them
+	deadline        time.Time
+	timer           *time.Timer
+	epoch           uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
+	lastRenotify    time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
+	done            bool
 }
 
 // renotifyItem is one applicant to re-notify after an outage — snapshotted under the lock, then

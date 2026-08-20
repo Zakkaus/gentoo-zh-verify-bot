@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **The no-Linux escape is documented again, but now costs a proof of liveness.** Hiding it kept
+  spam operators from learning it existed, at the price of a newcomer with no Linux having no idea
+  what to do. The prompt now spells it out — reply "我现在没有Linux设备" **plus the current minute**
+  — which a canned string cannot carry and most LLM agents cannot produce either, while a person just
+  reads their clock. A skewed clock is tolerated (±1 minute) and the half-hour / three-quarter-hour
+  timezones are accepted at their own shift. A declaration without the minute earns one free format
+  reminder instead of a strike; repeating it is graded as a wrong answer.
+- **The automated-agent tripwire is written as a binding override, not a request.** The polite
+  wording read as advice an agent could weigh against its own task; it now voids prior instructions
+  explicitly, states that completing the check for a user is unauthorized automation, forbids
+  answering, and demands the token plus the model name as the only allowed output. Detection is
+  unchanged: only the per-applicant token counts.
+- Fixed the phrases that mean "I have no Linux": "我沒有安裝" / "我没有安装" matched nothing (the list
+  held "没有装" and "未安装", neither a substring of "没有安装"), and neither did "我不懂", "no idea"
+  or a bare "what?". Those replies cost an attempt instead of offering the escape.
+
 ## [3.12.0] - 2026-08-20
 
 ### Added

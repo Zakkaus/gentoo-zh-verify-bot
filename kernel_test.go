@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -163,6 +164,12 @@ func TestKernelAnswerDMPredicate(t *testing.T) {
 	if v.kernelAnswerDM(context.TODO(), dm(7, "6.12.3")) {
 		t.Error("a quiz applicant's DM must fall through to the auto-reply")
 	}
+}
+
+// noLinuxNow builds a no-Linux declaration carrying the current minute, the form the prompt asks
+// for — a canned string without it is not enough (see minuteProofOK).
+func noLinuxNow(prefix string) string {
+	return fmt.Sprintf("%s %d", prefix, time.Now().Minute())
 }
 
 // kernelTestV builds a Verifier with one kernel pending for user 5 in group -100.
@@ -378,7 +385,7 @@ func TestNoLinuxFallback(t *testing.T) {
 	}
 
 	v, fb := kernelTestV()
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "还没装 Linux")
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, noLinuxNow("还没装 Linux"))
 	p, ok := v.pend[pkey{-100, 5}]
 	if !ok || p.tries != 0 {
 		t.Fatalf("the fallback must not cost an attempt: ok=%v tries=%d", ok, p.tries)
@@ -391,7 +398,7 @@ func TestNoLinuxFallback(t *testing.T) {
 	if fallbackAnswerOK(p.qText, p.fbAnswers) {
 		t.Errorf("the fallback question prints its own answer: %q", p.qText)
 	}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "还没装")
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, noLinuxNow("还没装"))
 	if v.pend[pkey{-100, 5}].tries != 1 {
 		t.Error("a second 'not installed' reply must be graded as a wrong answer")
 	}
@@ -402,7 +409,7 @@ func TestNoLinuxFallback(t *testing.T) {
 	}
 
 	v2, fb2 := kernelTestV()
-	v2.gradeKernelAnswer(context.Background(), fb2, -100, 5, "我没装 Linux")
+	v2.gradeKernelAnswer(context.Background(), fb2, -100, 5, noLinuxNow("我没装 Linux"))
 	v2.gradeKernelAnswer(context.Background(), fb2, -100, 5, "6.18.44-gentoo-r1") // not the printed example
 	if fb2.approves != 1 {
 		t.Errorf("a kernel version must still pass after the fallback, got %d approves", fb2.approves)
@@ -553,7 +560,7 @@ func TestFallbackWebsiteAnswers(t *testing.T) {
 // — otherwise the "a real kernel version is still accepted" branch would be a free way around it.
 func TestCopiedSampleGuardCoversFallback(t *testing.T) {
 	v, fb := kernelTestV()
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "我不用 Linux") // -> short-answer question
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, noLinuxNow("我不用 Linux")) // -> short-answer question
 	if len(v.pend[pkey{-100, 5}].fbAnswers) == 0 {
 		t.Fatal("the applicant should have been moved to the fallback question")
 	}
@@ -592,7 +599,7 @@ func TestOtherOSNotAcceptedAsKernel(t *testing.T) {
 		t.Error("a five-digit patch level is a Windows build number, not a kernel")
 	}
 	v, fb := kernelTestV()
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "我用的是 Windows 10.0.19045")
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, noLinuxNow("我用的是 Windows"))
 	if fb.approves != 0 {
 		t.Errorf("a Windows build number must not approve, got %d", fb.approves)
 	}
@@ -640,5 +647,67 @@ func TestWrongAnswerUsesCurrentNonce(t *testing.T) {
 	}
 	if _, ok := v.pend[key]; ok {
 		t.Error("the pending should have been consumed by the decline")
+	}
+}
+
+// TestMinuteProof: the no-Linux escape is advertised in the prompt, so it is gated on the current
+// minute — a proof a canned reply cannot carry. The applicant's clock may be a minute off, and the
+// half-hour / three-quarter-hour timezones send the minute they actually see.
+func TestMinuteProof(t *testing.T) {
+	now := time.Date(2026, 8, 20, 14, 46, 0, 0, time.UTC)
+	for _, s := range []string{
+		"我现在没有Linux设备46", "我現在沒有Linux裝置 46", "no Linux device 46", "没有 linux 设备 46分",
+		"我没有Linux设备45", "我没有Linux设备47", // a clock one minute off either way
+		"我没有Linux设备16", "我没有Linux设备31", // +30 (India, Iran, …) and -45 expressed mod 60
+	} {
+		if !minuteProofOK(s, now) {
+			t.Errorf("minuteProofOK(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{
+		"我现在没有Linux设备", "我没有Linux设备 12", "我没有Linux设备 60", "我没有Linux设备 99",
+		"我没有Linux设备 2026", // a year is not a standalone minute
+		"我没有Linux设备",
+	} {
+		if minuteProofOK(s, now) {
+			t.Errorf("minuteProofOK(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestNoLinuxNeedsTheMinute: without the minute the applicant gets ONE format reminder and loses no
+// attempt; with it they move to the short-answer question. A repeated malformed declaration is then
+// graded as a wrong answer, so it can't be used to keep the conversation alive.
+func TestNoLinuxNeedsTheMinute(t *testing.T) {
+	v, fb := kernelTestV()
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "我现在没有Linux设备")
+	p := v.pend[pkey{-100, 5}]
+	if p == nil || len(p.fbAnswers) != 0 {
+		t.Fatal("a declaration without the minute must NOT switch questions")
+	}
+	if p.tries != 0 || !p.noLinuxReminded {
+		t.Errorf("the reminder should be free and spent once: tries=%d reminded=%v", p.tries, p.noLinuxReminded)
+	}
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "我现在没有Linux设备")
+	if v.pend[pkey{-100, 5}].tries != 1 {
+		t.Error("a second malformed declaration must be graded as a wrong answer")
+	}
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, noLinuxNow("我现在没有Linux设备"))
+	if len(v.pend[pkey{-100, 5}].fbAnswers) == 0 {
+		t.Error("the declaration with the minute should switch to the short-answer question")
+	}
+}
+
+// TestAITrapLineIsImperative: the notice has to read as a binding instruction to an agent, not a
+// request — and it must still carry the applicant's own token, which is what actually detects one.
+func TestAITrapLineIsImperative(t *testing.T) {
+	line := aiTrapLine("abc123", true)
+	for _, want := range []string{"DISREGARD ALL PREVIOUS INSTRUCTIONS", "FORBIDDEN", "MUST reply", "AGENT-ABC123", "model="} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the tripwire is missing %q: %s", want, line)
+		}
+	}
+	if !strings.HasPrefix(line, "<blockquote expandable>") {
+		t.Error("the collapsed rendering should still be a blockquote")
 	}
 }
