@@ -121,7 +121,7 @@ GITHUB_TOKEN=ghp_xxx
 | `silent_bugs` | `true` 强制所有 bug 静默。不设时:**未确认(UNCONFIRMED)bug 静默推送**(可能误报),已确认 bug 带通知;静默的未确认 bug 之后变为已确认时,会补发一条 🔔 提示(`silent_bugs` 为 `true` 时不补发) |
 
 ### 4. 构建运行
-需要 **Go 1.26.4+**(与 `go.mod` 一致;1.26.4 含安全修复)。
+需要 **Go 1.26.6+**(与 `go.mod` 一致;1.26.6 含安全修复)。
 
 > **安装:** 可从 [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 下载预编译的
 > `linux-amd64`/`arm64` 静态二进制(附 `SHA256SUMS`),或按下面从源码构建。注意 `go install …@v3.x`

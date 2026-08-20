@@ -138,7 +138,7 @@ The optional **`feed`** object — or **`feeds`**, an array of these objects for
 
 ## Build & run
 
-Requires **Go 1.26.4+** (matches `go.mod`; the 1.26.4 toolchain carries security fixes).
+Requires **Go 1.26.6+** (matches `go.mod`; the 1.26.6 toolchain carries security fixes).
 
 > **Install:** grab a prebuilt static `linux-amd64`/`arm64` binary (with `SHA256SUMS`) from the
 > [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) page, or build from source
