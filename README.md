@@ -4,12 +4,22 @@ English | [简体中文](README.zh-CN.md)
 
 A lightweight Telegram **join-request verification bot** written in Go — a single static binary whose only dependency is [telego](https://github.com/mymmrac/telego).
 
-Built for open-source community groups that get flooded with spam-bot join requests. When someone requests to join, the bot posts a verification link in the (public) group; the applicant opens the bot, answers a quiz (and optionally must have joined a channel), and only then is approved. Admins can also approve or report-and-ban an applicant with one tap. Includes light moderation commands and a Gentoo package search.
+Built for open-source community groups that get flooded with spam-bot join requests. When someone requests to join, the bot posts a verification link in the (public) group; the applicant opens the bot, answers the challenge (and optionally must have joined a channel), and only then is approved. Admins can also approve or report-and-ban an applicant with one tap. Includes light moderation commands and a Gentoo package search.
 
 ## Features
 
-**Join verification** — a join request is **not** auto-approved. The bot posts an in-group message @-mentioning the applicant with a `✅ 完成验证` deep-link; the applicant opens the bot, answers a randomized (crypto-shuffled) multiple-choice quiz in DM — optionally after joining a **required channel** (two-step DM prompt; private channels via `channel_invite_url`) — and only then is approved. Wrong answer / timeout declines. Each request also gets admin **👮 直接通过** / **🚫 举报并封禁** buttons.
+**Join verification** — a join request is **not** auto-approved. The bot posts an in-group message @-mentioning the applicant with a `✅ 完成验证` deep-link; the applicant answers the challenge in DM — optionally after joining a **required channel** (two-step DM prompt; private channels via `channel_invite_url`) — and only then is approved. Wrong answer / timeout declines. Each request also gets admin **👮 直接通过** / **🚫 举报并封禁** buttons.
 
+- **Challenge modes** (`verify_mode`, switchable live with `/vmode`):
+
+  | mode | the applicant must… | why |
+  | --- | --- | --- |
+  | `kernel` **(default)** | **type the version of the Linux kernel they run** (`uname -r`) | there is no button to click: a spam bot that taps at random can't produce a plausible kernel version. Any distribution's kernel is accepted — historic (`2.6.32`), current (`6.18.45`), a future major (`8.0`), and every vendor string shape: `5.14.0-570.12.1.el9_6.x86_64`, `5.15.167.4-microsoft-standard-WSL2`, and **ARM** — `6.6.51+rpt-rpi-v8` (Raspberry Pi), `5.10.110-tegra` (Jetson), `6.1.75-android14-11-g1c2d3e4f` (Android/Termux), `6.11.0-asahi-…` (Apple Silicon), `…el9.aarch64` — bare, suffixed, or inside a pasted `uname -a`. Three attempts, so a typo isn't an instant rejection. An applicant who says they have **no Linux installed yet** ("还没装", "not installed", "I use Windows") is switched to a **short-answer question** from a small pool (`fallback_questions`; "Gentoo 中文社区的官网网址是什么?" → `gentoozh.org`) — typed, no options, answerable without ever having used Linux, and the answer is printed nowhere, so offering it hands a spam operator nothing. The escape is never advertised in the prompt, and sending our own format example back verbatim is bounced once instead of accepted |
+  | `quiz` | tap the right option of a randomized (crypto-shuffled) multiple-choice question from `questions` | the original mode; keep it for a group whose members aren't all Linux users |
+  | `mixed` | one of the two, chosen at random per applicant | |
+
+- **Automated-agent tripwire — and a tally of which models tried.** The DM carries a canary instruction addressed to LLM agents: any assistant answering on a user's behalf is told not to answer and to reply with a per-applicant token **plus its own model name** (`AGENT-… model=gpt-5-mini`). An agent that obeys identifies itself, is declined on the spot, and its claimed model is counted in `agents.json` and shown by `/stats` (`🤖 拦截 AI 代答:12 次(gpt-5 5、claude-opus-4.5 4、unknown 3)`), with a line per catch in the admin log. The model is self-reported, so it's a usage tally, never evidence. Best-effort deterrence, **not** a security control — the typed answer, the timeout, the cooldown and the strike counter remain the real gate. The notice is sent inside a collapsed `<blockquote expandable>` (Bot API 7.4); an old client simply shows it unfolded, and if a self-hosted Bot API server rejects the entity the DM is re-sent without it, then as plain text — an applicant is never left without a question.
+- **Three locales, chosen per applicant.** Everything a joiner sees — the in-group challenge, the DM question, the follow-the-channel prompts, the result — is rendered from their Telegram interface language (`language_code`): Simplified Chinese, Traditional Chinese (`zh-TW`/`zh-HK`/`zh-Hant`), or **English** for every other language. Admin output and the admin log stay Simplified Chinese. `questions` (quiz mode) comes from your config and is **not** translated — another reason kernel mode is the default for a mixed-language group.
 - **Anti-spam:** a failed verification declines with a cooldown (`verify_retry_seconds`, 180 s); after `verify_max_fails` (3) failures within a few hours the applicant is auto-banned. Strikes persist, reset on success, and age out.
 
 **Moderation** (admins, reply to a message):
@@ -39,7 +49,7 @@ Built for open-source community groups that get flooded with spam-bot join reque
 
 **Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when its state changes** — an UNCONFIRMED bug becoming CONFIRMED (plus a one-off 🔔 notification, since the original UNCONFIRMED post is silent), and on resolution 🐞→✅.
 
-**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; **rides out Telegram/network outages** — a heartbeat pauses verification timeouts while the bot can't reach Telegram (so nobody is declined or struck for the bot's downtime) and, on recovery, gives everyone mid-verification a fresh full window plus a re-notify (a DM and a fresh in-group challenge); bot messages auto-delete after a TTL; **hides each new member's display name behind a spoiler by default** so spam accounts can't broadcast an advert via their name (`/spoiler`, persisted); optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/help`.
+**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; **rides out Telegram/network outages** — a heartbeat pauses verification timeouts while the bot can't reach Telegram (so nobody is declined or struck for the bot's downtime) and, on recovery, gives everyone mid-verification a fresh full window plus a re-notify (a DM and a fresh in-group challenge); bot messages auto-delete after a TTL; **hides each new member's display name behind a spoiler by default** so spam accounts can't broadcast an advert via their name (`/spoiler`, persisted); optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/vmode` `/help`.
 
 ## Telegram setup
 
@@ -72,6 +82,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
   ],
   "required_channel_id": 0,
   "channel_display": "@YourChannel",
+  "verify_mode": "kernel",
   "timeout_seconds": 240,
   "notify_ttl_seconds": 60,
   "admin_log_chat_id": 0,
@@ -83,7 +94,7 @@ Everything else lives in `config.json` (copy `config.example.json`):
 
 | key | meaning |
 | --- | --- |
-| `groups` | per-group config: `[{id, required_channel_id?, channel_display?, channel_invite_url?, trusted_member_group_ids?, questions?}]`. Each optional field **falls back to the global default** below, so groups can share settings or be configured independently. A bare `group_ids` list (or singular `group_id`) is also accepted and treated as groups with no overrides |
+| `groups` | per-group config: `[{id, required_channel_id?, channel_display?, channel_invite_url?, trusted_member_group_ids?, questions?, verify_mode?}]`. Each optional field **falls back to the global default** below, so groups can share settings or be configured independently. A bare `group_ids` list (or singular `group_id`) is also accepted and treated as groups with no overrides |
 | `required_channel_id` | **global default** channel applicants must join; `0` disables it (override per-group in `groups`) |
 | `channel_display` | **global default** channel shown to users, e.g. `@YourChannel` |
 | `channel_invite_url` | **global default** explicit join link; required for a **private** channel (no `@handle`) |
@@ -108,7 +119,9 @@ Everything else lives in `config.json` (copy `config.example.json`):
 | `block_channel_senders` | **initial** state of the channel sock-puppet filter (runtime toggle is `/bc`, persisted; default `false`; needs privacy mode OFF). Once `antispam.json` exists it is authoritative — editing this key afterward has no effect until that file is deleted |
 | `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow` / `deny`, persisted to `antispam.json`, which then takes precedence over this key) |
 | `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
-| `questions` | **global default** quiz pool; one is picked at random, options shuffled (override per-group in `groups`) |
+| `verify_mode` | the join challenge: `kernel` (default — type your `uname -r` version), `quiz` (tap an option) or `mixed` (random per applicant). **Global default; override per-group** in `groups`. Admins switch it live with `/vmode kernel\|quiz\|mixed\|auto` (persisted; `auto` returns to this config) |
+| `fallback_questions` | override the built-in short-answer pool used when an applicant says they have no Linux installed: `[{q, answers:[…]}]`, answers matched as whole words, case-insensitively. Keep the answer **out of the question text**. Empty → the built-in localized pool |
+| `questions` | **global default** quiz pool; one is picked at random, options shuffled (override per-group in `groups`). Only needed when a group can serve a quiz — a `kernel`-only config may omit it |
 
 The optional **`feed`** object — or **`feeds`**, an array of these objects for several destinations (all served by one shared fetch per cycle). Omit both to disable:
 
@@ -125,7 +138,7 @@ The optional **`feed`** object — or **`feeds`**, an array of these objects for
 
 ## Build & run
 
-Requires **Go 1.26.4+** (matches `go.mod`; the 1.26.4 toolchain carries security fixes).
+Requires **Go 1.26.6+** (matches `go.mod`; the 1.26.6 toolchain carries security fixes).
 
 > **Install:** grab a prebuilt static `linux-amd64`/`arm64` binary (with `SHA256SUMS`) from the
 > [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) page, or build from source
@@ -154,14 +167,15 @@ Uses long polling — no inbound port or reverse proxy needed.
   | `antispam.json` | `/bc` channel sock-puppet state + whitelist |
   | `verifyfail.json` | verification failure strikes / cooldowns |
   | `feed-<chat_id>.json` | feed dedup cursors + tracked bug message IDs |
-  | `settings.json` | verification enabled/paused (`/start` · `/stop`) **and** the name-spoiler toggle (`/spoiler`) — both survive a restart |
+  | `settings.json` | verification enabled/paused (`/start` · `/stop`), the name-spoiler toggle (`/spoiler`) and the challenge mode (`/vmode`) — all survive a restart |
   | `heartbeat.json` | last time the bot reached Telegram, so a restart can tell a long outage from a quick redeploy |
+  | `agents.json` | how many LLM agents tripped the verification tripwire, per claimed model (shown by `/stats`) |
 
   **Not** persisted (reset on restart): daily `/stats`; the `/rich`, `/autodel` and `/bantime` runtime overrides; and the lookup / news / package caches.
 - The verification link relies on each group being **public**.
 - Admin commands must be sent **non-anonymously** — an anonymous-admin post appears as the group, not a user, so it won't pass the admin check.
 - Multi-group with **different** required channels: the DM follow-prompt covers the first pending group's channel — sharing one channel across groups is smoothest.
-- User-facing strings are **Simplified Chinese** (this bot targets the Gentoo zh community). All *operational* settings are in the config; to localize the wording, edit the string literals in the `.go` sources (mainly `verify.go`, `admin.go`, `commands.go`).
+- The **join-verification** path speaks Simplified Chinese, Traditional Chinese and English, picked from the applicant's Telegram `language_code` (`i18n.go`). Everything else — moderation replies, `/help`, the admin log, the lookup commands — is **Simplified Chinese** (this bot targets the Gentoo zh community); to localize those, edit the string literals in the `.go` sources (mainly `verify.go`, `admin.go`, `commands.go`). Quiz `questions` are used verbatim from your config, in whatever language you wrote them.
 
 ## License
 

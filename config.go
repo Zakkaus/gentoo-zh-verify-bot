@@ -16,6 +16,14 @@ type Question struct {
 	Answer  int      `json:"answer"`
 }
 
+// ShortQuestion is a TYPED, open-ended verification question: no options are shown, so the answer
+// appears nowhere in the message and cannot be copied out of it. Answers lists the accepted words,
+// matched case-insensitively as whole words, so "emerge" accepts "用 emerge 装" too.
+type ShortQuestion struct {
+	Q       string   `json:"q"`
+	Answers []string `json:"answers"`
+}
+
 // OverlayCfg is a GitHub overlay searched by /pkg.
 type OverlayCfg struct {
 	Name   string `json:"name"`
@@ -32,6 +40,8 @@ type GroupConfig struct {
 	ChannelDisplay    string     `json:"channel_display"`     // "" => global channel_display
 	ChannelInviteURL  string     `json:"channel_invite_url"`  // "" => global channel_invite_url
 	Questions         []Question `json:"questions"`           // empty => global questions
+	// VerifyMode: this group's challenge type ("kernel", "quiz" or "mixed"); "" => global verify_mode.
+	VerifyMode string `json:"verify_mode"`
 	// TrustedMemberGroupIDs lists OTHER chats whose existing members skip THIS group's join
 	// verification: an applicant already in any of them is auto-approved (no quiz). Use it so
 	// verified members of a trusted group (e.g. the main group) don't re-verify in a sub-group.
@@ -131,6 +141,16 @@ type Config struct {
 	// VerifyMaxFails: failed verifications (wrong answer / timeout) before the applicant is
 	// permanently banned (default 3). Negative => never auto-ban (unlimited retries).
 	VerifyMaxFails int `json:"verify_max_fails"`
+	// VerifyMode selects the join challenge: "kernel" (default) makes the applicant TYPE the
+	// version of the Linux kernel they run, "quiz" is the original tap-a-button multiple choice,
+	// "mixed" picks one at random per applicant. Kernel mode exists because a spam bot passes a
+	// 4-option button quiz by clicking blindly one time in four; typing has no button to click.
+	// Per-group override: verify_mode inside "groups". Admins can switch at runtime with /vmode.
+	VerifyMode string `json:"verify_mode"`
+	// FallbackQuestions overrides the built-in short-answer pool used for an applicant who says they
+	// have no Linux installed (kernel mode). Typed, no options, and the answer is never printed in the
+	// question — so offering it can't hand anyone a free pass. Empty => the built-in localized pool.
+	FallbackQuestions []ShortQuestion `json:"fallback_questions"`
 	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).
 	Overlays []OverlayCfg `json:"overlays"`
 	// NewsURL: the Gentoo news-items index for /news (defaults to gentoo.org when empty).
@@ -227,13 +247,32 @@ func LoadConfig(path string) (*Config, error) {
 	if err := validateQuestions(c.Questions, "global"); err != nil {
 		return nil, err
 	}
+	for i, q := range c.FallbackQuestions {
+		if strings.TrimSpace(q.Q) == "" || len(q.Answers) == 0 {
+			return nil, fmt.Errorf("fallback_questions %d:需要 q 和至少一个 answers 条目", i)
+		}
+		for _, a := range q.Answers {
+			if strings.TrimSpace(a) == "" {
+				return nil, fmt.Errorf("fallback_questions %d: answers 不能包含空字符串", i)
+			}
+		}
+	}
+	if c.VerifyMode != "" && !validMode(c.VerifyMode) {
+		return nil, fmt.Errorf("verify_mode %q is not one of %q, %q, %q", c.VerifyMode, modeKernel, modeQuiz, modeMixed)
+	}
 	for i := range c.Groups {
 		g := &c.Groups[i]
 		if err := validateQuestions(g.Questions, fmt.Sprintf("group %d", g.ID)); err != nil {
 			return nil, err
 		}
-		if len(c.questions(g.ID)) == 0 {
-			return nil, fmt.Errorf("group %d: no questions (add global questions or this group's own questions)", g.ID)
+		if g.VerifyMode != "" && !validMode(g.VerifyMode) {
+			return nil, fmt.Errorf("group %d: verify_mode %q is not one of %q, %q, %q", g.ID, g.VerifyMode, modeKernel, modeQuiz, modeMixed)
+		}
+		// A quiz pool is only required when this group can actually serve a quiz — a kernel-mode
+		// group needs no questions. /vmode can still switch a pool-less group to quiz at runtime;
+		// pickMode falls back to kernel there rather than posting an unanswerable challenge.
+		if c.verifyMode(g.ID) != modeKernel && len(c.questions(g.ID)) == 0 {
+			return nil, fmt.Errorf("group %d: no questions (add global questions or this group's own questions, or set verify_mode to %q)", g.ID, modeKernel)
 		}
 		if c.requiredChannel(g.ID) != 0 && c.channelInvite(g.ID) == "" && !strings.HasPrefix(c.channelDisplay(g.ID), "@") {
 			return nil, fmt.Errorf("group %d: required_channel_id is set but the channel has no reachable link (set channel_display to an @handle, or channel_invite_url for a private channel)", g.ID)
@@ -351,6 +390,18 @@ func (c *Config) channelInvite(id int64) string {
 		return g.ChannelInviteURL
 	}
 	return c.ChannelInviteURL
+}
+
+// verifyMode resolves the CONFIGURED challenge mode for a group: its own verify_mode, else the
+// global one, else the built-in default. May return modeMixed — pickMode resolves that per applicant.
+func (c *Config) verifyMode(id int64) string {
+	if g := c.group(id); g != nil && validMode(g.VerifyMode) {
+		return g.VerifyMode
+	}
+	if validMode(c.VerifyMode) {
+		return c.VerifyMode
+	}
+	return defaultVerifyMode
 }
 
 func (c *Config) questions(id int64) []Question {

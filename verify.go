@@ -55,17 +55,24 @@ type modBot interface {
 }
 
 type pending struct {
-	groupMsgID   int
-	qText        string
-	qOpts        []string
-	correctIdx   int
-	nonce        string // per-pending token; a quiz button only counts if its nonce matches
-	name         string // applicant display name, kept so a post-outage re-notify can address them
-	deadline     time.Time
-	timer        *time.Timer
-	epoch        uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
-	lastRenotify time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
-	done         bool
+	groupMsgID    int
+	mode          string // challenge type this applicant got: modeKernel (typed answer) or modeQuiz (buttons)
+	lang          lang   // applicant's locale, from their Telegram language_code; every message they see uses it
+	qText         string
+	qOpts         []string
+	correctIdx    int
+	tries         int      // kernel mode: replies used so far (kernelMaxTries before the decline)
+	hinted        bool     // kernel mode: the "no Linux installed yet" fallback was already offered (deliberately not persisted — a restart may re-offer it, which costs nothing)
+	prompted      bool     // kernel mode: the question has actually been DM'd, so a reply can be graded as an answer
+	sampleBounced bool     // kernel mode: the "you sent back our own example" nudge was already spent
+	fbAnswers     []string // kernel mode: once the short-answer fallback replaced the kernel question, the answers it is graded against
+	nonce         string   // per-pending token; a quiz button only counts if its nonce matches
+	name          string   // applicant display name, kept so a post-outage re-notify can address them
+	deadline      time.Time
+	timer         *time.Timer
+	epoch         uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
+	lastRenotify  time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
+	done          bool
 }
 
 // renotifyItem is one applicant to re-notify after an outage — snapshotted under the lock, then
@@ -81,6 +88,11 @@ type pendingRec struct {
 	UserID     int64    `json:"user_id"`
 	GroupID    int64    `json:"group_id"`
 	GroupMsgID int      `json:"group_msg_id"`
+	Mode       string   `json:"mode,omitempty"`       // empty in a pre-kernel-mode record => quiz
+	Lang       string   `json:"lang,omitempty"`       // applicant locale; empty => Simplified Chinese
+	FbAnswers  []string `json:"fb_answers,omitempty"` // set once the applicant moved to the short-answer fallback
+	Prompted   bool     `json:"prompted,omitempty"`   // the question was DM'd, so a reply counts as an answer
+	Tries      int      `json:"tries,omitempty"`
 	QText      string   `json:"q_text"`
 	QOpts      []string `json:"q_opts"`
 	CorrectIdx int      `json:"correct_idx"`
@@ -115,9 +127,10 @@ type Verifier struct {
 	pend         map[pkey]*pending
 	warns        map[pkey]int // group+user -> warning count (persisted)
 	enabled      bool
-	shuttingDown bool // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
-	rich         bool // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
-	nameSpoiler  bool // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
+	shuttingDown bool   // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
+	rich         bool   // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
+	nameSpoiler  bool   // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
+	vmode        string // runtime verification-mode override (/vmode, persisted); "" => follow the config
 	statDate     string
 	approved     int
 	declined     int
@@ -132,6 +145,9 @@ type Verifier struct {
 	banSecs      int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
 	vfail        map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
 	vfailPath    string                // persistence path for vfail
+	agentMu      sync.Mutex            // guards agents; separate from mu so the tally's file write never blocks the verification hot paths
+	agents       agentTally            // tripped automated agents, counted per claimed model
+	agentPath    string                // persistence path for the automated-agent tally
 	settingsPath string                // persistence path for runtime settings (verification enabled state)
 	adminMu      sync.Mutex            // guards adminCache
 	adminCache   map[pkey]time.Time    // group+user -> admin-status cache expiry; only ADMINS are cached (short TTL) so the verify/moderation admin checks skip a GetChatMember round-trip on repeat use
@@ -462,7 +478,8 @@ func (v *Verifier) save() {
 			continue
 		}
 		recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-			QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
+			Mode: p.mode, Lang: string(p.lang), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
+			Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 	}
 	v.mu.Unlock()
 	writeJSONFile(v.statePath, recs)
@@ -496,11 +513,17 @@ func (v *Verifier) load(bot verifyBot) {
 			log.Printf("state load: skip pending for unconfigured group %d (user %d)", gid, uid)
 			continue
 		}
-		if len(r.QOpts) < 2 || r.CorrectIdx < 0 || r.CorrectIdx >= len(r.QOpts) {
+		mode := r.Mode
+		if mode == "" {
+			mode = modeQuiz // a record written before kernel mode existed always held a quiz
+		}
+		// A quiz pending needs a usable option payload (a restored out-of-range answer index would be
+		// unwinnable); a kernel pending carries no options at all, so it is exempt from that check.
+		if mode == modeQuiz && (len(r.QOpts) < 2 || r.CorrectIdx < 0 || r.CorrectIdx >= len(r.QOpts)) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
 		}
-		p := &pending{groupMsgID: r.GroupMsgID, qText: r.QText, qOpts: r.QOpts,
+		p := &pending{groupMsgID: r.GroupMsgID, mode: mode, lang: lang(r.Lang), fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries, qText: r.QText, qOpts: r.QOpts,
 			correctIdx: r.CorrectIdx, nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
 		reason := "timeout"
@@ -562,6 +585,9 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))
 	bh.Handle(v.onJoinRequest, th.AnyChatJoinRequest())
 	bh.Handle(v.onMyChatMember, th.AnyMyChatMember())
+	// before the DM auto-reply: a plain private message from someone mid-kernel-verification IS
+	// their answer (routes are first-match, so this must be registered first)
+	bh.Handle(v.onKernelAnswer, v.kernelAnswerDM)
 	// before the command handlers: any private message except /start (verify deep link)
 	// gets the unified auto-reply — so DM'd commands respond instead of silently no-opping
 	bh.Handle(v.onPrivateDM, privateNonStart)
@@ -586,6 +612,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onArmpkgs, th.CommandEqual("armpkgs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onSpoiler, th.CommandEqual("spoiler"))
+	bh.Handle(v.onVMode, th.CommandEqual("vmode"))
 	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
 	bh.Handle(v.onBanTime, th.CommandEqual("bantime"))
 	bh.Handle(v.onMute, th.CommandEqual("mute"))
@@ -711,10 +738,11 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	if v.joinGate(c, bot, gid, uid) {
 		return nil
 	}
-	q := v.cfg.randomQuestion(gid)
-	text, opts, correctIdx := shuffledQuestion(q)
+	// Everything this applicant reads is rendered in their own Telegram interface language.
+	ul := langFor(jr.From.LanguageCode)
+	mode, text, opts, correctIdx := v.newChallenge(gid, ul)
 	name := displayName(&jr.From)
-	groupMsgID := v.postGroupChallenge(c, bot, gid, uid, name)
+	groupMsgID := v.postGroupChallenge(c, bot, gid, uid, name, ul)
 
 	key := pkey{gid, uid}
 	v.mu.Lock()
@@ -726,8 +754,8 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		}
 		oldMsgID = old.groupMsgID
 	}
-	p := &pending{groupMsgID: groupMsgID, qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(),
-		name: name, deadline: time.Now().Add(v.timeout())}
+	p := &pending{groupMsgID: groupMsgID, mode: mode, lang: ul, qText: text, qOpts: opts, correctIdx: correctIdx,
+		nonce: newNonce(), name: name, deadline: time.Now().Add(v.timeout())}
 	v.armExpiry(bot, p, gid, uid, v.timeout(), "timeout")
 	v.pend[key] = p
 	v.mu.Unlock()
@@ -735,7 +763,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		v.deleteChallenge(c, bot, gid, oldMsgID) // drop the stale challenge from a previous request
 	}
 	v.save()
-	log.Printf("join %d (@%s) in group %d: pending, in-group verify link posted", uid, jr.From.Username, gid)
+	log.Printf("join %d (@%s) in group %d: pending (%s challenge), in-group verify link posted", uid, jr.From.Username, gid, mode)
 	return nil
 }
 
@@ -753,60 +781,79 @@ func (v *Verifier) hasPending(uid int64) bool {
 // firstPending returns the group id of one of the user's live verifications. Used to
 // resolve a single channel for the DM follow-prompt (groups usually share one channel);
 // the per-group channel is still enforced per group at answer time.
-func (v *Verifier) firstPending(uid int64) (int64, bool) {
+func (v *Verifier) firstPending(uid int64) (gid int64, ul lang, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
 		if k.uid == uid && !p.done {
-			return k.gid, true
+			return k.gid, p.lang, true
 		}
 	}
-	return 0, false
+	return 0, langZH, false
 }
 
 // sendDMChallenge runs when the applicant opens the bot via the deep link.
 // Two-step: if a channel is required and not yet joined, ask them to follow it
 // first (with a "I've followed, continue" button); otherwise send the quiz.
 func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64) {
-	gid, ok := v.firstPending(uid)
+	gid, ul, ok := v.firstPending(uid)
 	if !ok {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), "你当前没有待处理的入群申请。请先在群里发起加入申请,再点群内的「✅ 点此完成验证」按钮。"))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), tr(ul).NoPending))
 		return
 	}
+	t := tr(ul)
 	// The follow-prompt uses the first pending group's channel (groups usually share one);
 	// the per-group channel is still enforced at answer time in onAnswer.
 	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		var rows [][]telego.InlineKeyboardButton
 		if curl := v.channelURL(gid); curl != "" {
-			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "📢 关注频道 " + v.cfg.channelDisplay(gid), URL: curl}))
+			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: fmt.Sprintf(t.FollowButton, v.cfg.channelDisplay(gid)), URL: curl}))
 		}
-		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 我已关注,继续",
+		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: t.ContinueButton,
 			CallbackData: recheckPrefix + strconv.FormatInt(gid, 10) + ":" + strconv.FormatInt(uid, 10)}))
 		_, _ = bot.SendMessage(c, htmlMessage(uid,
-			fmt.Sprintf("完成验证还差一步:请先关注频道 %s,关注后回到本对话点「✅ 我已关注,继续」。", v.channelLinkHTML(gid))).
+			fmt.Sprintf(t.FollowPrompt, v.channelLinkHTML(gid, ul))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 		return
 	}
 	v.sendQuizzes(c, bot, uid)
 }
 
-// sendQuizzes DMs the quiz for every group where this user has a live verification.
+// sendQuizzes DMs the challenge for every group where this user has a live verification: the
+// button quiz, or — in kernel mode — the typed-answer prompt (no buttons; their next DM is the
+// answer, handled by onKernelAnswer).
 func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 	type dmq struct {
-		gid   int64
-		text  string
-		opts  []string
-		nonce string
+		gid      int64
+		mode     string
+		lang     lang
+		text     string
+		opts     []string
+		nonce    string
+		tries    int
+		fallback bool
 	}
 	var qs []dmq
 	v.mu.Lock()
 	for k, p := range v.pend {
 		if k.uid == uid && !p.done {
-			qs = append(qs, dmq{k.gid, p.qText, p.qOpts, p.nonce})
+			qs = append(qs, dmq{k.gid, p.mode, p.lang, p.qText, p.qOpts, p.nonce, p.tries, len(p.fbAnswers) > 0})
 		}
 	}
 	v.mu.Unlock()
 	for _, dq := range qs {
+		if dq.mode == modeKernel {
+			left := kernelMaxTries - dq.tries
+			render := kernelPromptHTML
+			if dq.fallback { // already moved to the short-answer question — re-send THAT, not the kernel one
+				render = fallbackPromptHTML
+			}
+			v.sendVerifyDM(c, bot, uid,
+				render(dq.lang, dq.text, left, dq.nonce, true),  // collapsed tripwire (Bot API 7.4)
+				render(dq.lang, dq.text, left, dq.nonce, false)) // …without the blockquote, for an old API server
+			v.markPrompted(dq.gid, uid) // only now may a DM be graded as their answer
+			continue
+		}
 		gidStr, uidStr := strconv.FormatInt(dq.gid, 10), strconv.FormatInt(uid, 10)
 		rows := make([][]telego.InlineKeyboardButton, 0, len(dq.opts))
 		for i, opt := range dq.opts {
@@ -814,9 +861,82 @@ func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 				telego.InlineKeyboardButton{Text: opt, CallbackData: fmt.Sprintf("%s%s:%s:%s:%d", answerPrefix, gidStr, uidStr, dq.nonce, i)}))
 		}
 		_, _ = bot.SendMessage(c, htmlMessage(uid,
-			fmt.Sprintf("请回答下面的问题完成入群验证:\n\n❓ %s", html.EscapeString(dq.text))).
+			fmt.Sprintf(tr(dq.lang).QuizPrompt, html.EscapeString(dq.text))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	}
+}
+
+// markPrompted records that the question has actually been delivered to this applicant, so their
+// next plain DM may be graded as an answer. Until then a stray message ("hi", "已关注") must NOT
+// cost an attempt — the applicant may not have seen a question at all yet.
+func (v *Verifier) markPrompted(gid, uid int64) {
+	v.mu.Lock()
+	if p, ok := v.pend[pkey{gid, uid}]; ok && !p.done {
+		p.prompted = true
+	}
+	v.mu.Unlock()
+}
+
+// sendVerifyDM delivers a verification DM, degrading instead of failing: the rich rendering first,
+// then a simpler HTML one if Telegram rejected the markup (an old self-hosted Bot API server, an
+// entity it doesn't know), then plain text with the tags stripped. An applicant must never be left
+// with no question — and therefore auto-declined at timeout — because of markup, so unlike the other
+// best-effort DMs this path inspects the send error instead of discarding it.
+func (v *Verifier) sendVerifyDM(c context.Context, bot verifyBot, uid int64, rich, simpler string) {
+	_, err := bot.SendMessage(c, htmlMessage(uid, rich))
+	if err == nil {
+		return
+	}
+	if !markupRejected(err) {
+		// A transient failure, not bad markup: re-sending could deliver the question twice if the
+		// first one actually landed. The applicant can re-open the link, and the timeout defers
+		// while the bot is unreachable.
+		log.Printf("verify DM to %d failed (%v)", uid, err)
+		return
+	}
+	log.Printf("verify DM to %d rejected (%v) — retrying without the collapsed quote", uid, err)
+	if simpler != "" && simpler != rich {
+		if _, err := bot.SendMessage(c, htmlMessage(uid, simpler)); err == nil {
+			return
+		}
+	}
+	if _, err := bot.SendMessage(c, tu.Message(tu.ID(uid), stripHTML(simpler))); err != nil {
+		log.Printf("verify DM to %d failed even as plain text: %v", uid, err)
+	}
+}
+
+// markupRejected reports whether Telegram refused the message because of its HTML — the case worth
+// re-rendering. Matched on the Bot API's wording ("Bad Request: can't parse entities…"), because the
+// error arrives as an opaque string.
+func markupRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	e := strings.ToLower(err.Error())
+	return strings.Contains(e, "parse") || strings.Contains(e, "entit") || strings.Contains(e, "bad request")
+}
+
+// stripHTML renders our own outgoing HTML as plain text: drop the tags, unescape the entities. Only
+// ever applied to messages this bot built, so a simple scanner is enough.
+func stripHTML(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	depth := 0
+	for _, r := range s {
+		switch {
+		case r == '<':
+			depth++
+		case r == '>' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	for _, p := range [][2]string{{"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&#39;", "'"}, {"&amp;", "&"}} {
+		out = strings.ReplaceAll(out, p[0], p[1])
+	}
+	return out
 }
 
 // onChannelRecheck: user tapped "I've followed, continue" — re-check channel then show the quiz.
@@ -834,23 +954,24 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 	}
 	gid, _ := strconv.ParseInt(parts[0], 10, 64)
 	uid, _ := strconv.ParseInt(parts[1], 10, 64)
+	t := tr(langFor(cq.From.LanguageCode))
 	if cq.From.ID != uid {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证申请,无法操作。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.NotYours).WithShowAlert())
 		return nil
 	}
 	if !v.hasPending(uid) {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该验证已处理或已过期。"))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.AlreadyHandled))
 		return nil
 	}
 	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(fmt.Sprintf("还没检测到你关注 %s,关注后再点一次。", v.cfg.channelDisplay(gid))).WithShowAlert())
+			WithText(fmt.Sprintf(t.NotFollowedYet, v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
 	// ACK first so the button stops spinning, THEN send the quiz DM(s) — sendQuizzes swallows send
 	// errors, so the early ack loses no feedback (the channel-membership check above stays before
 	// the ack because its toast is result-driven).
-	_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 已关注,请回答下面的问题"))
+	_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.ContinueOK))
 	v.sendQuizzes(c, bot, uid)
 	return nil
 }
@@ -883,8 +1004,9 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
 	}
+	t := tr(langFor(cq.From.LanguageCode))
 	if cq.From.ID != owner {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("这不是你的验证申请,无法操作。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.NotYours).WithShowAlert())
 		return nil
 	}
 
@@ -897,30 +1019,30 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 	}
 	v.mu.Unlock()
 	if done {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该验证已处理或已过期。"))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.AlreadyHandled))
 		return nil
 	}
 	if nonce != curNonce {
 		// A stale button from a previous (overwritten) request — don't let it answer this quiz.
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该题目已过期,请重新打开验证链接获取新题。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.StaleQuestion).WithShowAlert())
 		return nil
 	}
 
 	if choice != correctIdx {
 		_, banned := v.decline(c, bot, gid, owner, nonce, "wrong answer")
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(banned)).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(langFor(cq.From.LanguageCode), banned)).WithShowAlert())
 		return nil
 	}
 	if !v.isChannelMember(c, bot, gid, owner) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(fmt.Sprintf("请先关注频道 %s,关注后再点一次你的答案。", v.cfg.channelDisplay(gid))).WithShowAlert())
+			WithText(fmt.Sprintf(t.NotFollowedYet, v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
 	if v.approve(c, bot, gid, owner) {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 验证通过,已批准加入,欢迎!"))
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), "✅ 验证通过,已批准加入,欢迎!"))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.Approved))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), t.Approved))
 	} else {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("验证已处理,或申请已过期/无法批准,请重新申请。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.AlreadyHandled).WithShowAlert())
 	}
 	return nil
 }
@@ -972,7 +1094,10 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-func (v *Verifier) isChannelMember(c context.Context, bot *telego.Bot, gid, userID int64) bool {
+// isChannelMember reports whether userID satisfies group gid's required-channel gate. Takes the
+// modBot slice rather than *telego.Bot so the gate — including its fail-open branch — is unit-testable
+// with a fake; *telego.Bot satisfies it, so callers are unchanged.
+func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID int64) bool {
 	rc := v.cfg.requiredChannel(gid)
 	if rc == 0 {
 		return true
@@ -1016,10 +1141,10 @@ func (v *Verifier) channelURL(gid int64) string {
 }
 
 // channelLinkHTML returns the channel as a clickable HTML link (or escaped text).
-func (v *Verifier) channelLinkHTML(gid int64) string {
+func (v *Verifier) channelLinkHTML(gid int64, ul lang) string {
 	d := v.cfg.channelDisplay(gid)
 	if d == "" {
-		d = "管理员指定的频道"
+		d = tr(ul).ChannelFallbackName // an unnamed channel still has to read naturally in the applicant's language
 	}
 	if u := v.channelURL(gid); u != "" {
 		return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(d))
@@ -1134,7 +1259,7 @@ func (v *Verifier) failAlert(c context.Context, bot verifyBot, gid int64, text s
 // channelAccessAlert warns admins that the bot can't read a required channel (so the
 // follow-gate can't be enforced and applicants are being passed through). Throttled to at
 // most once per 10 minutes per channel so a busy join queue doesn't flood the admin log.
-func (v *Verifier) channelAccessAlert(c context.Context, bot *telego.Bot, channelID int64) {
+func (v *Verifier) channelAccessAlert(c context.Context, bot verifyBot, channelID int64) {
 	v.mu.Lock()
 	if last, ok := v.chanAlert[channelID]; ok && time.Since(last) < 10*time.Minute {
 		v.mu.Unlock()
@@ -1223,14 +1348,15 @@ func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 
 // wrongAnswerText is the callback alert shown after a wrong answer: a ban notice if this
 // failure triggered the auto-ban, otherwise a decline + retry-after-cooldown hint.
-func (v *Verifier) wrongAnswerText(banned bool) string {
+func (v *Verifier) wrongAnswerText(l lang, banned bool) string {
+	t := tr(l)
 	if banned {
-		return "❌ 验证连续失败多次,已被封禁。"
+		return t.WrongBanned
 	}
 	if s := v.cfg.VerifyRetrySeconds; s > 0 {
-		return fmt.Sprintf("❌ 答错了,已拒绝。请 %d 秒后重新申请。", s)
+		return fmt.Sprintf(t.WrongRetry, s)
 	}
-	return "❌ 答错了,已拒绝。可重新申请。"
+	return t.WrongNoWait
 }
 
 // noFaultGrace is the retry window granted when a decline would NOT be the user's fault — after the
@@ -1423,7 +1549,7 @@ func (v *Verifier) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoc
 // verify" deep link, the admin pass/ban buttons, and an optional channel-follow hint — and returns the
 // sent message id (0 on failure, with an admin alert). Shared by onJoinRequest and the post-outage
 // re-notify so both render the challenge identically.
-func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string) int {
+func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, ul lang) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 	mention := joinerLabel(uid, name, v.nameSpoilerOn())
 	link := ""
@@ -1432,20 +1558,20 @@ func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid
 	}
 	// The channel requirement is plain text only — the actual follow button lives in the DM step, so
 	// users aren't sent away from the verify flow.
+	t := tr(ul)
 	channelHint := ""
 	if v.cfg.requiredChannel(gid) != 0 {
-		channelHint = fmt.Sprintf("\n⚠️ 完成验证前还需先关注频道 %s。", html.EscapeString(v.cfg.channelDisplay(gid)))
+		channelHint = fmt.Sprintf(t.GroupChannelHint, html.EscapeString(v.cfg.channelDisplay(gid)))
 	}
 	linkText := ""
 	if link != "" {
-		linkText = fmt.Sprintf("(或 <a href=\"%s\">点此</a>)", link)
+		linkText = fmt.Sprintf(t.GroupLinkText, link)
 	}
-	body := fmt.Sprintf("👋 %s 申请加入。请点下方「✅ 点此完成验证」%s 打开机器人私聊完成验证,%d 秒内未完成将被拒绝。%s",
-		mention, linkText, v.cfg.TimeoutSeconds, channelHint)
+	body := fmt.Sprintf(t.GroupBody, mention, linkText, v.cfg.TimeoutSeconds, channelHint)
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
-		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: "✅ 点此完成验证", URL: link}))
+		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: t.VerifyButton, URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
 		telego.InlineKeyboardButton{Text: "👮 管理员直接通过", CallbackData: adminPrefix + "pass:" + gidStr + ":" + uidStr},
@@ -1594,10 +1720,9 @@ func (v *Verifier) onRecovery(c context.Context, bot verifyBot, outage time.Dura
 // the stale one. Only network calls here — no lock is held across them; the pending's message id is
 // updated afterward if it is still the live one.
 func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
-	_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(
-		"🔄 抱歉,机器人刚才离线了约 %s,你的入群验证已重新计时。请回到本对话继续答题;若这里没有题目,回群里点「✅ 点此完成验证」重新获取。",
-		outageText(outage))))
-	newMsg := v.postGroupChallenge(c, bot, gid, uid, name)
+	ul := p.lang
+	_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(tr(ul).Renotify, outageText(ul, outage))))
+	newMsg := v.postGroupChallenge(c, bot, gid, uid, name, ul)
 	if oldMsg != 0 && oldMsg != newMsg {
 		v.deleteChallenge(c, bot, gid, oldMsg)
 	}
@@ -1610,14 +1735,21 @@ func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid in
 
 // outageText renders an outage duration for a user-facing notice: whole seconds under a minute, whole
 // minutes under an hour, whole hours above that.
-func outageText(d time.Duration) string {
+func outageText(l lang, d time.Duration) string {
+	units := [3]string{" 秒", " 分钟", " 小时"}
+	switch l {
+	case langZHT:
+		units = [3]string{" 秒", " 分鐘", " 小時"}
+	case langEN:
+		units = [3]string{" seconds", " minutes", " hours"}
+	}
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%d 秒", int(d.Seconds()))
+		return fmt.Sprintf("%d%s", int(d.Seconds()), units[0])
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟", int(d.Minutes()))
+		return fmt.Sprintf("%d%s", int(d.Minutes()), units[1])
 	default:
-		return fmt.Sprintf("%d 小时", int(d.Hours()))
+		return fmt.Sprintf("%d%s", int(d.Hours()), units[2])
 	}
 }
 

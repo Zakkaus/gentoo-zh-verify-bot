@@ -23,7 +23,7 @@ const dmMapMax = 10000
 // config private_reply is empty). The bot's commands only work in the guarded groups,
 // so a plain DM would otherwise get no response at all.
 const defaultPrivateReply = "👋 这是 Gentoo 中文社区的入群验证 + Gentoo/Linux 助手机器人。\n\n" +
-	"• 想入群:回到群里发起加入申请,再点群消息中的「✅ 点此完成验证」链接来这里答题。\n" +
+	"• 想入群:回到群里发起加入申请,再点群消息中的「✅ 点此完成验证」链接来这里完成验证。\n" +
 	"• 查询命令(/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs)私聊也能直接用(每分钟有限次,防滥用;群里不限次)。\n" +
 	"• 审核/管理命令仅在群里有效。"
 

@@ -383,7 +383,8 @@ func TestStreamEndedUnexpectedly(t *testing.T) {
 	}
 }
 
-// TestOutageText: friendly duration rendering, incl. an hours branch for a long outage.
+// TestOutageText: friendly duration rendering, incl. an hours branch for a long outage, in each
+// locale the verification path speaks.
 func TestOutageText(t *testing.T) {
 	cases := map[time.Duration]string{
 		45 * time.Second: "45 秒",
@@ -391,8 +392,14 @@ func TestOutageText(t *testing.T) {
 		8 * time.Hour:    "8 小时",
 	}
 	for d, want := range cases {
-		if got := outageText(d); got != want {
-			t.Errorf("outageText(%v) = %q, want %q", d, got, want)
+		if got := outageText(langZH, d); got != want {
+			t.Errorf("outageText(zh, %v) = %q, want %q", d, got, want)
 		}
+	}
+	if got := outageText(langZHT, 3*time.Minute); got != "3 分鐘" {
+		t.Errorf("outageText(zh-hant, 3m) = %q, want %q", got, "3 分鐘")
+	}
+	if got := outageText(langEN, 8*time.Hour); got != "8 hours" {
+		t.Errorf("outageText(en, 8h) = %q, want %q", got, "8 hours")
 	}
 }

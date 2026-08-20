@@ -117,6 +117,8 @@ func main() {
 		v.loadVerifyFails()
 		v.settingsPath = sd + "/settings.json"
 		v.loadSettings() // restore a persisted /stop (verification paused) across restarts
+		v.agentPath = sd + "/agents.json"
+		v.loadAgents() // keep the AI-agent tally across restarts so /stats totals stay meaningful
 	} else {
 		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: pending verifications, warn counts, the /bc state and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
 	}

@@ -75,3 +75,35 @@ func TestSettingsPersistSpoiler(t *testing.T) {
 		t.Error("enabled=false from the file should load")
 	}
 }
+
+// TestSettingsPersistVerifyMode verifies a /vmode switch survives a restart (an admin who moved the
+// group to kernel verification must not silently get the old quiz back after a deploy), that
+// clearing the override round-trips as "follow the config", and that a garbage value is ignored.
+func TestSettingsPersistVerifyMode(t *testing.T) {
+	path := t.TempDir() + "/settings.json"
+
+	v := &Verifier{settingsPath: path, enabled: true}
+	v.setVerifyMode(modeQuiz)
+	v2 := &Verifier{settingsPath: path, enabled: true}
+	v2.loadSettings()
+	if got := v2.verifyModeOverride(); got != modeQuiz {
+		t.Errorf("persisted /vmode = %q, want %q", got, modeQuiz)
+	}
+
+	v2.setVerifyMode("") // /vmode auto -> no override
+	v3 := &Verifier{settingsPath: path, enabled: true}
+	v3.loadSettings()
+	if got := v3.verifyModeOverride(); got != "" {
+		t.Errorf("cleared /vmode should reload as no override, got %q", got)
+	}
+
+	p2 := t.TempDir() + "/settings.json"
+	if err := os.WriteFile(p2, []byte(`{"verify_mode":"buttons"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vb := &Verifier{settingsPath: p2, enabled: true}
+	vb.loadSettings()
+	if got := vb.verifyModeOverride(); got != "" {
+		t.Errorf("an unknown persisted mode must be ignored, got %q", got)
+	}
+}

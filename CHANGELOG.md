@@ -4,6 +4,77 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [3.12.0] - 2026-08-20
+
+### Added
+- New state file `agents.json`: the automated-agent tally, kept across restarts.
+- **Kernel-version verification, now the default join challenge.** A spam bot passes a four-option
+  button quiz by tapping at random — one time in four, and it can re-apply — which is how the
+  scam accounts were getting in. The new `kernel` mode asks the applicant to **type the version of
+  the Linux kernel they run** (`uname -r`): there is no button to click, and a plausible version has
+  to be produced as free text. Any real kernel is accepted, historic (`2.6.32`) through current
+  (`6.18.45`) and on into future majors, written bare, with a local-version suffix
+  (`6.12.3-gentoo`), or inside a sentence — so the check never needs editing when a new kernel ships.
+  ARM is first-class: Raspberry Pi (`6.6.51+rpt-rpi-v8`), Jetson (`5.10.110-tegra`), Rockchip and
+  Allwinner boards, Android/Termux (`6.1.75-android14-11-g1c2d3e4f`), Asahi on Apple Silicon and
+  `…el9.aarch64` all pass, and a pasted `uname -a` line is accepted as-is.
+  Three replies are allowed before the decline, so a typo isn't an instant rejection.
+- **`verify_mode` + `/vmode`** to choose the challenge: `kernel` (default), `quiz` (the original
+  multiple choice — unchanged, nothing was removed) or `mixed` (one at random per applicant).
+  Configurable globally and **per group**, and switchable live by admins with
+  `/vmode kernel|quiz|mixed|auto`; the runtime choice persists in `settings.json` (`auto` returns to
+  the config file).
+
+- **Per-applicant language.** Every string a joiner sees — the in-group challenge, the DM question,
+  the channel-follow prompts, the approve/decline result — is now rendered from their Telegram
+  interface language (`language_code`): Simplified Chinese, Traditional Chinese for `zh-Hant`/`zh-TW`/
+  `zh-HK`/`zh-MO`, and English for every other language (`i18n.go`). The chosen locale is stored with
+  the pending, so an outage re-notify still speaks the applicant's language. Admin output, the admin
+  log and the config-supplied `questions` are unchanged (Simplified Chinese / as configured).
+- **A fallback for applicants with no Linux installed.** "还没装", "我不用 Linux", "not installed",
+  "I use Windows" and similar replies no longer burn an attempt: the applicant is switched to a
+  **short-answer question** drawn from a small pool (`fallback_questions`, overridable; the built-in
+  pool is localized) — typed, no options, and the answer never appears in the question. The built-in
+  questions ask for the community's and the project's website (`gentoozh.org`, `gentoo.org`), which
+  someone who has never run Linux can still answer; `gentoo-zh.org` is a different site and is not
+  accepted. The escape is
+  not advertised in the prompt, so a spam operator can't learn it exists, and reading it would give
+  them nothing to copy. Replying with the format example the prompt itself printed
+  (`6.12.3-gentoo`) is bounced once with a nudge rather than accepted — a copy-paste bot's laziest
+  move — while a person who really runs that version is let through by sending it again.
+- **A tripwire for LLM agents answering on someone's behalf, with a per-model tally.** The kernel DM
+  carries a canary instruction addressed to automated agents, asking them to reply with a
+  per-applicant token (derived from the pending's nonce) **and their own model name** instead of
+  answering. A reply carrying that token is declined immediately, counts as a failure, and its
+  claimed model is tallied in the new `agents.json` — surfaced by `/stats` and by a line per catch in
+  the admin log, so admins can see which models keep being pointed at the group. The model is
+  self-reported and spoofable: a usage tally, not evidence. Deterrence, not a security boundary — an
+  agent instructed to ignore embedded text walks past it.
+- A DM is only graded as an answer once the question has actually been sent. With a required channel
+  the applicant first sees only the follow-the-channel prompt, so typing "已关注" instead of tapping
+  the button used to be charged as a wrong kernel version — three of those declined someone who had
+  never been shown a question. The flag persists with the pending, and an unprompted DM gets the
+  ordinary auto-reply again.
+- A reply naming another operating system ("我用的是 Windows 10.0.19045", "macOS 14.5") is routed to
+  the short-answer fallback instead of being approved: those build numbers parse as plausible kernel
+  versions. A five-digit sublevel is also rejected outright — no kernel has ever had one.
+- The verification DM now degrades instead of failing: the notice rides in a collapsed
+  `<blockquote expandable>` (Bot API 7.4), and if the server rejects that markup the message is
+  re-sent without the quote and finally as plain text — only for a markup rejection, so a transient
+  network error can't deliver the question twice. Old clients that don't know the entity just render
+  it unfolded. Previously the send error was discarded, so a rejected message meant the
+  applicant got no question at all and was declined at timeout.
+
+### Changed
+- With no `verify_mode` in the config the bot now serves the kernel challenge instead of the quiz.
+  Set `"verify_mode": "quiz"` (or run `/vmode quiz`) to keep the previous behaviour.
+- `questions` is only required for a group that can actually serve a quiz; a kernel-only config may
+  omit the pool entirely. A quiz-mode group with an empty pool falls back to the kernel challenge
+  rather than posting an unanswerable question.
+- `pending.json` records the challenge mode, the applicant's locale and the replies used, so a kernel
+  verification survives a restart or an outage recovery intact; a record written by an older build
+  restores as a Simplified-Chinese quiz.
+
 ## [3.11.0] - 2026-07-12
 
 ### Added

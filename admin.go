@@ -53,8 +53,12 @@ func (v *Verifier) onStop(ctx *th.Context, update telego.Update) error {
 func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
 	return v.memberCmd(ctx, update, func() string {
 		date, ap, de := v.stats()
-		return fmt.Sprintf("📊 今日(%s)\n✅ 通过:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
+		out := fmt.Sprintf("📊 今日(%s)\n✅ 通过:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
 			date, ap, de, v.stateText(), uptimeStr(v.startTime))
+		if ai := v.agentStatsText(); ai != "" { //累计值,不随每日统计清零
+			out += "\n" + ai
+		}
+		return out
 	})
 }
 
@@ -76,6 +80,36 @@ func (v *Verifier) onSpoiler(ctx *th.Context, update telego.Update) error {
 			return "🫥 已开启:新成员的名字会用「防剧透」遮盖,不点开看不到 —— 防止有人拿广告当名字在群里刷屏。"
 		}
 		return "👁 已关闭:新成员的名字将正常显示(不再遮盖)。"
+	})
+}
+
+// onVMode handles /vmode — show or switch the join-verification challenge: "kernel" makes the
+// applicant type their running kernel version, "quiz" is the original tap-a-button multiple choice,
+// "mixed" gives each applicant one at random, and "auto" drops the override back to the config.
+// The choice is global (it overrides every group's verify_mode) and persists across restarts.
+func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
+	return v.adminCmd(ctx, update, func() string {
+		gid := update.Message.Chat.ID
+		arg := strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text)))
+		switch arg {
+		case "":
+			src := "配置文件"
+			if validMode(v.verifyModeOverride()) {
+				src = "/vmode 设定"
+			}
+			return fmt.Sprintf("🔐 当前入群验证方式:%s(来自%s)。\n用法:/vmode kernel 改为填内核版本号;/vmode quiz 改回选择题;/vmode mixed 两者随机;/vmode auto 恢复按配置文件。",
+				modeName(v.effectiveMode(gid)), src)
+		case modeKernel, modeQuiz, modeMixed:
+			v.setVerifyMode(arg)
+			if arg == modeKernel {
+				return "🔐 入群验证已改为:填写内核版本号 —— 申请者必须自己输入 uname -r 的版本号,只会乱点按钮的机器人进不来。"
+			}
+			return "🔐 入群验证已改为:" + modeName(arg) + "。"
+		case "auto", "config", "default":
+			v.setVerifyMode("")
+			return fmt.Sprintf("🔐 已恢复按配置文件决定验证方式,本群当前为:%s。", modeName(v.effectiveMode(gid)))
+		}
+		return "用法:/vmode kernel|quiz|mixed|auto(不带参数查看当前设置)。"
 	})
 }
 
@@ -159,6 +193,7 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 			"/autodel — 查询结果自动删除开关(/autodel on|off|<分钟>)\n" +
 			"/rich — 开关富文本输出(/pkg /use)\n" +
 			"/spoiler — 开关:遮盖新成员名字(防广告;默认开)\n" +
+			"/vmode — 切换入群验证方式(kernel 填内核版本号 / quiz 选择题 / mixed 随机)\n" +
 			"/bc — 频道马甲封禁开关;/bc allow|deny <频道id> 管白名单\n" +
 			"/start /stop — 开启 / 关闭入群验证"
 	}

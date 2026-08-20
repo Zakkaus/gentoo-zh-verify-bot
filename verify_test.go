@@ -53,16 +53,20 @@ func TestNameSpoilerDefaultAndToggle(t *testing.T) {
 // exercised without a real Telegram connection; it records call counts and returns configured
 // errors for the approve and ban calls.
 type fakeVerifyBot struct {
-	approveErr   error
-	banErr       error
-	getMeErr     error
-	approves     int
-	declines     int
-	bans         int
-	deletes      int
-	sends        int
-	getMeCalls   int
-	lastSendChat int64
+	approveErr    error
+	banErr        error
+	getMeErr      error
+	sendErr       error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
+	sendFailN     int
+	approves      int
+	declines      int
+	bans          int
+	deletes       int
+	sends         int
+	getMeCalls    int
+	lastSendChat  int64
+	lastSendText  string
+	lastParseMode string
 }
 
 // GetMe lets the fake stand in for the heartbeat's liveness probe (liveProbe / heartbeatBot).
@@ -93,6 +97,11 @@ func (b *fakeVerifyBot) DeleteMessage(context.Context, *telego.DeleteMessagePara
 func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
 	b.sends++
 	b.lastSendChat = p.ChatID.ID
+	b.lastSendText = p.Text
+	b.lastParseMode = p.ParseMode
+	if b.sendErr != nil && b.sends <= b.sendFailN {
+		return nil, b.sendErr
+	}
 	return &telego.Message{MessageID: 1}, nil
 }
 
