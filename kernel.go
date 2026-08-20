@@ -193,7 +193,7 @@ func kernelPromptHTML(l lang, question string, left int, nonce string, expandabl
 		left = 1 // a live pending always has at least one reply left; never advertise zero
 	}
 	t := tr(l)
-	return fmt.Sprintf(t.KernelPrompt, html.EscapeString(question), left) + "\n\n" + t.AIWarning + "\n" + aiTrapLine(nonce, expandable)
+	return fmt.Sprintf(t.KernelPrompt, html.EscapeString(question), left) + "\n\n" + aiTrapLine(nonce, expandable)
 }
 
 // aiTrapToken is the per-applicant marker the tripwire asks an automated agent to send. It is
@@ -414,7 +414,7 @@ func fallbackPromptHTML(l lang, question string, left int, nonce string, expanda
 		left = 1
 	}
 	t := tr(l)
-	return fmt.Sprintf(t.FallbackIntro, html.EscapeString(question), left) + "\n\n" + t.AIWarning + "\n" + aiTrapLine(nonce, expandable)
+	return fmt.Sprintf(t.FallbackIntro, html.EscapeString(question), left) + "\n\n" + aiTrapLine(nonce, expandable)
 }
 
 // hasKernelPending reports whether uid has a live kernel-mode verification — the predicate behind

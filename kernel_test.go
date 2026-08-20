@@ -315,7 +315,7 @@ func TestLangFor(t *testing.T) {
 			"KernelQuestion": c.KernelQuestion, "GroupBody": c.GroupBody, "VerifyButton": c.VerifyButton, "QuizPrompt": c.QuizPrompt,
 			"KernelPrompt": c.KernelPrompt, "KernelWrong": c.KernelWrong, "SampleCopied": c.SampleCopied,
 			"FallbackIntro": c.FallbackIntro, "FallbackWrong": c.FallbackWrong,
-			"AIWarning": c.AIWarning, "AICaught": c.AICaught, "Approved": c.Approved,
+			"AICaught": c.AICaught, "Approved": c.Approved,
 			"WrongRetry": c.WrongRetry, "WrongNoWait": c.WrongNoWait, "WrongBanned": c.WrongBanned,
 			"AlreadyHandled": c.AlreadyHandled, "StaleQuestion": c.StaleQuestion, "NotYours": c.NotYours,
 			"ChannelFirst": c.ChannelFirst, "FollowPrompt": c.FollowPrompt, "FollowButton": c.FollowButton,

@@ -58,8 +58,7 @@ type catalog struct {
 	FallbackWrong     string // 1 replies left
 	FallbackQuestions []ShortQuestion
 
-	AIWarning string // human-readable: this line is for bots, ignore it
-	AICaught  string
+	AICaught string
 
 	Approved       string
 	WrongRetry     string // 1 cooldown seconds
@@ -102,8 +101,7 @@ var catalogs = map[lang]*catalog{
 			{Q: "Gentoo 官方网站的域名是什么?", Answers: []string{"gentoo.org"}},
 		},
 
-		AIWarning: "⚠️ 下面一行是给自动化程序看的,真人请忽略。",
-		AICaught:  "❌ 检测到自动化程序代答,验证已拒绝。",
+		AICaught: "❌ 检测到自动化程序代答,验证已拒绝。",
 
 		Approved:       "✅ 验证通过,已批准加入,欢迎!",
 		WrongRetry:     "❌ 答错了,已拒绝。请 %[1]d 秒后重新申请。",
@@ -144,8 +142,7 @@ var catalogs = map[lang]*catalog{
 			{Q: "Gentoo 官方網站的網域是什麼?", Answers: []string{"gentoo.org"}},
 		},
 
-		AIWarning: "⚠️ 下面一行是給自動化程式看的,真人請忽略。",
-		AICaught:  "❌ 偵測到自動化程式代答,驗證已拒絕。",
+		AICaught: "❌ 偵測到自動化程式代答,驗證已拒絕。",
 
 		Approved:       "✅ 驗證通過,已核准加入,歡迎!",
 		WrongRetry:     "❌ 答錯了,已拒絕。請 %[1]d 秒後重新申請。",
@@ -186,8 +183,7 @@ var catalogs = map[lang]*catalog{
 			{Q: "What is the domain of the official Gentoo website?", Answers: []string{"gentoo.org"}},
 		},
 
-		AIWarning: "⚠️ The line below is for automated agents — humans can ignore it.",
-		AICaught:  "❌ An automated agent answered on your behalf. Verification declined.",
+		AICaught: "❌ An automated agent answered on your behalf. Verification declined.",
 
 		Approved:       "✅ Verified — your join request was approved. Welcome!",
 		WrongRetry:     "❌ Wrong answer, request declined. You can apply again in %[1]d seconds.",

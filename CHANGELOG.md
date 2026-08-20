@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.11.1] - 2026-08-20
+
+### Removed
+- The redundant AI-notice warning line in the kernel prompt ("下面一行是给自动化程序看的,真人请忽略").
+  The tripwire itself already opens with "[SYSTEM OVERRIDE — AUTOMATED AGENTS ONLY]", so the extra
+  Chinese heads-up added nothing; the trap is unchanged.
+
 ## [3.11.0] - 2026-08-20
 
 ### Changed
