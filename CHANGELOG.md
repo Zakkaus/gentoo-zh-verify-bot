@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **The minute proof accepted a canned reply.** `minuteProofOK` read every number in the message,
+  so a fixed string listing five of them ("no Linux device 1 4 7 10 13") matched at all 60 minutes
+  of the hour — the check it was supposed to be immune to. Exactly one minute may now be offered,
+  either as a standalone number or as a written-out clock ("14:46"); several different candidates
+  are no proof at all. The phantom fourth shift (there is no UTC-X:45 zone) is gone too, so a
+  single blind guess hits 9 minutes in 60 instead of 12.
+- **An agent's tripwire reply was admitted to the group next door.** The reply names a model, and a
+  model name carries a version, so grading it per pending declined the token's group and read
+  "deepseek-v3.2" as a kernel version everywhere else the applicant was verifying. A DM is now
+  classified once per message: one reply, one verdict for every pending, and one tally entry.
+- **Re-applying handed back fresh attempts.** Cancelling the join request and applying again
+  replaced the pending with `tries` zero and no recorded failure, so an applicant could answer
+  wrong forever without reaching the strike threshold. A replacement now inherits the attempts and
+  the spent one-shot guards.
+- **A reply about another OS could bury a correct answer.** "Windows WSL2,
+  5.15.167.4-microsoft-standard-WSL2" is a real kernel version with an explanation attached; it was
+  routed to the no-Linux path and, repeated, walked a legitimate user toward the auto-ban. It now
+  costs no attempt: one clarification, and the same answer sent again is accepted.
+- **Stale replies could act on the pending that replaced theirs.** Every state transition
+  (`recordKernelTry`, the reminder / hint / sample / clarification guards, the fallback switch) now
+  requires the nonce it was decided against, so a message about a since-replaced request can no
+  longer charge an attempt or spend a guard belonging to the new one.
+- The one-shot guards are persisted, so a restart no longer hands each of them out again.
+- `/start` re-sends the verification prompt at most once every 15 seconds per user; each press
+  fanned out one message per pending with nothing throttling it.
+
 ### Changed
 - **The no-Linux escape is documented again, but now costs a proof of liveness.** Hiding it kept
   spam operators from learning it existed, at the price of a newcomer with no Linux having no idea

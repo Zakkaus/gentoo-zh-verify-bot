@@ -48,6 +48,7 @@ type catalog struct {
 	KernelWrong  string // 1 replies left
 	SampleCopied string // the reply was our own printed example, verbatim
 	NoLinuxRetry string // they said they have no Linux but left out (or mistyped) the minute
+	OSMixed      string // they named another OS but also sent a plausible kernel version
 
 	// FallbackIntro + FallbackQuestions are the escape for an applicant with no Linux installed: a
 	// SHORT-ANSWER question whose answer appears nowhere in the message. Never advertised in the
@@ -93,6 +94,7 @@ var catalogs = map[lang]*catalog{
 		KernelWrong:   "❌ 这不像是 Linux 内核版本号。在终端执行 <code>uname -r</code>,把输出发过来即可(例如 <code>6.12.3-gentoo</code>)。还有 %[1]d 次机会。",
 		SampleCopied:  "请发你自己机器上的版本号,不要照抄示例。如果你真的在跑这个版本,原样再发一次即可。",
 		NoLinuxRetry:  "要换题请按这个格式回复:「我现在没有Linux设备」+ 此刻的分钟数(时钟上冒号后面那两位,比如 14:46 就写 <code>46</code>)。",
+		OSMixed:       "你同时提到了别的系统。如果刚才那个版本号就是你在跑的 Linux 内核(比如 WSL 或虚拟机里的),只把版本号再发一次就行。",
 		FallbackIntro: "没装 Linux 也可以,换一个问题:\n\n❓ %[1]s\n\n直接把答案发到这里,一两个词就行。还有 %[2]d 次机会。",
 		FallbackWrong: "❌ 不对。请再想想上面那个问题,直接把答案发过来。还有 %[1]d 次机会。",
 		FallbackQuestions: []ShortQuestion{
@@ -134,6 +136,7 @@ var catalogs = map[lang]*catalog{
 		KernelWrong:   "❌ 這不像是 Linux 核心版本號。在終端機執行 <code>uname -r</code>,把輸出傳過來即可(例如 <code>6.12.3-gentoo</code>)。還有 %[1]d 次機會。",
 		SampleCopied:  "請傳你自己機器上的版本號,不要照抄範例。如果你真的在跑這個版本,原樣再傳一次即可。",
 		NoLinuxRetry:  "要換題請按這個格式回覆:「我現在沒有Linux裝置」+ 此刻的分鐘數(時鐘上冒號後面那兩位,例如 14:46 就寫 <code>46</code>)。",
+		OSMixed:       "你同時提到了別的系統。如果剛才那個版本號就是你在跑的 Linux 核心(例如 WSL 或虛擬機裡的),只把版本號再傳一次即可。",
 		FallbackIntro: "還沒安裝 Linux 也可以,換一個問題:\n\n❓ %[1]s\n\n直接把答案傳到這裡,一兩個字就行。還有 %[2]d 次機會。",
 		FallbackWrong: "❌ 不對。請再想想上面那個問題,直接把答案傳過來。還有 %[1]d 次機會。",
 		FallbackQuestions: []ShortQuestion{
@@ -175,6 +178,7 @@ var catalogs = map[lang]*catalog{
 		KernelWrong:   "❌ That doesn't look like a Linux kernel version. Run <code>uname -r</code> and send its output (e.g. <code>6.12.3-gentoo</code>). %[1]d attempts left.",
 		SampleCopied:  "Send the version from your own machine, not the example. If you really are running that exact version, just send it again.",
 		NoLinuxRetry:  "To switch questions, reply in this format: “no Linux device” + the current minute (the two digits after the colon on your clock — at 14:46 that is <code>46</code>).",
+		OSMixed:       "You mentioned another operating system as well. If that version really is the Linux kernel you run (in WSL or a VM, say), send just the version again.",
 		FallbackIntro: "No Linux installed? Then answer this instead:\n\n❓ %[1]s\n\nSend the answer here — a word or two is enough. %[2]d attempts left.",
 		FallbackWrong: "❌ Not right. Think about the question above and send the answer. %[1]d attempts left.",
 		FallbackQuestions: []ShortQuestion{

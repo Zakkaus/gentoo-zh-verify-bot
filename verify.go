@@ -66,6 +66,7 @@ type pending struct {
 	prompted        bool     // kernel mode: the question has actually been DM'd, so a reply can be graded as an answer
 	sampleBounced   bool     // kernel mode: the "you sent back our own example" nudge was already spent
 	noLinuxReminded bool     // kernel mode: the "no-Linux replies need the current minute" reminder was already spent
+	osClarified     bool     // kernel mode: the "you named another OS but sent a real kernel version" clarification was already spent
 	fbAnswers       []string // kernel mode: once the short-answer fallback replaced the kernel question, the answers it is graded against
 	nonce           string   // per-pending token; a quiz button only counts if its nonce matches
 	name            string   // applicant display name, kept so a post-outage re-notify can address them
@@ -93,13 +94,19 @@ type pendingRec struct {
 	Lang       string   `json:"lang,omitempty"`       // applicant locale; empty => Simplified Chinese
 	FbAnswers  []string `json:"fb_answers,omitempty"` // set once the applicant moved to the short-answer fallback
 	Prompted   bool     `json:"prompted,omitempty"`   // the question was DM'd, so a reply counts as an answer
-	Tries      int      `json:"tries,omitempty"`
-	QText      string   `json:"q_text"`
-	QOpts      []string `json:"q_opts"`
-	CorrectIdx int      `json:"correct_idx"`
-	Nonce      string   `json:"nonce"`
-	Name       string   `json:"name,omitempty"`
-	Deadline   int64    `json:"deadline"`
+	// The free-reply guards are persisted too: a restart used to hand each of them out again, so a
+	// script could replay a malformed declaration or a copied example once per restart for free.
+	Hinted          bool     `json:"hinted,omitempty"`
+	SampleBounced   bool     `json:"sample_bounced,omitempty"`
+	NoLinuxReminded bool     `json:"no_linux_reminded,omitempty"`
+	OSClarified     bool     `json:"os_clarified,omitempty"`
+	Tries           int      `json:"tries,omitempty"`
+	QText           string   `json:"q_text"`
+	QOpts           []string `json:"q_opts"`
+	CorrectIdx      int      `json:"correct_idx"`
+	Nonce           string   `json:"nonce"`
+	Name            string   `json:"name,omitempty"`
+	Deadline        int64    `json:"deadline"`
 }
 
 // newNonce returns a short random token used to bind a DM quiz button to the pending it was
@@ -140,6 +147,7 @@ type Verifier struct {
 	acWhite      map[int64]bool
 	chanAlert    map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
 	dmLast       map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
+	challengeAt  map[int64]time.Time   // user -> last verification prompt sent (resend throttle), guarded by mu
 	queryHits    map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
 	lookupOn     bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
 	lookupTTL    time.Duration         // how long before that deletion, guarded by mu
@@ -190,7 +198,8 @@ func replyParams(msgID int) *telego.ReplyParameters {
 func NewVerifier(cfg *Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
-		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, queryHits: map[int64][]time.Time{},
+		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, challengeAt: map[int64]time.Time{},
+		queryHits:  map[int64][]time.Time{},
 		adminCache: map[pkey]time.Time{},
 		vfail:      map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders,
@@ -479,7 +488,8 @@ func (v *Verifier) save() {
 			continue
 		}
 		recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-			Mode: p.mode, Lang: string(p.lang), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
+			Mode: p.mode, Lang: string(p.lang), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries,
+			Hinted: p.hinted, SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
 			Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 	}
 	v.mu.Unlock()
@@ -524,7 +534,8 @@ func (v *Verifier) load(bot verifyBot) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
 		}
-		p := &pending{groupMsgID: r.GroupMsgID, mode: mode, lang: lang(r.Lang), fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries, qText: r.QText, qOpts: r.QOpts,
+		p := &pending{groupMsgID: r.GroupMsgID, mode: mode, lang: lang(r.Lang), fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries,
+			hinted: r.Hinted, sampleBounced: r.SampleBounced, noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts,
 			correctIdx: r.CorrectIdx, nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
 		reason := "timeout"
@@ -748,15 +759,22 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	key := pkey{gid, uid}
 	v.mu.Lock()
 	oldMsgID := 0
+	used, hinted, bounced, reminded, clarified := 0, false, false, false, false
 	if old, ok := v.pend[key]; ok {
 		old.done = true // mark replaced, so a stale callback for it bails even before the nonce check
 		if old.timer != nil {
 			old.timer.Stop()
 		}
 		oldMsgID = old.groupMsgID
+		// Carry the attempts and the one-shot guards across the replacement. Cancelling the join
+		// request and re-applying used to hand back three fresh attempts without recording a failure,
+		// so an applicant could keep answering wrong and never reach the strike threshold.
+		used, hinted, bounced = old.tries, old.hinted, old.sampleBounced
+		reminded, clarified = old.noLinuxReminded, old.osClarified
 	}
 	p := &pending{groupMsgID: groupMsgID, mode: mode, lang: ul, qText: text, qOpts: opts, correctIdx: correctIdx,
-		nonce: newNonce(), name: name, deadline: time.Now().Add(v.timeout())}
+		nonce: newNonce(), name: name, deadline: time.Now().Add(v.timeout()),
+		tries: used, hinted: hinted, sampleBounced: bounced, noLinuxReminded: reminded, osClarified: clarified}
 	v.armExpiry(bot, p, gid, uid, v.timeout(), "timeout")
 	v.pend[key] = p
 	v.mu.Unlock()
@@ -796,8 +814,31 @@ func (v *Verifier) firstPending(uid int64) (gid int64, ul lang, ok bool) {
 // sendDMChallenge runs when the applicant opens the bot via the deep link.
 // Two-step: if a channel is required and not yet joined, ask them to follow it
 // first (with a "I've followed, continue" button); otherwise send the quiz.
+// challengeResendOK reports whether this user may be sent the verification prompt again, and
+// records the send. /start is free to press, and every press fans out one message per pending, so
+// the resend is throttled — a flood in the bot's own DM must not turn into a Bot API flood.
+func (v *Verifier) challengeResendOK(uid int64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if last, ok := v.challengeAt[uid]; ok && time.Since(last) < challengeResendCooldown {
+		return false
+	}
+	if len(v.challengeAt) >= dmMapMax {
+		v.challengeAt = map[int64]time.Time{} // bounded like dmLast
+	}
+	v.challengeAt[uid] = time.Now()
+	return true
+}
+
+// challengeResendCooldown throttles repeated /start presses; short enough that a user who really
+// did just follow the channel isn't left waiting.
+const challengeResendCooldown = 15 * time.Second
+
 func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64) {
 	gid, ul, ok := v.firstPending(uid)
+	if ok && !v.challengeResendOK(uid) {
+		return // pressed again within the cooldown: the prompt they already have is still valid
+	}
 	if !ok {
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), tr(ul).NoPending))
 		return

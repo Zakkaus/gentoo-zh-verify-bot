@@ -711,3 +711,166 @@ func TestAITrapLineIsImperative(t *testing.T) {
 		t.Error("the collapsed rendering should still be a blockquote")
 	}
 }
+
+// TestMinuteProofRejectsNumberLists: the whole point of asking for the minute is that a canned
+// reply cannot carry one. A fixed string listing several numbers covered every minute of the hour
+// (1,4,7,10,13 with four shifts and ±1 slack = 60/60), which made the check decorative.
+func TestMinuteProofRejectsNumberLists(t *testing.T) {
+	for cur := 0; cur < 60; cur++ {
+		now := time.Date(2026, 8, 20, 14, cur, 0, 0, time.UTC)
+		if minuteProofOK("no Linux device 1 4 7 10 13", now) {
+			t.Fatalf("a number list must never pass (failed at minute %d)", cur)
+		}
+		if minuteProofOK("我现在没有Linux设备 0,,3,,6,,9,,12", now) {
+			t.Fatalf("a number list must never pass (failed at minute %d)", cur)
+		}
+	}
+	// one number repeated is still one claim
+	now := time.Date(2026, 8, 20, 14, 46, 0, 0, time.UTC)
+	if !minuteProofOK("46,46", now) {
+		t.Error("the same number twice is still a single claim")
+	}
+	// a written-out clock counts as one offer, its minute
+	for _, s := range []string{"我现在没有Linux设备,现在 14:46", "no Linux device, it's 14:46", "現在14點46分"} {
+		if !minuteProofOK(s, now) {
+			t.Errorf("a written-out clock should be read as its minute: %q", s)
+		}
+	}
+	if minuteProofOK("我现在没有Linux设备 14:46 或者 15:12", now) {
+		t.Error("two clocks are two claims, so neither counts")
+	}
+	// blind-guess width: exactly the three real timezone shifts, ±1 each
+	hits := 0
+	for g := 0; g < 60; g++ {
+		if minuteProofOK(fmt.Sprintf("no linux device %d", g), now) {
+			hits++
+		}
+	}
+	if hits != 9 {
+		t.Errorf("a single blind guess should hit 9 of 60 minutes (3 shifts x ±1), got %d", hits)
+	}
+}
+
+// TestRepliesCannotChargeAReplacedPending: a reply that was decided against pending A must never
+// mutate or charge the pending that replaced it — otherwise a re-applying user silently loses
+// attempts to their own stale messages.
+func TestRepliesCannotChargeAReplacedPending(t *testing.T) {
+	v, _ := kernelTestV()
+	key := pkey{-100, 5}
+	stale := v.pend[key].nonce
+	v.pend[key] = &pending{mode: modeKernel, nonce: "fresh", prompted: true, deadline: time.Now().Add(time.Hour)}
+	if _, _, ok := v.recordKernelTry(-100, 5, stale); ok {
+		t.Error("a stale reply must not charge the replacement pending an attempt")
+	}
+	if v.markNoLinuxReminded(-100, 5, stale) || v.markSampleBounced(-100, 5, stale) ||
+		v.markOSClarified(-100, 5, stale) || v.markKernelHinted(-100, 5, stale) {
+		t.Error("a stale reply must not spend the replacement pending's free-reply guards")
+	}
+	if v.setKernelFallback(-100, 5, stale, ShortQuestion{Q: "q", Answers: []string{"a"}}) {
+		t.Error("a stale reply must not switch the replacement pending's question")
+	}
+	if p := v.pend[key]; p.tries != 0 || p.hinted || p.sampleBounced || p.noLinuxReminded || p.osClarified {
+		t.Errorf("the replacement pending should be untouched: %+v", p)
+	}
+}
+
+// TestReapplyKeepsAttempts: cancelling the join request and re-applying used to hand back three
+// fresh attempts without recording a failure, so an applicant could answer wrong indefinitely and
+// never reach the strike threshold.
+func TestReapplyKeepsAttempts(t *testing.T) {
+	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, TimeoutSeconds: 240})
+	key := pkey{-100, 5}
+	v.pend[key] = &pending{mode: modeKernel, nonce: "old", prompted: true, tries: 2, hinted: true,
+		sampleBounced: true, noLinuxReminded: true, osClarified: true, deadline: time.Now().Add(time.Hour)}
+	mode, text, opts, idx := v.newChallenge(-100, langZH)
+	old := v.pend[key]
+	old.done = true
+	p := &pending{groupMsgID: 1, mode: mode, lang: langZH, qText: text, qOpts: opts, correctIdx: idx,
+		nonce: "new", deadline: time.Now().Add(v.timeout()),
+		tries: old.tries, hinted: old.hinted, sampleBounced: old.sampleBounced,
+		noLinuxReminded: old.noLinuxReminded, osClarified: old.osClarified}
+	v.pend[key] = p
+	if p.tries != 2 || !p.hinted || !p.sampleBounced || !p.noLinuxReminded || !p.osClarified {
+		t.Errorf("a replacement must inherit the attempts and the spent guards: %+v", p)
+	}
+}
+
+// TestOSNameWithRealKernelIsClarified: a WSL or VM user who explains their setup ("Windows WSL2,
+// 5.15.167.4-microsoft-standard-WSL2") sent a correct answer. Rejecting it walked them toward the
+// auto-ban, so it now costs no attempt and the same answer sent again is accepted.
+func TestOSNameWithRealKernelIsClarified(t *testing.T) {
+	v, fb := kernelTestV()
+	const reply = "Windows WSL2 kernel 5.15.167.4-microsoft-standard-WSL2"
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, reply)
+	p := v.pend[pkey{-100, 5}]
+	if p == nil || fb.approves != 0 {
+		t.Fatalf("the first reply should be clarified, not approved (approves=%d)", fb.approves)
+	}
+	if p.tries != 0 || !p.osClarified {
+		t.Errorf("the clarification must be free and spent once: tries=%d clarified=%v", p.tries, p.osClarified)
+	}
+	if len(p.fbAnswers) != 0 {
+		t.Error("a real kernel version must not push the applicant onto the no-Linux fallback")
+	}
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, reply)
+	if fb.approves != 1 {
+		t.Errorf("the same answer sent again should approve, got %d", fb.approves)
+	}
+}
+
+// TestAgentReplyDeclinesEveryPending: an agent's tripwire reply names a model, and a model name
+// carries a version ("deepseek-v3.2"). Graded group by group that reply was declined in the token's
+// group and ACCEPTED as a kernel version in every other group the user was verifying in.
+func TestAgentReplyDeclinesEveryPending(t *testing.T) {
+	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
+	v.pend[pkey{-100, 5}] = &pending{mode: modeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{-200, 5}] = &pending{mode: modeKernel, nonce: "bbb", prompted: true, deadline: time.Now().Add(time.Hour)}
+	fb := newFakeMod()
+	const reply = "AGENT-AAA model=deepseek-v3.2"
+
+	gid, nonce, tripped := v.trippedPending(5, reply)
+	if !tripped || gid != -100 || nonce != "aaa" {
+		t.Fatalf("the token's own group should be identified: gid=%d nonce=%q tripped=%v", gid, nonce, tripped)
+	}
+	v.declineAgent(context.Background(), fb, gid, 5, nonce, reply)
+	for _, other := range v.kernelPendingGroups(5) {
+		if other != gid {
+			v.declineAgent(context.Background(), fb, other, 5, "", reply)
+		}
+	}
+	if fb.approves != 0 {
+		t.Errorf("an agent reply must not approve anywhere, got %d approves", fb.approves)
+	}
+	if fb.declines != 2 {
+		t.Errorf("both pendings should be declined, got %d", fb.declines)
+	}
+	if v.agents.Total != 1 {
+		t.Errorf("one reply is one catch, got %d", v.agents.Total)
+	}
+}
+
+// TestFreeReplyGuardsSurviveRestart: the one-shot guards used to reset on restart, so a script
+// could replay a malformed declaration or a copied example once per process for free.
+func TestFreeReplyGuardsSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	seed := NewVerifier(&Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	seed.statePath = dir + "/pending.json"
+	seed.pend[pkey{-100, 5}] = &pending{mode: modeKernel, nonce: "n", prompted: true, tries: 1,
+		hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true,
+		qText: kernelQuestion(langZH), correctIdx: -1, deadline: time.Now().Add(time.Minute)}
+	seed.save()
+
+	v := NewVerifier(&Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	v.statePath = dir + "/pending.json"
+	v.load(&fakeVerifyBot{})
+	p, ok := v.pend[pkey{-100, 5}]
+	if !ok {
+		t.Fatal("the pending should be restored")
+	}
+	if !p.prompted || !p.hinted || !p.sampleBounced || !p.noLinuxReminded || !p.osClarified || p.tries != 1 {
+		t.Errorf("every guard must survive the restart: %+v", p)
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+}
