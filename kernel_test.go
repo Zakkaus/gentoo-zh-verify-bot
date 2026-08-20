@@ -70,6 +70,8 @@ func TestKernelAnswerOK(t *testing.T) {
 		"2.9",    // 2.x stopped at 2.6
 		"42.7",   // not a kernel line, past or future
 		"1234.5", // a number that merely contains a dot
+		"7.1.30", // the decoy the prompt prints — never a real running kernel
+		"7.1.30-gentoo",
 		"windows 11",
 		"我用的是 Windows",
 		"aarch64", // `uname -m`, not `uname -r` — an architecture is not a version
@@ -373,7 +375,8 @@ func TestNoLinuxFallback(t *testing.T) {
 	for _, s := range []string{"还没装", "我還沒裝 Linux", "not installed yet", "I use Windows", "不知道",
 		"我不用 Linux", "我没用过 Linux", "I don't use Linux", "我用的 macOS",
 		"我沒有安裝", "我沒有安裝 Linux", "我没有安装 Linux", "我还没有装", "還沒安裝", "沒用過 Linux",
-		"我不懂", "我电脑上没有 Linux", "no idea", "I never used Linux", "what?"} {
+		"我不懂", "我电脑上没有 Linux", "no idea", "I never used Linux", "what?",
+		"无 Linux 设备", "無 Linux 裝置", "无 Linux 设备46"} {
 		if !saysNoLinux(s) {
 			t.Errorf("saysNoLinux(%q) = false, want true", s)
 		}
@@ -436,21 +439,21 @@ func TestFallbackAnswerMatching(t *testing.T) {
 	}
 }
 
-// TestCopiedSampleBounced: sending back the format example printed in the prompt is bounced once
-// with a nudge (a copy-paste bot's laziest move), but a person who really runs that version gets in
-// by sending it again.
+// TestCopiedSampleBounced: the prompt prints an impossible decoy version as its format example.
+// Sending it back is bounced once with a nudge; a repeat is declined — the decoy is never a real
+// running kernel, so there is no "they really run it" path to let one through.
 func TestCopiedSampleBounced(t *testing.T) {
 	v, fb := kernelTestV()
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "6.12.3-gentoo")
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "7.1.30-gentoo")
 	if fb.approves != 0 {
 		t.Fatal("the printed example must not be accepted on first sight")
 	}
 	if p := v.pend[pkey{-100, 5}]; p == nil || p.tries != 0 || !p.sampleBounced {
 		t.Fatalf("the nudge should cost no attempt and be marked spent: %+v", p)
 	}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "6.12.3-gentoo")
-	if fb.approves != 1 {
-		t.Errorf("sending it again means they really run it — should approve, got %d", fb.approves)
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "7.1.30-gentoo")
+	if fb.approves != 0 {
+		t.Errorf("the decoy is an impossible version — a repeat must not approve, got %d", fb.approves)
 	}
 	// a version that is NOT the printed example is accepted immediately
 	v2, fb2 := kernelTestV()
@@ -464,10 +467,10 @@ func TestCopiedSampleBounced(t *testing.T) {
 // own tripwire token — a shared token would let a spam operator filter one fixed string.
 func TestKernelPromptLocalised(t *testing.T) {
 	zh := kernelPromptHTML(langZH, kernelQuestion(langZH), 3, "abc123", true)
-	if !strings.Contains(zh, "还有 3 次机会") || !strings.Contains(zh, "AGENT-ABC123") {
+	if !strings.Contains(zh, "剩余 3 次机会") || !strings.Contains(zh, "AGENT-ABC123") {
 		t.Errorf("zh prompt missing its wording or token: %s", zh)
 	}
-	if !strings.Contains(kernelPromptHTML(langZHT, kernelQuestion(langZHT), 3, "n", true), "還有 3 次機會") {
+	if !strings.Contains(kernelPromptHTML(langZHT, kernelQuestion(langZHT), 3, "n", true), "剩餘 3 次機會") {
 		t.Error("zh-hant prompt should use Traditional wording")
 	}
 	en := kernelPromptHTML(langEN, kernelQuestion(langEN), 2, "n", true)
@@ -480,7 +483,7 @@ func TestKernelPromptLocalised(t *testing.T) {
 	if strings.Contains(plain, "<blockquote") {
 		t.Error("the fallback rendering must not use the blockquote entity")
 	}
-	if !strings.Contains(plain, "AGENT-ABC123") || !strings.Contains(plain, "还有 3 次机会") {
+	if !strings.Contains(plain, "AGENT-ABC123") || !strings.Contains(plain, "剩余 3 次机会") {
 		t.Errorf("the fallback rendering lost content: %s", plain)
 	}
 	if got := stripHTML("a <b>b</b> &lt;c&gt; <blockquote expandable>d</blockquote> &amp;"); got != "a b <c> d &" {
@@ -564,7 +567,7 @@ func TestCopiedSampleGuardCoversFallback(t *testing.T) {
 	if len(v.pend[pkey{-100, 5}].fbAnswers) == 0 {
 		t.Fatal("the applicant should have been moved to the fallback question")
 	}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "6.12.3-gentoo") // the printed example
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "7.1.30-gentoo") // the printed example
 	if fb.approves != 0 {
 		t.Error("pasting the printed example must not approve from the fallback path either")
 	}
