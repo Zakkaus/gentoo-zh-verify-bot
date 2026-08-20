@@ -2,7 +2,7 @@
   "groups": [
     {"id": -1001234567890},
     {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"},
-    {"id": -1005556667778, "trusted_member_group_ids": [-1001234567890]}
+    {"id": -1005556667778, "trusted_member_group_ids": [-1001234567890], "verify_mode": "quiz"}
   ],
   "required_channel_id": 0,
   "channel_display": "@YourChannel",
@@ -14,6 +14,7 @@
   "private_query_per_min": 3,
   "ban_seconds": 0,
   "mute_seconds": 3600,
+  "verify_mode": "kernel",
   "verify_retry_seconds": 180,
   "verify_max_fails": 3,
   "required_channel_fail_open": true,
@@ -34,6 +35,10 @@
   "overlays": [
     {"name": "gentoo-zh", "repo": "gentoo-zh/overlay", "branch": "master"},
     {"name": "guru", "repo": "gentoo/guru", "branch": "master"}
+  ],
+  "fallback_questions": [
+    {"q": "Gentoo 中文社区的官网网址是什么?(填域名即可)", "answers": ["gentoozh.org", "gentoozh"]},
+    {"q": "Gentoo 官方的官网网址是什么?(填域名即可)", "answers": ["gentoo.org"]}
   ],
   "questions": [
     {"q": "Gentoo 中文社区的 overlay 叫什么名字?", "options": ["gentoo-zh", "guru", "pacman", "gentoo-us"], "answer": 0},

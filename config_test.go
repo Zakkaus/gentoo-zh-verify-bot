@@ -73,8 +73,9 @@ func TestLoadConfigPerGroup(t *testing.T) {
 }
 
 // TestLoadConfigValidation checks that a misconfiguration fails fast at load (instead of
-// half-breaking verification at runtime): a required channel with no reachable link, and
-// a group with no questions anywhere.
+// half-breaking verification at runtime): a required channel with no reachable link, a QUIZ-mode
+// group with no questions anywhere, and an unknown verify_mode. A kernel-mode group needs no
+// question pool, so it must still load without one.
 func TestLoadConfigValidation(t *testing.T) {
 	if _, err := LoadConfig(writeConfig(t, map[string]any{
 		"groups":    []map[string]any{{"id": -100, "required_channel_id": -400}}, // no @handle / invite url
@@ -83,9 +84,29 @@ func TestLoadConfigValidation(t *testing.T) {
 		t.Errorf("expected error for required channel with no reachable link")
 	}
 	if _, err := LoadConfig(writeConfig(t, map[string]any{
-		"group_ids": []int{-100}, // no questions at all
+		"group_ids":   []int{-100},
+		"verify_mode": modeQuiz, // quiz mode but no questions at all
 	})); err == nil {
-		t.Errorf("expected error for a group with no questions")
+		t.Errorf("expected error for a quiz-mode group with no questions")
+	}
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids":   []int{-100},
+		"verify_mode": modeKernel, // kernel mode asks for uname -r — no pool needed
+	})); err != nil {
+		t.Errorf("kernel mode should load without questions: %v", err)
+	}
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids":   []int{-100},
+		"questions":   sampleQ,
+		"verify_mode": "buttons", // not a mode
+	})); err == nil {
+		t.Errorf("expected error for an unknown verify_mode")
+	}
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"groups":    []map[string]any{{"id": -100, "verify_mode": "kenrel"}}, // typo in a per-group mode
+		"questions": sampleQ,
+	})); err == nil {
+		t.Errorf("expected error for an unknown per-group verify_mode")
 	}
 }
 
