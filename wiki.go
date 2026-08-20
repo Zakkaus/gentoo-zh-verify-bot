@@ -238,7 +238,7 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 		if anyOK { // at least one wiki answered (just no match) -> a definitive "not found"
 			b.WriteString("\n\n没找到相关条目,换个关键词试试?")
 		} else { // every source's fetch failed -> honest transient message, not a false negative
-			b.WriteString("\n\n暂时取不到 wiki 搜索结果,稍后再试。")
+			b.WriteString("\n\n暂时无法获取 wiki 搜索结果,请稍后重试。")
 		}
 	}
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())

@@ -112,9 +112,9 @@ func (v *Verifier) antispam(ctx *th.Context, update telego.Update) error {
 				log.Printf("antispam: ban sender_chat %d in %d: %v", sc.ID, msg.Chat.ID, err)
 			}
 			if banned {
-				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除并封禁频道马甲「%s」(id %d,群 %d)。误封用 /bc allow %d 解封+白名单。", sc.Title, sc.ID, msg.Chat.ID, sc.ID))
+				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除消息并封禁以频道身份发言的「%s」(id %d,群 %d)。如属误封,用 /bc allow %d 解除封禁并加入白名单。", sc.Title, sc.ID, msg.Chat.ID, sc.ID))
 			} else { // honest feedback: don't claim a ban the API rejected
-				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除频道马甲「%s」的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", sc.Title, sc.ID, msg.Chat.ID))
+				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除「%s」以频道身份发送的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", sc.Title, sc.ID, msg.Chat.ID))
 			}
 			log.Printf("antispam: channel sender %d (%q) in group %d deleted, banned=%v", sc.ID, sc.Title, msg.Chat.ID, banned)
 			return nil // blocked — don't run the normal handlers
@@ -173,9 +173,9 @@ func (v *Verifier) onBc(ctx *th.Context, update telego.Update) error {
 	switch {
 	case len(fields) == 0:
 		if v.toggleAntispam() {
-			v.notify(c, bot, gid, "🛡 频道马甲封禁:已开启(需在 BotFather 关闭 bot 隐私模式才能看到马甲消息)。")
+			v.notify(c, bot, gid, "🛡 频道身份发言封禁:已开启(需在 BotFather 关闭 bot 隐私模式,机器人才能收到这类消息)。")
 		} else {
-			v.notify(c, bot, gid, "频道马甲封禁:已关闭。")
+			v.notify(c, bot, gid, "频道身份发言封禁:已关闭。")
 		}
 	case (fields[0] == "allow" || fields[0] == "deny") && len(fields) >= 2:
 		id, ok := parseChannelID(fields[1])

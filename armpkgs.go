@@ -39,7 +39,7 @@ func (v *Verifier) gentooArmStatus(ctx context.Context, name string) (status, ur
 	case testing != "":
 		return "🧪 仅 ~arm64 " + testing, url
 	default:
-		return "❌ 未 keyword arm64", url
+		return "❌ 未设置 arm64 keyword", url
 	}
 }
 
@@ -226,7 +226,7 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	for _, r := range results {
 		fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>:%s", esc(r.url), esc(r.label), esc(r.status))
 	}
-	b.WriteString("\n<i>Gentoo 未标但其它发行版支持 → 多半实际可用,可 ACCEPT_KEYWORDS=\"~arm64\" 自行编译。</i>")
+	b.WriteString("\n<i>Gentoo 未设置 arm64 keyword;其它发行版有包不等于该 ebuild 可用,需自行测试(必要时在 package.accept_keywords 中写 ** 强制)。</i>")
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }

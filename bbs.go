@@ -84,7 +84,7 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(h.url), html.EscapeString(h.title))
 		}
 	case !archcnOK: // the fetch failed — honest transient message, not a false "no results"
-		b.WriteString("\n\nArch Linux CN 论坛暂时取不到结果(稍后再试)。")
+		b.WriteString("\n\n暂时无法获取 Arch Linux CN 论坛的结果(请稍后重试)。")
 	default:
 		b.WriteString("\n\nArch Linux CN 论坛暂无匹配结果。")
 	}
