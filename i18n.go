@@ -47,6 +47,8 @@ type catalog struct {
 	KernelPrompt string // 1 question, 2 replies left
 	KernelWrong  string // 1 replies left
 	SampleCopied string // the reply was our own printed example, verbatim
+	NoLinuxRetry string // they said they have no Linux but left out (or mistyped) the minute
+	OSMixed      string // they named another OS but also sent a plausible kernel version
 
 	// FallbackIntro + FallbackQuestions are the escape for an applicant with no Linux installed: a
 	// SHORT-ANSWER question whose answer appears nowhere in the message. Never advertised in the
@@ -88,9 +90,11 @@ var catalogs = map[lang]*catalog{
 		KernelQuestion: "你正在运行的 Linux 内核版本号是多少?",
 
 		QuizPrompt:    "请回答下面的问题完成入群验证:\n\n❓ %[1]s",
-		KernelPrompt:  "请回答下面的问题完成入群验证:\n\n❓ %[1]s\n\n在终端执行 <code>uname -r</code>,把版本号直接发到这里,例如 <code>6.12.3</code> 或 <code>6.12.3-gentoo</code> 这种格式。任何发行版的内核版本号都可以。\n还有 %[2]d 次机会,答错或超时将被拒绝。",
+		KernelPrompt:  "请回答下面的问题完成入群验证:\n\n❓ %[1]s\n\n在终端执行 <code>uname -r</code>,把版本号直接发到这里,例如 <code>6.12.3</code> 或 <code>6.12.3-gentoo</code> 这种格式。任何发行版的内核版本号都可以。\n手边没有 Linux 设备,就回复「<b>我现在没有Linux设备</b>」再加上此刻的<b>分钟数</b>(时钟上冒号后面那两位,比如 14:46 就写 46),我给你换一道题。\n还有 %[2]d 次机会,答错或超时将被拒绝。",
 		KernelWrong:   "❌ 这不像是 Linux 内核版本号。在终端执行 <code>uname -r</code>,把输出发过来即可(例如 <code>6.12.3-gentoo</code>)。还有 %[1]d 次机会。",
 		SampleCopied:  "请发你自己机器上的版本号,不要照抄示例。如果你真的在跑这个版本,原样再发一次即可。",
+		NoLinuxRetry:  "要换题请按这个格式回复:「我现在没有Linux设备」+ 此刻的分钟数(时钟上冒号后面那两位,比如 14:46 就写 <code>46</code>)。",
+		OSMixed:       "你同时提到了别的系统。如果刚才那个版本号就是你在跑的 Linux 内核(比如 WSL 或虚拟机里的),只把版本号再发一次就行。",
 		FallbackIntro: "没装 Linux 也可以,换一个问题:\n\n❓ %[1]s\n\n直接把答案发到这里,一两个词就行。还有 %[2]d 次机会。",
 		FallbackWrong: "❌ 不对。请再想想上面那个问题,直接把答案发过来。还有 %[1]d 次机会。",
 		FallbackQuestions: []ShortQuestion{
@@ -128,9 +132,11 @@ var catalogs = map[lang]*catalog{
 		KernelQuestion: "你正在執行的 Linux 核心(kernel)版本號是多少?",
 
 		QuizPrompt:    "請回答下面的問題完成入群驗證:\n\n❓ %[1]s",
-		KernelPrompt:  "請回答下面的問題完成入群驗證:\n\n❓ %[1]s\n\n在終端機執行 <code>uname -r</code>,把版本號直接傳到這裡,例如 <code>6.12.3</code> 或 <code>6.12.3-gentoo</code> 這種格式。任何發行版的核心版本號都可以。\n還有 %[2]d 次機會,答錯或逾時將被拒絕。",
+		KernelPrompt:  "請回答下面的問題完成入群驗證:\n\n❓ %[1]s\n\n在終端機執行 <code>uname -r</code>,把版本號直接傳到這裡,例如 <code>6.12.3</code> 或 <code>6.12.3-gentoo</code> 這種格式。任何發行版的核心版本號都可以。\n手邊沒有 Linux 裝置,就回覆「<b>我現在沒有Linux裝置</b>」再加上此刻的<b>分鐘數</b>(時鐘上冒號後面那兩位,例如 14:46 就寫 46),我換一題給你。\n還有 %[2]d 次機會,答錯或逾時將被拒絕。",
 		KernelWrong:   "❌ 這不像是 Linux 核心版本號。在終端機執行 <code>uname -r</code>,把輸出傳過來即可(例如 <code>6.12.3-gentoo</code>)。還有 %[1]d 次機會。",
 		SampleCopied:  "請傳你自己機器上的版本號,不要照抄範例。如果你真的在跑這個版本,原樣再傳一次即可。",
+		NoLinuxRetry:  "要換題請按這個格式回覆:「我現在沒有Linux裝置」+ 此刻的分鐘數(時鐘上冒號後面那兩位,例如 14:46 就寫 <code>46</code>)。",
+		OSMixed:       "你同時提到了別的系統。如果剛才那個版本號就是你在跑的 Linux 核心(例如 WSL 或虛擬機裡的),只把版本號再傳一次即可。",
 		FallbackIntro: "還沒安裝 Linux 也可以,換一個問題:\n\n❓ %[1]s\n\n直接把答案傳到這裡,一兩個字就行。還有 %[2]d 次機會。",
 		FallbackWrong: "❌ 不對。請再想想上面那個問題,直接把答案傳過來。還有 %[1]d 次機會。",
 		FallbackQuestions: []ShortQuestion{
@@ -168,9 +174,11 @@ var catalogs = map[lang]*catalog{
 		KernelQuestion: "What is the version of the Linux kernel you are running?",
 
 		QuizPrompt:    "Answer this question to finish joining:\n\n❓ %[1]s",
-		KernelPrompt:  "Answer this question to finish joining:\n\n❓ %[1]s\n\nRun <code>uname -r</code> in a terminal and send the version here — the format looks like <code>6.12.3</code> or <code>6.12.3-gentoo</code>. Any distribution's kernel version is fine.\n%[2]d attempts left; a wrong answer or a timeout declines the request.",
+		KernelPrompt:  "Answer this question to finish joining:\n\n❓ %[1]s\n\nRun <code>uname -r</code> in a terminal and send the version here — the format looks like <code>6.12.3</code> or <code>6.12.3-gentoo</code>. Any distribution's kernel version is fine.\nNo Linux machine at hand? Reply “<b>no Linux device</b>” followed by the <b>current minute</b> (the two digits after the colon on your clock — at 14:46 that is 46) and I'll give you a different question.\n%[2]d attempts left; a wrong answer or a timeout declines the request.",
 		KernelWrong:   "❌ That doesn't look like a Linux kernel version. Run <code>uname -r</code> and send its output (e.g. <code>6.12.3-gentoo</code>). %[1]d attempts left.",
 		SampleCopied:  "Send the version from your own machine, not the example. If you really are running that exact version, just send it again.",
+		NoLinuxRetry:  "To switch questions, reply in this format: “no Linux device” + the current minute (the two digits after the colon on your clock — at 14:46 that is <code>46</code>).",
+		OSMixed:       "You mentioned another operating system as well. If that version really is the Linux kernel you run (in WSL or a VM, say), send just the version again.",
 		FallbackIntro: "No Linux installed? Then answer this instead:\n\n❓ %[1]s\n\nSend the answer here — a word or two is enough. %[2]d attempts left.",
 		FallbackWrong: "❌ Not right. Think about the question above and send the answer. %[1]d attempts left.",
 		FallbackQuestions: []ShortQuestion{

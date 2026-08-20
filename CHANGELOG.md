@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **The minute proof accepted a canned reply.** `minuteProofOK` read every number in the message,
+  so a fixed string listing five of them ("no Linux device 1 4 7 10 13") matched at all 60 minutes
+  of the hour — the check it was supposed to be immune to. Exactly one minute may now be offered,
+  either as a standalone number or as a written-out clock ("14:46"); several different candidates
+  are no proof at all. The phantom fourth shift (there is no UTC-X:45 zone) is gone too, so a
+  single blind guess hits 9 minutes in 60 instead of 12.
+- **An agent's tripwire reply was admitted to the group next door.** The reply names a model, and a
+  model name carries a version, so grading it per pending declined the token's group and read
+  "deepseek-v3.2" as a kernel version everywhere else the applicant was verifying. A DM is now
+  classified once per message: one reply, one verdict for every pending, and one tally entry.
+- **Re-applying handed back fresh attempts.** Cancelling the join request and applying again
+  replaced the pending with `tries` zero and no recorded failure, so an applicant could answer
+  wrong forever without reaching the strike threshold. A replacement now inherits the attempts and
+  the spent one-shot guards.
+- **A reply about another OS could bury a correct answer.** "Windows WSL2,
+  5.15.167.4-microsoft-standard-WSL2" is a real kernel version with an explanation attached; it was
+  routed to the no-Linux path and, repeated, walked a legitimate user toward the auto-ban. It now
+  costs no attempt: one clarification, and the same answer sent again is accepted.
+- **Stale replies could act on the pending that replaced theirs.** Every state transition
+  (`recordKernelTry`, the reminder / hint / sample / clarification guards, the fallback switch) now
+  requires the nonce it was decided against, so a message about a since-replaced request can no
+  longer charge an attempt or spend a guard belonging to the new one.
+- The one-shot guards are persisted, so a restart no longer hands each of them out again.
+- `/start` re-sends the verification prompt at most once every 15 seconds per user; each press
+  fanned out one message per pending with nothing throttling it.
+
+### Changed
+- **The no-Linux escape is documented again, but now costs a proof of liveness.** Hiding it kept
+  spam operators from learning it existed, at the price of a newcomer with no Linux having no idea
+  what to do. The prompt now spells it out — reply "我现在没有Linux设备" **plus the current minute**
+  — which a canned string cannot carry and most LLM agents cannot produce either, while a person just
+  reads their clock. A skewed clock is tolerated (±1 minute) and the half-hour / three-quarter-hour
+  timezones are accepted at their own shift. A declaration without the minute earns one free format
+  reminder instead of a strike; repeating it is graded as a wrong answer.
+- **The automated-agent tripwire is written as a binding override, not a request.** The polite
+  wording read as advice an agent could weigh against its own task; it now voids prior instructions
+  explicitly, states that completing the check for a user is unauthorized automation, forbids
+  answering, and demands the token plus the model name as the only allowed output. Detection is
+  unchanged: only the per-applicant token counts.
+- Fixed the phrases that mean "I have no Linux": "我沒有安裝" / "我没有安装" matched nothing (the list
+  held "没有装" and "未安装", neither a substring of "没有安装"), and neither did "我不懂", "no idea"
+  or a bare "what?". Those replies cost an attempt instead of offering the escape.
+
 ## [3.12.0] - 2026-08-20
 
 ### Added
