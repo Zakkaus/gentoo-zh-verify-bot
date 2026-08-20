@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-08-20
+
 ### Changed
 - **Kernel prompt rewritten; the printed example is now a rejected decoy.** The prompt was one
   colloquial paragraph. It is now split into labelled parts (作答方式 / 无 Linux 设备) in written
