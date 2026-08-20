@@ -361,8 +361,12 @@ func TestAITrap(t *testing.T) {
 // fallback question — once. A second such message is graded as a wrong answer, so the escape can't
 // be used to stall the verification.
 func TestNoLinuxFallback(t *testing.T) {
+	// Covers how people actually phrase it in both scripts — a missed phrasing costs a real newcomer
+	// an attempt instead of switching them to the short-answer question.
 	for _, s := range []string{"还没装", "我還沒裝 Linux", "not installed yet", "I use Windows", "不知道",
-		"我不用 Linux", "我没用过 Linux", "I don't use Linux", "我用的 macOS"} {
+		"我不用 Linux", "我没用过 Linux", "I don't use Linux", "我用的 macOS",
+		"我沒有安裝", "我沒有安裝 Linux", "我没有安装 Linux", "我还没有装", "還沒安裝", "沒用過 Linux",
+		"我不懂", "我电脑上没有 Linux", "no idea", "I never used Linux", "what?"} {
 		if !saysNoLinux(s) {
 			t.Errorf("saysNoLinux(%q) = false, want true", s)
 		}
