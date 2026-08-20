@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- **Kernel prompt rewritten; the printed example is now a rejected decoy.** The prompt was one
+  colloquial paragraph. It is now split into labelled parts (作答方式 / 无 Linux 设备) in written
+  register across zh-CN / zh-TW / en, with the literal reply shown as `<code>` rather than 「」. The
+  format example is an impossible version (`7.1.30`): `kernelAnswerOK` rejects it and a verbatim copy
+  is bounced once with a nudge, so pasting the example back can never pass. The reworded no-Linux
+  escape adds `无 Linux` / `無 Linux` to the phrase table so it still fires.
 - **Wording pass over every Chinese string the bot shows.** A Codex audit against the repository's
   Chinese writing rules turned up 76 candidates; the ones that were factually wrong or that named
   the wrong thing are fixed. The channel sock-puppet feature is called 频道身份发言 instead of the

@@ -101,6 +101,9 @@ func kernelAnswerOK(text string) bool {
 		return false
 	}
 	for _, m := range kernelVerRe.FindAllStringSubmatch(text, -1) {
+		if decoyVersions[m[1]] {
+			continue // the printed example is never a real running kernel
+		}
 		parts := strings.Split(m[1], ".")
 		if len(parts) > 4 {
 			continue // 5+ components is not a kernel version
@@ -245,7 +248,13 @@ func aiTrapped(text, nonce string) bool {
 // back verbatim means the applicant copied our own message instead of reading their machine — the
 // laziest possible bot behaviour — so the first such reply is bounced with a nudge. A person who
 // genuinely runs that exact version just sends it again and is let through (see gradeKernelAnswer).
-var samplePrompts = []string{"6.12.3", "6.12.3-gentoo"}
+var samplePrompts = []string{"7.1.30", "7.1.30-gentoo"}
+
+// decoyVersions are the impossible versions the prompt prints as its FORMAT example. No real machine
+// runs one, so a reply that resolves to a decoy is a copy of our own message, not an answer:
+// kernelAnswerOK never accepts it, and gradeKernelAnswer declines it after the one-time SampleCopied
+// nudge. Bump this if a printed example ever becomes a real kernel line.
+var decoyVersions = map[string]bool{"7.1.30": true}
 
 // copiedSample reports whether the whole reply is one of our printed examples.
 func copiedSample(text string) bool {
@@ -310,6 +319,7 @@ var noLinuxPhrases = []string{
 	"还没装", "還沒裝", "没装", "沒裝", "没有装", "沒有裝", "未安装", "未安裝", "还没安装", "還沒安裝",
 	"没安装", "沒安裝", "没有安装", "沒有安裝", "还没有装", "還沒有裝", "不懂", "不懂linux", "没弄过", "沒弄過",
 	"没有linux", "沒有linux", "不用linux", "不用 linux", "没用linux", "沒用linux", "没跑linux",
+	"无linux", "無linux",
 	"没用过", "沒用過", "没接触过", "沒接觸過", "不知道", "不會", "不会", "什么是", "什麼是",
 	"notinstalled", "haven'tinstalled", "haventinstalled", "nolinux", "don'thavelinux", "donthavelinux",
 	"don'tuselinux", "dontuselinux", "neverusedlinux", "notusinglinux",
