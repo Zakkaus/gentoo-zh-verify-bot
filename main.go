@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -51,7 +52,15 @@ func main() {
 		log.Printf("GITHUB_TOKEN set — GitHub API rate limit raised (~5000/h)")
 	}
 
-	bot, err := telego.NewBot(token)
+	// A self-hosted Bot API server reaches Telegram over MTProto from the nearest data centre,
+	// which cuts the round trip that api.telegram.org costs from Asia. Unset means the cloud API,
+	// so this stays a no-op until the bot has been logged out of the cloud and pointed here.
+	var botOpts []telego.BotOption
+	if apiURL := strings.TrimSpace(os.Getenv("TELEGRAM_API_URL")); apiURL != "" {
+		botOpts = append(botOpts, telego.WithAPIServer(apiURL))
+		log.Printf("using Bot API server %s", apiURL)
+	}
+	bot, err := telego.NewBot(token, botOpts...)
 	if err != nil {
 		log.Fatalf("create bot: %v", err)
 	}
