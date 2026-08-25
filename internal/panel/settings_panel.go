@@ -337,8 +337,8 @@ func (v *Panel) dispatchRuntime(ctx context.Context, bot *telego.Bot, session *p
 		value := !group.Enabled().Value
 		next.Enabled = &value
 	case "df":
-		value := !group.DMFirst().Value
-		next.DMFirst = &value
+		value := map[string]string{"g": config.DeliveryGroup, "d": config.DeliveryDM, "b": config.DeliveryBoth}[data.value]
+		next.DeliveryMode = &value
 	case "vm":
 		value := map[string]string{"k": config.ModeKernel, "q": config.ModeQuiz, "m": config.ModeMixed}[data.value]
 		next.VerifyMode = &value
@@ -613,13 +613,15 @@ func (v *Panel) buildRuntime(session *panelSession, token string) (string, *tele
 	}
 	text := i18n.Messages.Panel.Settings.Screen.Runtime.Render(session.language, session.groupID,
 		v.sourcedBool(session.language, group.Enabled()), v.sourcedMode(session.language, group.VerifyMode()),
-		v.sourcedBool(session.language, group.DMFirst()), v.sourcedBool(session.language, group.NameSpoiler()),
+		v.sourcedDeliveryMode(session.language, group.DeliveryMode()), v.sourcedBool(session.language, group.NameSpoiler()),
 		v.sourcedSeconds(session.language, group.BanSeconds(), true),
 		v.sourcedBool(session.language, group.LookupAutoDeleteEnabled()), v.sourcedSeconds(session.language, group.LookupTTLSeconds(), false),
 		v.sourcedLanguage(session.language, group.Lang()))
 	buttons := []panelButton{
 		{text: i18n.Messages.Panel.Settings.Field.Verification.For(session.language), field: "en", value: "_"},
-		{text: i18n.Messages.Panel.Settings.Field.DMFirst.For(session.language), field: "df", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.DeliveryGroup.For(session.language), field: "df", value: "g"},
+		{text: i18n.Messages.Panel.Settings.Field.DeliveryDM.For(session.language), field: "df", value: "d"},
+		{text: i18n.Messages.Panel.Settings.Field.DeliveryBoth.For(session.language), field: "df", value: "b"},
 		{text: i18n.Messages.Panel.Settings.Field.ModeKernel.For(session.language), field: "vm", value: "k"},
 		{text: i18n.Messages.Panel.Settings.Field.ModeQuiz.For(session.language), field: "vm", value: "q"},
 		{text: i18n.Messages.Panel.Settings.Field.ModeMixed.For(session.language), field: "vm", value: "m"},
@@ -1125,6 +1127,11 @@ func (v *Panel) sourcedMode(language i18n.Lang, setting store.Setting[string]) s
 	return i18n.Messages.Panel.Settings.Value.Sourced.Render(language, v.modeText(language, setting.Value), v.sourceText(language, setting.Source))
 }
 
+func (v *Panel) sourcedDeliveryMode(language i18n.Lang, setting store.Setting[string]) string {
+	return i18n.Messages.Panel.Settings.Value.Sourced.Render(
+		language, v.deliveryModeText(language, setting.Value), v.sourceText(language, setting.Source))
+}
+
 func (v *Panel) sourcedLanguage(language i18n.Lang, setting store.Setting[string]) string {
 	value := map[string]string{
 		"zh":      i18n.Messages.Panel.Settings.Field.LanguageZH.For(language),
@@ -1158,6 +1165,17 @@ func (v *Panel) modeText(language i18n.Lang, mode string) string {
 		return i18n.Messages.Panel.Settings.Mode.Mixed.For(language)
 	default:
 		return i18n.Messages.Panel.Settings.Mode.Kernel.For(language)
+	}
+}
+
+func (v *Panel) deliveryModeText(language i18n.Lang, mode string) string {
+	switch mode {
+	case config.DeliveryGroup:
+		return i18n.Messages.Panel.Settings.Delivery.Group.For(language)
+	case config.DeliveryDM:
+		return i18n.Messages.Panel.Settings.Delivery.DM.For(language)
+	default:
+		return i18n.Messages.Panel.Settings.Delivery.Both.For(language)
 	}
 }
 

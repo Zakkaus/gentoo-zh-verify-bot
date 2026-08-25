@@ -69,13 +69,13 @@ func TestStateCompatAntispamMigration(t *testing.T) {
 
 func TestStateCompatSettings(t *testing.T) {
 	tests := []struct {
-		name            string
-		data            []byte
-		stableRoundTrip bool
+		name     string
+		data     []byte
+		schemaV2 bool
 	}{
 		{name: "existing legacy fixture", data: stateCompatFixture(t, "settings.json")},
 		{name: "legacy v0 golden", data: stateCompatFixture(t, "settings-legacy-v0.json")},
-		{name: "schema v2 golden", data: stateCompatFixture(t, "settings-v2.json"), stableRoundTrip: true},
+		{name: "schema v2 golden", data: stateCompatFixture(t, "settings-v2.json"), schemaV2: true},
 		{name: "unknown legacy key", data: stateCompatWithUnknown(t, stateCompatFixture(t, "settings.json"))},
 	}
 	for _, tt := range tests {
@@ -85,14 +85,20 @@ func TestStateCompatSettings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tt.stableRoundTrip {
-				out := filepath.Join(t.TempDir(), "settings.json")
-				settings.path = out
-				if err := settings.writeState(&settings.state); err != nil {
-					t.Fatal(err)
+			if tt.schemaV2 {
+				var want, got map[string]any
+				stateCompatDecode(t, tt.data, &want)
+				want["version"] = float64(SettingsSchemaVersion)
+				stateCompatDecode(t, stateCompatRead(t, path), &got)
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("schema-v2 migration changed fields beyond the version and delivery-mode migration:\nwant %#v\n got %#v", want, got)
 				}
-				if got := stateCompatRead(t, out); !bytes.Equal(got, tt.data) {
-					t.Fatalf("schema-v2 settings changed after load/write round trip:\nwant %s\n got %s", tt.data, got)
+				for _, groupID := range settings.GroupIDs() {
+					group, _ := settings.Group(groupID)
+					if group.DeliveryMode().Value != config.DeliveryBoth {
+						t.Fatalf("group %d delivery mode = %q, want default %q",
+							groupID, group.DeliveryMode().Value, config.DeliveryBoth)
+					}
 				}
 				return
 			}
@@ -101,8 +107,10 @@ func TestStateCompatSettings(t *testing.T) {
 				if !ok {
 					t.Fatalf("group %d missing after migration", groupID)
 				}
-				if group.Enabled().Value || group.NameSpoiler().Value || group.VerifyMode().Value != config.ModeMixed {
-					t.Fatalf("group %d settings = enabled:%v name_spoiler:%v verify_mode:%q", groupID, group.Enabled().Value, group.NameSpoiler().Value, group.VerifyMode().Value)
+				if group.Enabled().Value || group.NameSpoiler().Value || group.VerifyMode().Value != config.ModeMixed ||
+					group.DeliveryMode().Value != config.DeliveryBoth {
+					t.Fatalf("group %d settings = enabled:%v name_spoiler:%v verify_mode:%q delivery_mode:%q",
+						groupID, group.Enabled().Value, group.NameSpoiler().Value, group.VerifyMode().Value, group.DeliveryMode().Value)
 				}
 			}
 			var migrated map[string]any

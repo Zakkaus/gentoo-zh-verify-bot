@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -85,8 +86,8 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 	})
 	group, _ := v.settings.Group(groupID)
 	overrides := group.Overrides()
-	dmFirst := false
-	overrides.DMFirst = &dmFirst
+	deliveryMode := config.DeliveryGroup
+	overrides.DeliveryMode = &deliveryMode
 	if _, err := v.settings.CommitGroup(groupID, group.Revision(), overrides); err != nil {
 		t.Fatal(err)
 	}
@@ -118,8 +119,17 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 	if !strings.Contains(bot.lastSendText, wantPrompt) || !strings.Contains(bot.lastSendText, wantTrap) {
 		t.Fatalf("applicant DM did not retain zh-Hant catalogue rendering: %q", bot.lastSendText)
 	}
+	if p.privateMsgID == 0 {
+		t.Fatal("deep-link private challenge message ID was not retained")
+	}
 	if p.timer != nil {
 		p.timer.Stop()
+	}
+	if !v.approve(context.Background(), bot, groupID, userID) {
+		t.Fatal("deep-link challenge did not settle")
+	}
+	if !reflect.DeepEqual(bot.deletedChats, []int64{groupID, userID}) {
+		t.Fatalf("deep-link settlement deleted chats %v, want group and private challenges", bot.deletedChats)
 	}
 }
 
@@ -159,7 +169,223 @@ func TestNoPendingDMUsesRequesterLocale(t *testing.T) {
 	}
 }
 
-func TestJoinRequestDeliversDMFirstOrFallsBackToScopedGroupLink(t *testing.T) {
+func TestJoinRequestDefaultPostsGroupBeforePrivateChallenge(t *testing.T) {
+	const (
+		groupID int64 = -1009000000700
+		userID  int64 = 700
+	)
+	service := newTestService(&config.Config{
+		Groups:         []config.GroupConfig{{ID: groupID}},
+		GroupIDs:       []int64{groupID},
+		Lang:           "en",
+		VerifyMode:     config.ModeKernel,
+		TimeoutSeconds: 240,
+		DeliveryMode:   config.DeliveryBoth,
+	})
+	service.botUsername = "settings_test_bot"
+	caller := newFakeVerifyBot()
+	release := make(chan struct{}, 1)
+	caller.sendStarted = make(chan struct{}, 1)
+	caller.releaseSend = release
+	caller.blockSendN = 2
+	done := make(chan struct{})
+	go func() {
+		runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+			Chat: telego.Chat{ID: groupID},
+			From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+		}})
+		close(done)
+	}()
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+		service.Shutdown()
+	}()
+
+	select {
+	case <-caller.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("private challenge was not attempted after the group challenge")
+	}
+	if len(caller.sendChats) != 2 || caller.sendChats[0] != groupID || caller.sendChats[1] != userID {
+		t.Fatalf("challenge send order = %v, want group then private", caller.sendChats)
+	}
+	release <- struct{}{}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("join request did not finish after private delivery")
+	}
+	pending := service.pend[pkey{groupID, userID}]
+	if pending == nil || !pending.challengeDelivered || pending.groupMsgID == 0 || pending.privateMsgID == 0 {
+		t.Fatalf("default delivery pending state = %+v, want confirmed group and private delivery", pending)
+	}
+	if !service.approve(context.Background(), caller, groupID, userID) {
+		t.Fatal("approved challenge was not settled")
+	}
+	if caller.deletes != 2 || !reflect.DeepEqual(caller.deletedChats, []int64{groupID, userID}) {
+		t.Fatalf("settlement deleted chats = %v, want group and private challenges", caller.deletedChats)
+	}
+}
+
+func TestRequiredChannelPromptMessageIsRetainedForCleanup(t *testing.T) {
+	const (
+		groupID   int64 = -1009000000703
+		channelID int64 = -1009000000803
+		userID    int64 = 703
+	)
+	service := newTestService(&config.Config{
+		Groups:            []config.GroupConfig{{ID: groupID}},
+		GroupIDs:          []int64{groupID},
+		Lang:              "en",
+		VerifyMode:        config.ModeKernel,
+		DeliveryMode:      config.DeliveryBoth,
+		TimeoutSeconds:    240,
+		RequiredChannelID: channelID,
+		ChannelDisplay:    "@required",
+	})
+	caller := newFakeVerifyBot()
+	caller.member = &telego.ChatMemberLeft{Status: telego.MemberStatusLeft}
+	runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: groupID},
+		From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+	}})
+	defer service.Shutdown()
+
+	pending := service.pend[pkey{groupID, userID}]
+	if pending == nil || pending.groupMsgID == 0 || pending.privateMsgID == 0 {
+		t.Fatalf("required-channel delivery pending state = %+v, want retained group and private message IDs", pending)
+	}
+	if pending.prompted {
+		t.Fatal("required-channel prompt incorrectly marked the kernel question as delivered")
+	}
+	if !service.approve(context.Background(), caller, groupID, userID) {
+		t.Fatal("required-channel pending did not settle")
+	}
+	if !reflect.DeepEqual(caller.deletedChats, []int64{groupID, userID}) {
+		t.Fatalf("required-channel settlement deleted chats %v, want group and private prompts", caller.deletedChats)
+	}
+}
+
+func TestRequiredChannelDeepLinkPromptMessageIsRetainedForCleanup(t *testing.T) {
+	const (
+		groupID   int64 = -1009000000704
+		channelID int64 = -1009000000804
+		userID    int64 = 704
+	)
+	service := newTestService(&config.Config{
+		Groups:            []config.GroupConfig{{ID: groupID}},
+		GroupIDs:          []int64{groupID},
+		Lang:              "en",
+		VerifyMode:        config.ModeKernel,
+		DeliveryMode:      config.DeliveryGroup,
+		TimeoutSeconds:    240,
+		RequiredChannelID: channelID,
+		ChannelDisplay:    "@required",
+	})
+	caller := newFakeVerifyBot()
+	caller.member = &telego.ChatMemberLeft{Status: telego.MemberStatusLeft}
+	bot := newAPITestBot(t, caller)
+	runFakeHandler(t, bot, service.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: groupID},
+		From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+	}})
+	defer service.Shutdown()
+
+	service.SendDMChallenge(context.Background(), bot, userID, "en", groupID)
+
+	pending := service.pend[pkey{groupID, userID}]
+	if pending == nil || pending.groupMsgID == 0 || pending.privateMsgID == 0 {
+		t.Fatalf("deep-link channel delivery pending state = %+v, want retained group and private message IDs", pending)
+	}
+	if pending.prompted {
+		t.Fatal("required-channel prompt incorrectly marked the kernel question as delivered")
+	}
+	if !service.approve(context.Background(), caller, groupID, userID) {
+		t.Fatal("deep-link channel pending did not settle")
+	}
+	if !reflect.DeepEqual(caller.deletedChats, []int64{groupID, userID}) {
+		t.Fatalf("deep-link channel settlement deleted chats %v, want group and private prompts", caller.deletedChats)
+	}
+}
+
+func TestJoinRequestBothCountsEitherConfirmedDelivery(t *testing.T) {
+	const (
+		groupID int64 = -1009000000790
+		userID  int64 = 790
+	)
+	tests := []struct {
+		name             string
+		errors           map[int]error
+		wantDelivered    bool
+		wantGroupMessage bool
+	}{
+		{
+			name:             "private succeeds after group failure",
+			errors:           map[int]error{1: errors.New("group delivery failed")},
+			wantDelivered:    true,
+			wantGroupMessage: false,
+		},
+		{
+			name:             "definite private rejection keeps group delivery",
+			errors:           map[int]error{2: &ta.Error{ErrorCode: 403, Description: "Forbidden: bot was blocked by the user"}},
+			wantDelivered:    true,
+			wantGroupMessage: true,
+		},
+		{
+			name:             "uncertain private delivery keeps group delivery",
+			errors:           map[int]error{2: errors.New("connection reset after request write")},
+			wantDelivered:    true,
+			wantGroupMessage: true,
+		},
+		{
+			name: "two unconfirmed deliveries remain strike-free",
+			errors: map[int]error{
+				1: errors.New("group delivery failed"),
+				2: errors.New("connection reset after request write"),
+			},
+			wantDelivered:    false,
+			wantGroupMessage: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newTestService(&config.Config{
+				Groups:         []config.GroupConfig{{ID: groupID}},
+				GroupIDs:       []int64{groupID},
+				Lang:           "en",
+				VerifyMode:     config.ModeKernel,
+				TimeoutSeconds: 240,
+			})
+			caller := newFakeVerifyBot()
+			caller.sendErrAt = tt.errors
+			runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+				Chat: telego.Chat{ID: groupID},
+				From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+			}})
+			defer service.Shutdown()
+
+			if caller.sends != 2 || len(caller.sendChats) != 2 ||
+				caller.sendChats[0] != groupID || caller.sendChats[1] != userID {
+				t.Fatalf("challenge sends/chats = %d/%v, want one group attempt then one private attempt",
+					caller.sends, caller.sendChats)
+			}
+			pending := service.pend[pkey{groupID, userID}]
+			if pending == nil || pending.challengeDelivered != tt.wantDelivered ||
+				(pending.groupMsgID != 0) != tt.wantGroupMessage {
+				t.Fatalf("pending delivery state = %+v, want delivered=%t group-message=%t",
+					pending, tt.wantDelivered, tt.wantGroupMessage)
+			}
+			if got := challengeExpiryReason(pending.challengeDelivered); !tt.wantDelivered && got != "challenge-post-failed" {
+				t.Fatalf("unconfirmed delivery expiry reason = %q, want strike-free challenge-post-failed", got)
+			}
+		})
+	}
+}
+
+func TestJoinRequestDMModeDeliversPrivatelyOrFallsBackToScopedGroupLink(t *testing.T) {
 	const (
 		groupID int64 = -1009000000701
 		userID  int64 = 701
@@ -171,6 +397,7 @@ func TestJoinRequestDeliversDMFirstOrFallsBackToScopedGroupLink(t *testing.T) {
 			Lang:           "en",
 			VerifyMode:     config.ModeKernel,
 			TimeoutSeconds: 240,
+			DeliveryMode:   config.DeliveryDM,
 		})
 		service.botUsername = "settings_test_bot"
 		return service
@@ -221,8 +448,8 @@ func TestJoinRequestDeliversDMFirstOrFallsBackToScopedGroupLink(t *testing.T) {
 		service := newVerifier()
 		group, _ := service.settings.Group(groupID)
 		overrides := group.Overrides()
-		dmFirst := false
-		overrides.DMFirst = &dmFirst
+		deliveryMode := config.DeliveryGroup
+		overrides.DeliveryMode = &deliveryMode
 		if _, err := service.settings.CommitGroup(groupID, group.Revision(), overrides); err != nil {
 			t.Fatal(err)
 		}
@@ -269,6 +496,7 @@ func TestJoinRequestAmbiguousDMFailureDoesNotRiskDuplicateGroupChallenge(t *test
 		Lang:           "en",
 		VerifyMode:     config.ModeKernel,
 		TimeoutSeconds: 240,
+		DeliveryMode:   config.DeliveryDM,
 	})
 	caller := newFakeVerifyBot()
 	caller.sendErr = errors.New("connection reset after request write")
@@ -298,6 +526,7 @@ type fakeVerifyBot struct {
 	sendErr           error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
 	sendFailN         int
 	sendErrAt         map[int]error
+	deleteErrAt       map[int]error
 	sendMessageID     int
 	sendStarted       chan struct{}
 	releaseSend       <-chan struct{}
@@ -350,7 +579,7 @@ func (b *fakeVerifyBot) DeleteMessage(_ context.Context, p *telego.DeleteMessage
 	b.deletes++
 	b.deletedChats = append(b.deletedChats, p.ChatID.ID)
 	b.deletedMessageIDs = append(b.deletedMessageIDs, p.MessageID)
-	return nil
+	return b.deleteErrAt[b.deletes]
 }
 func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
 	b.sends++
@@ -939,6 +1168,72 @@ func TestApproveSuccess(t *testing.T) {
 	}
 	if fb.bans != 0 {
 		t.Error("approve must never ban")
+	}
+}
+
+func TestSettlementDeletesGroupAndPrivateChallenges(t *testing.T) {
+	const gid, uid, adminID = int64(-100), int64(5), int64(9)
+	tests := []struct {
+		name string
+		run  func(*testing.T, *Service, *fakeVerifyBot)
+	}{
+		{
+			name: "applicant approval",
+			run: func(t *testing.T, v *Service, bot *fakeVerifyBot) {
+				t.Helper()
+				if !v.approve(context.Background(), bot, gid, uid) {
+					t.Fatal("applicant approval did not settle")
+				}
+			},
+		},
+		{
+			name: "applicant decline",
+			run: func(t *testing.T, v *Service, bot *fakeVerifyBot) {
+				t.Helper()
+				handled, settled, _ := v.decline(context.Background(), bot, gid, uid, "n", "wrong answer")
+				if !handled || !settled {
+					t.Fatalf("applicant decline = handled %t settled %t, want both true", handled, settled)
+				}
+			},
+		},
+		{
+			name: "administrator approval",
+			run: func(t *testing.T, v *Service, bot *fakeVerifyBot) {
+				t.Helper()
+				bot.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+				runFakeHandler(t, newAPITestBot(t, bot), v.OnAdminAction, telego.Update{CallbackQuery: &telego.CallbackQuery{
+					ID: "admin-pass", From: telego.User{ID: adminID}, Data: AdminCallbackPrefix + "pass:-100:5",
+				}})
+			},
+		},
+		{
+			name: "administrator decline and ban",
+			run: func(t *testing.T, v *Service, bot *fakeVerifyBot) {
+				t.Helper()
+				bot.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+				runFakeHandler(t, newAPITestBot(t, bot), v.OnAdminAction, telego.Update{CallbackQuery: &telego.CallbackQuery{
+					ID: "admin-ban", From: telego.User{ID: adminID}, Data: AdminCallbackPrefix + "ban:-100:5",
+				}})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newTestService(&config.Config{VerifyMaxFails: 3})
+			v.pend[pkey{gid, uid}] = &pending{
+				nonce: "n", deadline: time.Now().Add(time.Hour), groupMsgID: 42, privateMsgID: 43,
+			}
+			bot := newFakeVerifyBot()
+			bot.deleteErrAt = map[int]error{1: errors.New("group challenge already gone")}
+
+			tt.run(t, v, bot)
+
+			if bot.deletes != 2 || !reflect.DeepEqual(bot.deletedChats, []int64{gid, uid}) ||
+				!reflect.DeepEqual(bot.deletedMessageIDs, []int{42, 43}) {
+				t.Fatalf("settlement cleanup = chats %v messages %v, want both challenges despite first delete failure",
+					bot.deletedChats, bot.deletedMessageIDs)
+			}
+		})
 	}
 }
 
@@ -1859,7 +2154,7 @@ func TestShutdownSnapshotKeepsBlockedExpirySettlement(t *testing.T) {
 	}
 }
 
-func TestLatePrivateDeliveryDoesNotPromptReplacement(t *testing.T) {
+func TestLateBothDeliveryDeletesAbandonedMessagesWithoutPromptingReplacement(t *testing.T) {
 	const gid, uid = int64(-100), int64(701)
 	v := newTestService(&config.Config{
 		Groups:         []config.GroupConfig{{ID: gid}},
@@ -1867,6 +2162,7 @@ func TestLatePrivateDeliveryDoesNotPromptReplacement(t *testing.T) {
 		Lang:           "en",
 		VerifyMode:     config.ModeKernel,
 		TimeoutSeconds: 30,
+		DeliveryMode:   config.DeliveryBoth,
 	})
 	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
 		Chat: telego.Chat{ID: gid},
@@ -1877,6 +2173,7 @@ func TestLatePrivateDeliveryDoesNotPromptReplacement(t *testing.T) {
 	first.sendMessageID = 101
 	first.sendStarted = make(chan struct{}, 1)
 	first.releaseSend = release
+	first.blockSendN = 2
 	firstDone := make(chan struct{})
 	go func() {
 		runFakeHandler(t, newAPITestBot(t, first), v.OnJoinRequest, update)
@@ -1896,8 +2193,7 @@ func TestLatePrivateDeliveryDoesNotPromptReplacement(t *testing.T) {
 	}()
 
 	second := newFakeVerifyBot()
-	second.sendErr = errors.New("connection reset after request write")
-	second.sendFailN = 1
+	second.sendErrAt = map[int]error{2: errors.New("connection reset after request write")}
 	runFakeHandler(t, newAPITestBot(t, second), v.OnJoinRequest, update)
 	key := pkey{gid, uid}
 	v.mu.Lock()
@@ -1919,9 +2215,10 @@ func TestLatePrivateDeliveryDoesNotPromptReplacement(t *testing.T) {
 	if current != replacement || current.prompted {
 		t.Fatalf("late old delivery changed replacement = %+v, want same unprompted pending", current)
 	}
-	if first.deletes != 1 || first.deletedChats[0] != uid || first.deletedMessageIDs[0] != 101 {
-		t.Fatalf("late private message cleanup = chats %v messages %v, want [%d]/[101]",
-			first.deletedChats, first.deletedMessageIDs, uid)
+	if first.deletes != 2 || !reflect.DeepEqual(first.deletedChats, []int64{uid, gid}) ||
+		!reflect.DeepEqual(first.deletedMessageIDs, []int{101, 101}) {
+		t.Fatalf("late challenge cleanup = chats %v messages %v, want abandoned private and group messages",
+			first.deletedChats, first.deletedMessageIDs)
 	}
 }
 
@@ -1933,6 +2230,7 @@ func TestPrivateDeliveryCompletedAfterExpiryIsDeleted(t *testing.T) {
 		Lang:           "en",
 		VerifyMode:     config.ModeKernel,
 		TimeoutSeconds: 30,
+		DeliveryMode:   config.DeliveryDM,
 	})
 	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
 		Chat: telego.Chat{ID: gid},

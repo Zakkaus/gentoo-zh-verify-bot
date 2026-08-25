@@ -10,6 +10,8 @@ Handlers are first-match routes. Verification callbacks and settings-panel input
 
 Informational `/ping`, `/stats`, and `/help` do not require administrator rights. In a group, their command and response use best-effort cleanup. `/help` adds the admin command list only after a cached positive admin lookup; a lookup failure merely omits that section. In DM, status is reported against the effective control group.
 
+The command catalogue has no owner chat scope while the durable owner ID is zero. A successful owner claim immediately refreshes Telegram command menus. The owner's private `BotCommandScopeChat` menu then contains all member commands plus `/enroll` and `/unregister`; restart is not required.
+
 ## Group settings commands
 
 **Implementation:** package `internal/panel`, `(*Panel).OnStart`, `(*Panel).OnStop`, `(*Panel).OnRich`, `(*Panel).OnSpoiler`, `(*Panel).OnVMode`, and `(*Panel).OnAutoDel` in `internal/panel/panel.go`; package `internal/moderate`, `(*Service).OnBanTime` and `(*Service).OnBC` in `internal/moderate/service.go` and `internal/moderate/antispam.go`.
@@ -30,9 +32,9 @@ All changes go through the settings store. If the state directory is absent, ord
 
 The in-group challenge offers direct approval and decline-plus-ban. Each click performs a fresh admin lookup for the acting user. Non-admins and lookup failures receive an admin-only callback result. The target applicant ID comes from callback data; no replied message is required.
 
-Approval claims the pending request before calling Telegram, so its timeout cannot race the action. If approval succeeds, the pending request and old strikes are removed. If it fails, the request is reopened with a retry timer and operators are alerted.
+Approval claims the pending request before calling Telegram, so its timeout cannot race the action. If approval succeeds, the pending request and old strikes are removed, and both recorded group and private challenges are deleted best-effort. If it fails, the request is reopened with a retry timer and operators are alerted.
 
-Ban consumes the pending request, asks Telegram to decline the join request best-effort, then bans with message revocation and the group’s effective ban duration. The callback is acknowledged before the network action. Ban failure remains visible through an operator alert, but the pending request stays consumed and the challenge is removed. Repeated clicks or a request already settled by the applicant return an already-handled result.
+Ban claims the pending request, applies the group’s effective ban with message revocation, and then asks Telegram to decline the join request. The callback is acknowledged before these network actions. Both operations must succeed before the pending record is removed and both recorded challenges are deleted. Either failure reopens the same pending request, preserves both challenges, grants a strike-free retry window, and sends an operator alert plus a localized group result.
 
 ## Control-group policy
 
@@ -61,12 +63,12 @@ The group picker lists only effective groups where the bot is still present and 
 
 The panel exposes source provenance—runtime override, `config.json`, or built-in default—and edits these values:
 
-- runtime: verification enabled, DM-first challenge delivery (on by default), mode, name spoiler, ban duration, lookup auto-delete and TTL, and group language;
+- runtime: verification enabled, challenge delivery (`group`, `dm`, or the default `both`), mode, name spoiler, ban duration, lookup auto-delete and TTL, and group language;
 - lists: sender-channel whitelist, trusted-member groups, and known/support chats;
 - verification parameters: timeout (30–1,800 seconds), maximum failures or off, cooldown or off, and the bot-wide private-DM query rate;
 - required channel: select a channel, set or clear a private invite, or disable the gate.
 
-`dm_first` has a built-in `true` baseline. The runtime toggle commits the group's sparse override at the revision shown by the panel; restoring `true` removes the baseline-equal override. A concurrent group commit ends the panel with the same conflict handling as the neighboring runtime toggles.
+`delivery_mode` has a built-in `both` baseline and can also be set globally or per group in `config.json`. The three panel buttons commit a sparse group override at the revision shown by the panel. Selecting the baseline value removes a baseline-equal override. A concurrent group commit ends the panel with the same conflict handling as the neighboring runtime controls.
 
 List additions use Telegram’s chat picker. The submitting admin must still belong to the selected chat. A required channel must also contain the bot. A private channel without a username requires a valid `https://t.me/...` invite before the channel and display are committed together. Duplicate list additions are no-ops. Removing an absent list item is treated as a concurrent change. Whitelisting commits first and then tries to unban the sender channel; unban failure is reported but does not roll back the whitelist.
 

@@ -305,6 +305,9 @@ func main() {
 		},
 		verification.RemoveGroup,
 	)
+	registration.onOwnerClaimed = func(checkCtx context.Context) {
+		application.SetupCommands(checkCtx, bot)
+	}
 	if err := registration.EnsureOwnerClaim(); err != nil {
 		log.Printf("WARNING: owner claim is unavailable until durable settings storage is restored: %v", err)
 	}

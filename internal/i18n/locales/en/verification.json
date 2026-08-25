@@ -122,6 +122,7 @@
       "approved": "✅ Verification passed. Your join request was approved. Welcome.",
       "cooldown_active": "❌ Verification is still in cooldown, so this join request was declined. Reapply in %[1]d seconds.",
       "decline_pending": "⚠️ The bot could not decline your join request, so it may still be pending. Wait for a group administrator before submitting another request.",
+      "deferral_expired": "Verification could not be completed because the bot could not reach Telegram for an extended period, so the join request was declined. You may request to join again.",
       "not_yours": "This is not your join request. Open the verification link for your own request.",
       "stale_question": "This question has expired. Reopen the verification link to receive a new question.",
       "timeout_banned": "❌ Verification timed out, so the join request was declined and you received a %[1]s ban. Reapply after the ban expires; for a permanent ban, contact a group administrator.",

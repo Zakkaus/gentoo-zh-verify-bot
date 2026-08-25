@@ -82,11 +82,16 @@
       "quiz": "Quiz",
       "mixed": "Mixed"
     },
+    "delivery": {
+      "group": "Group only",
+      "dm": "DM, with group fallback",
+      "both": "Group and DM"
+    },
     "screen": {
       "groups": "Settings groups\nPage %[1]d\n%[2]s",
       "no_groups": "No guarded group is currently available for administration.",
       "group_home": "Group settings\n%[1]s (%[2]d)\nRevision: %[3]d\nPersistence: %[4]s\nVerification: %[5]s\nMode: %[6]s\nRequired channel: %[7]s\nQuiz questions: %[8]d\nFallback questions: %[9]d\nLanguage: %[10]s",
-      "runtime": "Runtime settings for %[1]d\nVerification: %[2]s\nMode: %[3]s\nDM-first challenge: %[4]s\nName spoiler: %[5]s\nBan duration: %[6]s\nLookup auto-delete: %[7]s\nLookup TTL: %[8]s\nLanguage: %[9]s",
+      "runtime": "Runtime settings for %[1]d\nVerification: %[2]s\nMode: %[3]s\nChallenge delivery: %[4]s\nName spoiler: %[5]s\nBan duration: %[6]s\nLookup auto-delete: %[7]s\nLookup TTL: %[8]s\nLanguage: %[9]s",
       "lists": "List settings for %[1]d\nChannel allowlist: %[2]d\nTrusted groups: %[3]d\nKnown chats: %[4]d",
       "list": "%[1]s for %[2]d\nEntries: %[3]d\n%[4]s",
       "verification": "Verification parameters for %[1]d\nTimeout: %[2]s\nMaximum failures: %[3]s\nRetry cooldown: %[4]s\nPrivate-query rate (bot-wide): %[5]s",
@@ -106,7 +111,9 @@
       "content": "Verification content",
       "change_group": "Change group",
       "verification": "Toggle verification",
-      "dm_first": "Toggle DM-first challenge",
+      "delivery_group": "Use group only",
+      "delivery_dm": "Use DM with group fallback",
+      "delivery_both": "Use group and DM",
       "mode_kernel": "Use kernel mode",
       "mode_quiz": "Use quiz mode",
       "mode_mixed": "Use mixed mode",

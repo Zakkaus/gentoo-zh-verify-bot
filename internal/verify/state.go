@@ -449,18 +449,25 @@ func (v *Service) save() {
 		defer v.mu.Unlock()
 		recs := make([]pendingRec, 0, len(v.pend))
 		for k, p := range v.pend {
-			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-				ChallengeDelivered: p.challengeDelivered && p.groupMsgID == 0, Mode: p.mode, Lang: p.persistedLang(),
+			var deferredSince int64
+			if !p.deferredSince.IsZero() {
+				deferredSince = p.deferredSince.Unix()
+			}
+			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid,
+				GroupMsgID: p.groupMsgID, PrivateMsgID: p.privateMsgID,
+				ChallengeDelivered: p.challengeDelivered && p.groupMsgID == 0 && p.privateMsgID == 0,
+				Mode:               p.mode, Lang: p.persistedLang(),
 				FbAnswers: p.fbAnswers, FallbackPending: p.fallbackPending, Prompted: p.prompted,
 				Tries: p.tries, Hinted: p.hinted, SampleBounced: p.sampleBounced,
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
-				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
+				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
+				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached})
 		}
 		return recs
 	})
 }
 
-func (v *Service) load(bot verifyBot) {
+func (v *Service) load(bot modBot) {
 	if v.statePath == "" {
 		return
 	}
@@ -472,16 +479,18 @@ func (v *Service) load(bot verifyBot) {
 		}
 		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
 	}
+	now := v.wallNow()
 	// Long downtime gets fresh windows and re-notification; quick restarts stay quiet.
 	var downtime time.Duration
 	if !lastOnline.IsZero() {
-		if d := time.Since(lastOnline); d > 0 {
+		if d := now.Sub(lastOnline); d > 0 {
 			downtime = d
 		}
 	}
 	longOutage := downtime > outageRecovery
 
 	var refresh []renotifyItem
+	stateAdjusted := false
 	for _, r := range recs {
 		gid, uid := r.GroupID, r.UserID
 		// Never restore pendings for unknown chats or unwinnable quiz payloads.
@@ -498,26 +507,49 @@ func (v *Service) load(bot verifyBot) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
 		}
-		p := &pending{groupMsgID: r.GroupMsgID, challengeDelivered: r.ChallengeDelivered || r.GroupMsgID != 0,
-			mode: mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
+		var deferredSince time.Time
+		if r.DeferredSince != 0 {
+			deferredSince = time.Unix(r.DeferredSince, 0)
+		}
+		p := &pending{
+			groupMsgID: r.GroupMsgID, privateMsgID: r.PrivateMsgID,
+			challengeDelivered: r.ChallengeDelivered || r.GroupMsgID != 0 || r.PrivateMsgID != 0,
+			mode:               mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
 			fbAnswers: r.FbAnswers, fallbackPending: r.FallbackPending, prompted: r.Prompted,
 			tries: r.Tries, hinted: r.Hinted, sampleBounced: r.SampleBounced,
-			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
-			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
-		delay := time.Until(p.deadline)
+			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
+			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
+			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached,
+		}
+		delay := p.deadline.Sub(now)
 		reason := challengeExpiryReason(p.challengeDelivered && !p.fallbackPending)
+		if !p.deferralCapReached && !p.deferredSince.IsZero() &&
+			!now.Before(p.deferredSince.Add(maxVerificationDeferral)) {
+			p.deferralCapReached = true
+			stateAdjusted = true
+			logDeferralCapReached(gid, uid)
+		}
 		switch {
+		case p.deferralCapReached:
+			reason = deferredExpiryReason
+			if delay <= 0 || delay > noFaultGrace {
+				delay = noFaultGrace
+				p.deadline = now.Add(delay)
+				stateAdjusted = true
+			}
 		case longOutage:
 			// The outage consumed the window, so refresh and do not strike on this lapse.
 			delay = v.timeout(gid)
-			p.deadline = time.Now().Add(delay)
-			p.lastRenotify = time.Now() // mark re-notified so a runtime recovery right after doesn't re-message
+			p.deadline = now.Add(delay)
+			p.lastRenotify = now // mark re-notified so a runtime recovery right after doesn't re-message
 			reason = "recovered"
-			refresh = append(refresh, renotifyItem{gid, uid, r.Name, r.GroupMsgID, p})
+			refresh = append(refresh, renotifyItem{gid, uid, r.Name, p.messages(), p})
+			stateAdjusted = true
 		case delay <= 0:
 			// Short-restart lapses receive a strike-free grace window.
 			delay = noFaultGrace
-			p.deadline = time.Now().Add(delay)
+			p.deadline = now.Add(delay)
 			reason = "restart-lapsed"
 		case delay < time.Second:
 			delay = time.Second
@@ -546,10 +578,12 @@ func (v *Service) load(bot verifyBot) {
 			refresh = refresh[:renotifyCap]
 		}
 		for _, it := range refresh {
-			v.renotifyPending(context.Background(), bot, it.gid, it.uid, it.name, it.oldMsg, it.p, downtime)
+			v.renotifyPending(context.Background(), bot, it.gid, it.uid, it.name, it.oldMessages, it.p, downtime)
 		}
-		v.save() // persist the fresh deadlines so a further crash doesn't reload the stale ones
 		log.Printf("recovery: re-notified %d restored verification(s) after ~%s down%s", len(refresh), downtime.Round(time.Second), capNote(capped))
+	}
+	if stateAdjusted {
+		v.save() // persist adjusted deadlines and deferral state after replacement message IDs settle
 	}
 }
 
@@ -561,6 +595,11 @@ const (
 	renotifyCap           = 30               // most applicants to re-notify per recovery, so a big backlog can't become a message storm
 )
 
+const deferredExpiryReason = "deferral-cap"
+
+// Verification deferral is capped at 48 hours so an outage cannot hold a pending slot indefinitely.
+const maxVerificationDeferral = 48 * time.Hour
+
 // liveProbe is the cheap GetMe liveness surface.
 type liveProbe interface {
 	GetMe(ctx context.Context) (*telego.User, error)
@@ -570,7 +609,7 @@ type liveProbe interface {
 func (v *Service) offlineNow() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return !v.lastOnline.IsZero() && time.Since(v.lastOnline) > offlineThreshold
+	return !v.lastOnline.IsZero() && v.wallNow().Sub(v.lastOnline) > offlineThreshold
 }
 
 // Probe at expiry to cover heartbeat detection lag at outage onset.
@@ -586,12 +625,23 @@ func (v *Service) reachable(c context.Context) bool {
 }
 
 // Caller holds v.mu. Every re-arm bumps epoch so replaced timers become stale.
-// Expiry settlement defers while Telegram is unreachable. Non-positive delays become strike-free grace.
+// Deferral-aware deadlines stop at the cap; non-positive delays become strike-free grace.
 func (v *Service) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay time.Duration, reason string) {
+	now := v.wallNow()
 	if delay <= 0 {
 		delay = noFaultGrace
-		p.deadline = v.wallNow().Add(delay)
+		p.deadline = now.Add(delay)
 		reason = challengeExpiryReason(false)
+	}
+	if !p.deferredSince.IsZero() && !p.deferralCapReached {
+		remaining := p.deferredSince.Add(maxVerificationDeferral).Sub(now)
+		if remaining <= 0 {
+			remaining = time.Nanosecond
+		}
+		if delay > remaining {
+			delay = remaining
+			p.deadline = now.Add(delay)
+		}
 	}
 	p.epoch++
 	epoch := p.epoch
@@ -599,12 +649,23 @@ func (v *Service) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay tim
 	p.timer = time.AfterFunc(delay, func() { v.onExpiry(context.Background(), bot, gid, uid, nonce, epoch, reason) })
 }
 
-// Unreachable expiries receive a fresh window without consume or strike.
+// Unreachable expiries receive fresh windows until the deferral cap, then short settlement retries.
 // Online settlement still requires the captured nonce and epoch.
 func (v *Service) onExpiry(c context.Context, bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+	valid, capped, newlyCapped := v.deferralCapState(gid, uid, nonce, epoch)
+	if !valid {
+		return
+	}
+	if newlyCapped {
+		logDeferralCapReached(gid, uid)
+		v.save()
+	}
 	if v.offlineNow() || !v.reachable(c) {
 		v.deferExpiry(bot, gid, uid, nonce, epoch, reason)
 		return
+	}
+	if capped {
+		reason = deferredExpiryReason
 	}
 	p, ok := v.claimPendingExpiry(gid, uid, nonce, epoch)
 	if !ok {
@@ -613,25 +674,72 @@ func (v *Service) onExpiry(c context.Context, bot verifyBot, gid, uid int64, non
 	settled, banned := v.finishDecline(c, bot, gid, uid, p, reason)
 	text := v.messages.Verification.Result.DeclinePending.For(p.lang)
 	if settled {
-		text = v.timeoutResultText(gid, uid, p.lang, banned)
+		if capped {
+			text = v.messages.Verification.Result.DeferralExpired.For(p.lang)
+		} else {
+			text = v.timeoutResultText(gid, uid, p.lang, banned)
+		}
 	}
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
 }
 
-// Keep the original reason while re-arming offline expiries; nonce and epoch guard replacement.
-func (v *Service) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+// deferralCapState also claims the one-time warning marker while the pending is locked.
+func (v *Service) deferralCapState(gid, uid int64, nonce string, epoch uint64) (valid, capped, newlyCapped bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
 	if !ok || p.done || p.nonce != nonce || p.epoch != epoch {
+		return false, false, false
+	}
+	if p.deferralCapReached {
+		return true, true, false
+	}
+	if p.deferredSince.IsZero() || v.wallNow().Before(p.deferredSince.Add(maxVerificationDeferral)) {
+		return true, false, false
+	}
+	p.deferralCapReached = true
+	return true, true, true
+}
+
+func logDeferralCapReached(gid, uid int64) {
+	log.Printf("WARNING: verification deferral cap reached: group=%d applicant=%d; settling without a strike", gid, uid)
+}
+
+// Keep the original reason before the cap; capped requests retry settlement after no-fault grace.
+func (v *Service) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+	now := v.wallNow()
+	newlyCapped := false
+	v.mu.Lock()
+	p, ok := v.pend[pkey{gid, uid}]
+	if !ok || p.done || p.nonce != nonce || p.epoch != epoch {
+		v.mu.Unlock()
 		return
 	}
 	if p.timer != nil {
 		p.timer.Stop() // stop the current timer before armExpiry installs the next (matches every other re-arm site)
 	}
+	if p.deferredSince.IsZero() {
+		p.deferredSince = now
+	}
 	delay := v.expiryDelay(gid, reason)
-	p.deadline = v.wallNow().Add(delay)
+	remaining := p.deferredSince.Add(maxVerificationDeferral).Sub(now)
+	if p.deferralCapReached || remaining <= 0 {
+		if !p.deferralCapReached {
+			p.deferralCapReached = true
+			newlyCapped = true
+		}
+		delay = noFaultGrace
+		reason = deferredExpiryReason
+	} else if delay > remaining {
+		delay = remaining
+	}
+	p.deadline = now.Add(delay)
 	v.armExpiry(bot, p, gid, uid, delay, reason)
+	v.mu.Unlock()
+	if newlyCapped {
+		logDeferralCapReached(gid, uid)
+	}
+	v.save()
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.
@@ -711,7 +819,7 @@ func (v *Service) loadHeartbeat() time.Time {
 // heartbeatBot combines liveness with recovery notification operations.
 type heartbeatBot interface {
 	liveProbe
-	verifyBot
+	modBot
 }
 
 // RunHeartbeat probes Telegram until ctx is cancelled and refreshes pending challenges after outages.
@@ -741,7 +849,7 @@ func (v *Service) heartbeatTick(ctx context.Context, bot heartbeatBot) bool {
 		}
 		return false
 	}
-	now := time.Now()
+	now := v.wallNow()
 	v.mu.Lock()
 	prev := v.lastOnline
 	v.lastOnline = now
@@ -754,16 +862,17 @@ func (v *Service) heartbeatTick(ctx context.Context, bot heartbeatBot) bool {
 	return true
 }
 
-// Recovery grants every pending a fresh strike-free window.
-// Re-notification is capped and suppressed during flapping or shutdown.
-func (v *Service) onRecovery(c context.Context, bot verifyBot, outage time.Duration) {
-	now := time.Now()
+// Recovery grants each pending a fresh strike-free window without extending the deferral cap.
+// Re-notification is capped and suppressed during flapping, capped settlement, or shutdown.
+func (v *Service) onRecovery(c context.Context, bot modBot, outage time.Duration) {
+	now := v.wallNow()
 	v.mu.Lock()
 	if v.shuttingDown {
 		v.mu.Unlock()
 		return
 	}
 	var items []renotifyItem
+	var newlyCapped []pkey
 	refreshed := 0
 	for k, p := range v.pend {
 		if p == nil || p.done {
@@ -773,16 +882,35 @@ func (v *Service) onRecovery(c context.Context, bot verifyBot, outage time.Durat
 			p.timer.Stop()
 		}
 		delay := v.timeout(k.gid)
+		reason := "recovered"
+		if p.deferralCapReached || !p.deferredSince.IsZero() &&
+			!now.Before(p.deferredSince.Add(maxVerificationDeferral)) {
+			if !p.deferralCapReached {
+				p.deferralCapReached = true
+				newlyCapped = append(newlyCapped, k)
+			}
+			delay = noFaultGrace
+			reason = deferredExpiryReason
+		}
 		p.deadline = now.Add(delay)
-		v.armExpiry(bot, p, k.gid, k.uid, delay, "recovered")
+		v.armExpiry(bot, p, k.gid, k.uid, delay, reason)
 		refreshed++
+		if p.deferralCapReached {
+			continue
+		}
 		if !p.lastRenotify.IsZero() && now.Sub(p.lastRenotify) < delay {
 			continue // re-notified recently (flapping) — refresh the window silently, don't re-message
 		}
 		p.lastRenotify = now
-		items = append(items, renotifyItem{k.gid, k.uid, p.name, p.groupMsgID, p})
+		items = append(items, renotifyItem{k.gid, k.uid, p.name, p.messages(), p})
 	}
 	v.mu.Unlock()
+	for _, k := range newlyCapped {
+		logDeferralCapReached(k.gid, k.uid)
+	}
+	if len(newlyCapped) > 0 {
+		v.save()
+	}
 	if refreshed == 0 {
 		return
 	}
@@ -792,36 +920,48 @@ func (v *Service) onRecovery(c context.Context, bot verifyBot, outage time.Durat
 		items = items[:renotifyCap]
 	}
 	for _, it := range items {
-		v.renotifyPending(c, bot, it.gid, it.uid, it.name, it.oldMsg, it.p, outage)
+		v.renotifyPending(c, bot, it.gid, it.uid, it.name, it.oldMessages, it.p, outage)
 	}
 	v.save() // after renotifyPending so the persisted groupMsgIDs point at the re-posted challenges
 	log.Printf("recovery: refreshed %d verification(s), re-notified %d after ~%s offline%s", refreshed, len(items), outage.Round(time.Second), capNote(capped))
 }
 
-// Re-notify without holding v.mu, replacing a working challenge only after a successful current send.
-func (v *Service) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
+// Re-notify without holding v.mu, replacing working challenges only after a confirmed current send.
+func (v *Service) renotifyPending(
+	c context.Context,
+	bot modBot,
+	gid, uid int64,
+	name string,
+	oldMessages challengeMessages,
+	p *pending,
+	outage time.Duration,
+) {
 	ul := p.lang
 	notice := v.messages.Verification.Recovery.Renotify.Render(ul, outageText(v.messages, ul, outage))
 	_, _ = bot.SendMessage(c, htmlMessage(uid, notice))
-	newMsg := v.postGroupChallenge(c, bot, gid, uid, name, v.groupLanguage(gid))
-	if newMsg == 0 {
+	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name)
+	if !delivery.active || !delivery.delivered {
 		return
 	}
 	v.mu.Lock()
 	cur, current := v.pend[pkey{gid, uid}]
 	current = current && cur == p && !p.done
 	if current {
-		p.groupMsgID = newMsg
+		p.groupMsgID = delivery.messages.groupMsgID
 		p.challengeDelivered = true
 	}
 	v.mu.Unlock()
 	if !current {
-		v.deleteChallenge(c, bot, gid, newMsg)
+		v.deleteChallenges(c, bot, gid, uid, delivery.messages)
+		if delivery.replacedPrivateMsgID != 0 {
+			v.deleteChallenge(c, bot, uid, delivery.replacedPrivateMsgID)
+		}
 		return
 	}
-	if oldMsg != 0 && oldMsg != newMsg {
-		v.deleteChallenge(c, bot, gid, oldMsg)
+	if delivery.replacedPrivateMsgID != 0 {
+		oldMessages.privateMsgID = delivery.replacedPrivateMsgID
 	}
+	v.deleteChallenges(c, bot, gid, uid, oldMessages)
 }
 
 // Render whole seconds, minutes, or hours in the applicant's locale.

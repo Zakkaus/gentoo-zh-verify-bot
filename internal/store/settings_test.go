@@ -21,7 +21,7 @@ const (
 func testSettingsBaseline() SettingsBaseline {
 	group := GroupBaseline{
 		Enabled:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
-		DMFirst:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
+		DeliveryMode:            BaselineValue[string]{Value: config.DeliveryBoth, Source: SourceDefault},
 		VerifyMode:              BaselineValue[string]{Value: config.ModeKernel, Source: SourceDefault},
 		NameSpoiler:             BaselineValue[bool]{Value: true, Source: SourceDefault},
 		BanSeconds:              BaselineValue[int]{Value: 0, Source: SourceDefault},
@@ -72,8 +72,8 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	if got := initial.Enabled(); got.Value != true || got.Source != SourceDefault {
 		t.Fatalf("initial enabled = %+v, want built-in true", got)
 	}
-	if got := initial.DMFirst(); !got.Value || got.Source != SourceDefault {
-		t.Fatalf("initial DM-first = %+v, want built-in true", got)
+	if got := initial.DeliveryMode(); got.Value != config.DeliveryBoth || got.Source != SourceDefault {
+		t.Fatalf("initial delivery mode = %+v, want built-in both", got)
 	}
 	if got := initial.TimeoutSeconds(); got.Value != 240 || got.Source != SourceConfig {
 		t.Fatalf("initial timeout = %+v, want configured 240", got)
@@ -105,7 +105,7 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	fallback := []config.ShortQuestion{{Q: "Package manager?", Answers: []string{"portage", "emerge"}}}
 	next := GroupOverrides{
 		Enabled:                 ptr(false),
-		DMFirst:                 ptr(false),
+		DeliveryMode:            ptr(config.DeliveryGroup),
 		VerifyMode:              ptr(config.ModeMixed),
 		NameSpoiler:             ptr(false),
 		BanSeconds:              ptr(3600),
@@ -153,8 +153,8 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	if group.Revision() != 1 || group.Enabled().Value || group.Enabled().Source != SourceRuntime {
 		t.Fatalf("reloaded enabled/revision = %+v/%d", group.Enabled(), group.Revision())
 	}
-	if got := group.DMFirst(); got.Value || got.Source != SourceRuntime {
-		t.Fatalf("reloaded DM-first = %+v, want runtime false", got)
+	if got := group.DeliveryMode(); got.Value != config.DeliveryGroup || got.Source != SourceRuntime {
+		t.Fatalf("reloaded delivery mode = %+v, want runtime group", got)
 	}
 	if got := group.ChannelWhitelist(); len(got.Value) != 0 || got.Source != SourceRuntime {
 		t.Fatalf("explicit empty channel whitelist = %+v", got)
@@ -212,6 +212,23 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 		t.Fatalf("legacy mirrors = enabled:%v spoiler:%v mode:%v", raw["enabled"], raw["name_spoiler"], raw["verify_mode"])
 	}
 }
+
+func TestSettingsRejectsInvalidDeliveryMode(t *testing.T) {
+	settings, err := NewSettings("", testSettingsBaseline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, _ := settings.Group(testGroupA)
+	overrides := group.Overrides()
+	overrides.DeliveryMode = ptr("sidecar")
+	if _, err := settings.CommitGroup(group.ID(), group.Revision(), overrides); err == nil {
+		t.Fatal("unsupported runtime delivery mode was accepted")
+	}
+	if got := group.DeliveryMode(); got.Value != config.DeliveryBoth || got.Source != SourceDefault {
+		t.Fatalf("failed delivery-mode commit changed effective setting to %+v", got)
+	}
+}
+
 func TestGroupLanguageSettingSourceAndRevision(t *testing.T) {
 	baseline := testSettingsBaseline()
 	baseline.Groups[0].Lang = BaselineValue[string]{Value: "zh-Hant", Source: SourceConfig}
@@ -318,7 +335,7 @@ func TestSettingsLookupAutoDeleteRetainsTTLAcrossToggle(t *testing.T) {
 func TestSettingsMigratesVersionOneLookupDisableWithoutSentinel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	legacy := settingsFile{
-		Version: SettingsSchemaVersion - 1,
+		Version: 1,
 		Groups: map[int64]groupRecord{
 			testGroupA: {Revision: 7, GroupOverrides: GroupOverrides{LookupTTLSeconds: ptr(0)}},
 		},
@@ -344,6 +361,74 @@ func TestSettingsMigratesVersionOneLookupDisableWithoutSentinel(t *testing.T) {
 	}
 	if got := group.LookupAutoDeleteEnabled(); got.Value || got.Source != SourceRuntime {
 		t.Fatalf("migrated enabled state = %+v, want runtime false", got)
+	}
+}
+
+func TestSettingsMigratesVersionTwoDMFirstOverrides(t *testing.T) {
+	const (
+		explicitGroup int64 = -1009000000003
+		defaultGroup  int64 = -1009000000004
+	)
+	path := filepath.Join(t.TempDir(), "settings.json")
+	source := map[string]any{
+		"version": 2,
+		"groups": map[string]any{
+			"-1009000000001": map[string]any{"revision": 7, "dm_first": true},
+			"-1009000000002": map[string]any{"revision": 9, "dm_first": false},
+			"-1009000000003": map[string]any{"revision": 11, "dm_first": true, "delivery_mode": config.DeliveryBoth},
+			"-1009000000004": map[string]any{"revision": 13},
+		},
+	}
+	data, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	baseline := testSettingsBaseline()
+	for _, groupID := range []int64{explicitGroup, defaultGroup} {
+		group := baseline.DefaultGroup
+		group.ID = groupID
+		baseline.Groups = append(baseline.Groups, group)
+	}
+	settings, err := NewSettings(path, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for groupID, want := range map[int64]Setting[string]{
+		testGroupA:    {Value: config.DeliveryDM, Source: SourceRuntime},
+		testGroupB:    {Value: config.DeliveryGroup, Source: SourceRuntime},
+		explicitGroup: {Value: config.DeliveryBoth, Source: SourceRuntime},
+		defaultGroup:  {Value: config.DeliveryBoth, Source: SourceDefault},
+	} {
+		group, _ := settings.Group(groupID)
+		if got := group.DeliveryMode(); got != want {
+			t.Errorf("group %d migrated delivery mode = %+v, want %+v", groupID, got, want)
+		}
+	}
+	var migrated map[string]any
+	decodeFile(t, path, &migrated)
+	if got := int(migrated["version"].(float64)); got != SettingsSchemaVersion {
+		t.Fatalf("migrated schema version = %d, want %d", got, SettingsSchemaVersion)
+	}
+	groups := migrated["groups"].(map[string]any)
+	for groupID, want := range map[string]string{
+		"-1009000000001": config.DeliveryDM,
+		"-1009000000002": config.DeliveryGroup,
+		"-1009000000003": config.DeliveryBoth,
+	} {
+		record := groups[groupID].(map[string]any)
+		if got := record["delivery_mode"]; got != want {
+			t.Errorf("group %s delivery_mode = %v, want %q", groupID, got, want)
+		}
+		if _, exists := record["dm_first"]; exists {
+			t.Errorf("group %s retained dm_first after migration: %#v", groupID, record)
+		}
+	}
+	if record := groups["-1009000000004"].(map[string]any); record["delivery_mode"] != nil {
+		t.Errorf("group with no delivery keys gained an override: %#v", record)
 	}
 }
 

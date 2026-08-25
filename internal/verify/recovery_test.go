@@ -6,7 +6,9 @@ import (
 	"errors"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"log"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +61,260 @@ func TestOnExpiryOfflineDefers(t *testing.T) {
 	}
 }
 
+func TestDeferredExpiryCapSettlesStrikeFree(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	v := newTestService(&config.Config{
+		TimeoutSeconds:     4 * 60 * 60,
+		VerifyMaxFails:     1,
+		VerifyRetrySeconds: 600,
+	})
+	v.timeNow = func() time.Time { return now }
+	key := pkey{gid, uid}
+	p := &pending{
+		nonce:        "n",
+		lang:         i18n.LangEN,
+		deadline:     now,
+		groupMsgID:   42,
+		privateMsgID: 43,
+	}
+	v.pend[key] = p
+	bot := newBlockingTerminalBot()
+	bot.getMeErr = errors.New("Telegram unavailable")
+	v.probe = bot
+
+	v.onExpiry(context.Background(), bot, gid, uid, p.nonce, p.epoch, "timeout")
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	now = now.Add(49 * time.Hour)
+	bot.getMeErr = nil
+	v.mu.Lock()
+	v.lastOnline = now
+	v.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		v.onExpiry(context.Background(), bot, gid, uid, p.nonce, p.epoch, "timeout")
+		close(done)
+	}()
+	defer func() {
+		select {
+		case <-bot.release:
+		default:
+			close(bot.release)
+		}
+	}()
+	select {
+	case <-bot.declineStarted:
+	case <-time.After(time.Second):
+		t.Fatal("capped expiry did not reach the blocking Telegram decline")
+	}
+	close(bot.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("capped expiry did not finish after Telegram decline returned")
+	}
+
+	if _, ok := v.pend[key]; ok {
+		t.Error("capped expiry kept the settled pending")
+	}
+	if _, struck := v.vfail[key]; struck {
+		t.Error("capped expiry recorded a verification strike")
+	}
+	if remaining := v.verifyCooldownRemaining(gid, uid); remaining != 0 {
+		t.Errorf("capped expiry started a cooldown of %s", remaining)
+	}
+	if bot.bans != 0 {
+		t.Errorf("capped expiry issued %d bans, want none", bot.bans)
+	}
+	if bot.deletes != 2 || !reflect.DeepEqual(bot.deletedChats, []int64{gid, uid}) ||
+		!reflect.DeepEqual(bot.deletedMessageIDs, []int{42, 43}) {
+		t.Errorf("capped expiry cleanup = chats %v messages %v, want both challenge messages",
+			bot.deletedChats, bot.deletedMessageIDs)
+	}
+	wantText := v.messages.Verification.Result.DeferralExpired.For(i18n.LangEN)
+	if bot.sends != 1 || bot.lastSendChat != uid || bot.lastSendText != wantText {
+		t.Errorf("capped expiry notice = sends %d/chat %d/text %q, want one catalogue message %q",
+			bot.sends, bot.lastSendChat, bot.lastSendText, wantText)
+	}
+}
+
+func TestDeferredExpiryCapRetriesWithoutFreshWindowAndLogsOnce(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	v := newTestService(&config.Config{TimeoutSeconds: 4 * 60 * 60})
+	v.timeNow = func() time.Time { return now }
+	v.statePath = t.TempDir() + "/pending.json"
+	key := pkey{gid, uid}
+	p := &pending{nonce: "n", deadline: now}
+	v.pend[key] = p
+	bot := &fakeVerifyBot{getMeErr: errors.New("Telegram unavailable")}
+	v.probe = bot
+
+	v.onExpiry(context.Background(), bot, gid, uid, p.nonce, p.epoch, "timeout")
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	now = now.Add(49 * time.Hour)
+
+	var output bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+	})
+
+	v.onExpiry(context.Background(), bot, gid, uid, p.nonce, p.epoch, "timeout")
+	if remaining := p.deadline.Sub(now); remaining != noFaultGrace {
+		t.Errorf("first capped retry delay = %s, want %s", remaining, noFaultGrace)
+	}
+	if !pendingStateBool(t, v.statePath, "deferral_cap_reached") {
+		t.Error("first capped retry did not persist its one-time warning marker")
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	now = now.Add(noFaultGrace)
+	v.onExpiry(context.Background(), bot, gid, uid, p.nonce, p.epoch, "timeout")
+	if remaining := p.deadline.Sub(now); remaining != noFaultGrace {
+		t.Errorf("second capped retry delay = %s, want %s", remaining, noFaultGrace)
+	}
+
+	logs := output.String()
+	if count := strings.Count(logs, "verification deferral cap reached"); count != 1 {
+		t.Errorf("cap warning count = %d, want 1; logs: %q", count, logs)
+	}
+	if !strings.Contains(logs, "group=-100") || !strings.Contains(logs, "applicant=5") {
+		t.Errorf("cap warning does not name group and applicant: %q", logs)
+	}
+}
+
+func TestRecoveryPastDeferralCapKeepsShortSettlementRetry(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	v := newTestService(&config.Config{
+		TimeoutSeconds: 4 * 60 * 60,
+		DeliveryMode:   config.DeliveryBoth,
+	})
+	v.timeNow = func() time.Time { return now }
+	p := &pending{
+		nonce:              "n",
+		name:               "Applicant",
+		lang:               i18n.LangEN,
+		qText:              "Question",
+		qOpts:              []string{"a", "b"},
+		deadline:           now,
+		deferredSince:      now.Add(-49 * time.Hour),
+		deferralCapReached: true,
+		groupMsgID:         42,
+		privateMsgID:       43,
+	}
+	v.pend[pkey{gid, uid}] = p
+	bot := newFakeVerifyBot()
+
+	v.onRecovery(context.Background(), bot, 2*time.Minute)
+	t.Cleanup(v.stopForShutdown)
+
+	if got := p.deadline.Sub(now); got != noFaultGrace {
+		t.Fatalf("post-cap recovery delay = %s, want settlement retry %s", got, noFaultGrace)
+	}
+	if bot.sends != 0 {
+		t.Fatalf("post-cap recovery sent %d re-notification messages, want none", bot.sends)
+	}
+}
+
+func TestDeferredExpiryAccumulatorSurvivesLongOutageRestart(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	now := time.Now().UTC().Truncate(time.Second)
+	dir := t.TempDir()
+	cfg := &config.Config{TimeoutSeconds: 4 * 60 * 60, GroupIDs: []int64{gid}}
+	first := newTestService(cfg)
+	first.timeNow = func() time.Time { return now }
+	first.statePath = dir + "/pending.json"
+	first.hbPath = dir + "/heartbeat.json"
+	key := pkey{gid, uid}
+	p := &pending{
+		nonce:      "n",
+		name:       "Applicant",
+		correctIdx: 0,
+		qOpts:      []string{"a", "b"},
+		deadline:   now,
+		groupMsgID: 42,
+	}
+	first.pend[key] = p
+	probe := &fakeVerifyBot{getMeErr: errors.New("Telegram unavailable")}
+	first.probe = probe
+
+	first.onExpiry(context.Background(), probe, gid, uid, p.nonce, p.epoch, "timeout")
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	first.save()
+	deferredSince := pendingStateUnix(t, first.statePath, "deferred_since")
+	first.mu.Lock()
+	first.lastOnline = now
+	first.mu.Unlock()
+	first.saveHeartbeat()
+
+	now = now.Add(2 * time.Hour)
+	restored := newTestService(cfg)
+	restored.timeNow = func() time.Time { return now }
+	restored.statePath = first.statePath
+	restored.hbPath = first.hbPath
+	bot := &fakeVerifyBot{}
+	restored.load(bot)
+	t.Cleanup(restored.stopForShutdown)
+
+	got := restored.pend[key]
+	if got == nil {
+		t.Fatal("long-outage restart did not restore the deferred pending")
+	}
+	if want := now.Add(restored.timeout(gid)); !got.deadline.Equal(want) {
+		t.Errorf("long-outage restart deadline = %v, want fresh window ending %v", got.deadline, want)
+	}
+	restored.save()
+	if after := pendingStateUnix(t, restored.statePath, "deferred_since"); after != deferredSince {
+		t.Errorf("long-outage restart changed deferred_since from %d to %d", deferredSince, after)
+	}
+}
+
+func pendingStateUnix(t *testing.T, path, field string) int64 {
+	t.Helper()
+	var records []map[string]any
+	if err := store.Load(path, &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending state has %d records, want 1", len(records))
+	}
+	value, ok := records[0][field].(float64)
+	if !ok || value == 0 {
+		t.Fatalf("pending state field %q = %#v, want a nonzero Unix timestamp", field, records[0][field])
+	}
+	return int64(value)
+}
+
+func pendingStateBool(t *testing.T, path, field string) bool {
+	t.Helper()
+	var records []map[string]any
+	if err := store.Load(path, &records); err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending state has %d records, want 1", len(records))
+	}
+	value, ok := records[0][field].(bool)
+	if !ok {
+		t.Fatalf("pending state field %q = %#v, want a boolean", field, records[0][field])
+	}
+	return value
+}
+
 func TestOfflineExpiryDoesNotLogPerPending(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240})
 	key := pkey{-100, 5}
@@ -84,7 +340,7 @@ func TestOfflineExpiryDoesNotLogPerPending(t *testing.T) {
 func TestOnExpiryOnlineDeclines(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240, VerifyMaxFails: 3}) // seeded online, no probe => reachable
 	key := pkey{-100, 5}
-	v.pend[key] = &pending{nonce: "n", deadline: time.Now(), groupMsgID: 42}
+	v.pend[key] = &pending{nonce: "n", deadline: time.Now(), groupMsgID: 42, privateMsgID: 43}
 	fb := &fakeVerifyBot{}
 	v.onExpiry(context.Background(), fb, -100, 5, "n", 0, "timeout")
 	if fb.declines != 1 {
@@ -95,6 +351,10 @@ func TestOnExpiryOnlineDeclines(t *testing.T) {
 	}
 	if r := v.vfail[key]; r == nil || r.count != 1 {
 		t.Error("online timeout should record one strike")
+	}
+	if fb.deletes != 2 || !reflect.DeepEqual(fb.deletedChats, []int64{-100, 5}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{42, 43}) {
+		t.Errorf("online timeout cleanup = chats %v messages %v, want both challenge messages", fb.deletedChats, fb.deletedMessageIDs)
 	}
 }
 
@@ -204,12 +464,15 @@ func TestExpiryDeferThenOnlineStrikes(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240, VerifyMaxFails: 3})
 	setOffline(v)
 	key := pkey{-100, 5}
-	v.pend[key] = &pending{nonce: "n", deadline: time.Now().Add(-time.Second)}
+	v.pend[key] = &pending{nonce: "n", deadline: time.Now().Add(-time.Second), groupMsgID: 44, privateMsgID: 45}
 	fb := &fakeVerifyBot{}
 	v.onExpiry(context.Background(), fb, -100, 5, "n", 0, "timeout") // offline -> defer
 	cur, ok := v.pend[key]
 	if !ok || cur.done || fb.declines != 0 {
 		t.Fatal("offline expiry should keep the pending and not decline")
+	}
+	if fb.deletes != 0 {
+		t.Fatalf("offline expiry deleted %d challenge messages before settlement", fb.deletes)
 	}
 	deferredEpoch := cur.epoch
 	if cur.timer != nil {
@@ -225,6 +488,10 @@ func TestExpiryDeferThenOnlineStrikes(t *testing.T) {
 	}
 	if r := v.vfail[key]; r == nil || r.count != 1 {
 		t.Error("the deferred timeout should still strike once online — no strike laundering")
+	}
+	if fb.deletes != 2 || !reflect.DeepEqual(fb.deletedChats, []int64{-100, 5}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{44, 45}) {
+		t.Errorf("deferred timeout cleanup = chats %v messages %v, want both challenge messages", fb.deletedChats, fb.deletedMessageIDs)
 	}
 }
 
@@ -317,8 +584,8 @@ func TestOnRecoveryRefreshesAndRenotifies(t *testing.T) {
 	v.pend[k2] = &pending{nonce: "b", name: "Bob", deadline: time.Now().Add(10 * time.Second), groupMsgID: 12}
 	fb := &fakeVerifyBot{}
 	v.onRecovery(context.Background(), fb, 3*time.Minute)
-	if fb.sends != 4 { // per pending: 1 DM + 1 fresh group challenge
-		t.Errorf("recovery should DM + re-post per pending (want 4 sends), got %d", fb.sends)
+	if fb.sends != 6 { // per pending in default "both": outage notice + group challenge + private challenge
+		t.Errorf("recovery should send all three messages per pending (want 6 sends), got %d", fb.sends)
 	}
 	for _, k := range []pkey{k1, k2} {
 		p, ok := v.pend[k]
@@ -355,9 +622,37 @@ func TestOnRecoveryRenotifyCooldown(t *testing.T) {
 	}
 }
 
-func TestRenotifyFailureKeepsWorkingGroupChallenge(t *testing.T) {
+func TestRecoveryPrivateDeliveryPreservesStrikeFreeExpiry(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
-	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	v := newTestService(&config.Config{
+		TimeoutSeconds: 240,
+		DeliveryMode:   config.DeliveryDM,
+	})
+	v.timeNow = func() time.Time { return now }
+	p := &pending{
+		nonce:      "n",
+		name:       "Applicant",
+		lang:       i18n.LangEN,
+		qText:      "Question",
+		qOpts:      []string{"a", "b"},
+		correctIdx: 0,
+		deadline:   now,
+	}
+	v.pend[pkey{gid, uid}] = p
+
+	v.onRecovery(context.Background(), newFakeVerifyBot(), 2*time.Minute)
+	t.Cleanup(v.stopForShutdown)
+
+	if p.epoch != 1 {
+		t.Fatalf("private recovery delivery re-armed expiry %d times, want only the strike-free recovery arm", p.epoch)
+	}
+}
+
+func TestRenotifyFailureKeepsWorkingGroupChallenge(t *testing.T) {
+
+	const gid, uid = int64(-100), int64(5)
+	v := newTestService(&config.Config{TimeoutSeconds: 240, DeliveryMode: config.DeliveryGroup})
 	v.botUsername = "bot"
 	key := pkey{gid, uid}
 	p := &pending{
@@ -372,7 +667,7 @@ func TestRenotifyFailureKeepsWorkingGroupChallenge(t *testing.T) {
 	bot := newFakeVerifyBot()
 	bot.sendErrAt = map[int]error{2: errors.New("group repost failed")}
 
-	v.renotifyPending(context.Background(), bot, gid, uid, p.name, p.groupMsgID, p, time.Minute)
+	v.renotifyPending(context.Background(), bot, gid, uid, p.name, p.messages(), p, time.Minute)
 
 	if p.groupMsgID != 41 || !p.challengeDelivered {
 		t.Fatalf("failed repost changed working challenge to message %d delivered=%v, want 41/true",
@@ -385,7 +680,7 @@ func TestRenotifyFailureKeepsWorkingGroupChallenge(t *testing.T) {
 
 func TestRenotifySuccessfulSendDeletesNewOrphanWhenPendingWasReplaced(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
-	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	v := newTestService(&config.Config{TimeoutSeconds: 240, DeliveryMode: config.DeliveryGroup})
 	v.botUsername = "bot"
 	key := pkey{gid, uid}
 	old := &pending{
@@ -405,7 +700,7 @@ func TestRenotifySuccessfulSendDeletesNewOrphanWhenPendingWasReplaced(t *testing
 	bot.blockSendN = 2
 	done := make(chan struct{})
 	go func() {
-		v.renotifyPending(context.Background(), bot, gid, uid, old.name, old.groupMsgID, old, time.Minute)
+		v.renotifyPending(context.Background(), bot, gid, uid, old.name, old.messages(), old, time.Minute)
 		close(done)
 	}()
 	select {
@@ -472,7 +767,7 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	seed.statePath = dir + "/pending.json"
 	seed.hbPath = dir + "/heartbeat.json"
 	seed.pend[pkey{-100, 7}] = &pending{nonce: "x", name: "Carol", correctIdx: 0,
-		qOpts: []string{"a", "b"}, deadline: time.Now().Add(30 * time.Second), groupMsgID: 5}
+		qOpts: []string{"a", "b"}, deadline: time.Now().Add(30 * time.Second), groupMsgID: 5, privateMsgID: 6}
 	seed.save()
 	seed.mu.Lock()
 	seed.lastOnline = time.Now().Add(-10 * time.Minute) // a long outage
@@ -490,6 +785,9 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	if !ok {
 		t.Fatal("the pending should be restored")
 	}
+	if p.privateMsgID != 1 {
+		t.Fatalf("restored private challenge message = %d, want replacement 1", p.privateMsgID)
+	}
 	if !p.deadline.After(time.Now().Add(v.timeout(-100) - 10*time.Second)) {
 		t.Errorf("a long outage should restore a fresh full window, not the ~30s remaining (deadline=%v)", p.deadline)
 	}
@@ -499,6 +797,136 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	if !v.approve(context.Background(), fb, -100, 7) {
+		t.Fatal("restored pending did not settle")
+	}
+	if !reflect.DeepEqual(fb.deletedChats, []int64{-100, 7, -100, 7}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{5, 6, 1, 1}) {
+		t.Fatalf("outage recovery cleanup = chats %v messages %v, want both old then both replacement challenges",
+			fb.deletedChats, fb.deletedMessageIDs)
+	}
+}
+
+func TestLoadRecoveryBothReplacesAndDeletesBothChallenges(t *testing.T) {
+	const gid, uid = int64(-100), int64(7)
+	now := time.Now()
+	dir := t.TempDir()
+	cfg := &config.Config{
+		GroupIDs:       []int64{gid},
+		DeliveryMode:   config.DeliveryBoth,
+		TimeoutSeconds: 240,
+	}
+	seed := newTestService(cfg)
+	seed.statePath = dir + "/pending.json"
+	seed.hbPath = dir + "/heartbeat.json"
+	seed.pend[pkey{gid, uid}] = &pending{
+		nonce:        "x",
+		name:         "Applicant",
+		lang:         i18n.LangEN,
+		qText:        "Question",
+		qOpts:        []string{"a", "b"},
+		correctIdx:   0,
+		deadline:     now.Add(30 * time.Second),
+		groupMsgID:   41,
+		privateMsgID: 42,
+	}
+	seed.save()
+	seed.lastOnline = now.Add(-10 * time.Minute)
+	seed.saveHeartbeat()
+
+	v := newTestService(cfg)
+	v.botUsername = "bot"
+	v.statePath = seed.statePath
+	v.hbPath = seed.hbPath
+	bot := newFakeVerifyBot()
+	bot.sendMessageID = 99
+	v.load(bot)
+	t.Cleanup(v.stopForShutdown)
+
+	p := v.pend[pkey{gid, uid}]
+	if p == nil {
+		t.Fatal("recovery did not restore the pending")
+	}
+	if p.groupMsgID != 99 || p.privateMsgID != 99 {
+		t.Fatalf("replacement message IDs = group %d/private %d, want 99/99", p.groupMsgID, p.privateMsgID)
+	}
+	if !reflect.DeepEqual(bot.deletedChats, []int64{gid, uid}) ||
+		!reflect.DeepEqual(bot.deletedMessageIDs, []int{41, 42}) {
+		t.Fatalf("recovery deleted chats/messages %v/%v, want both stale challenges",
+			bot.deletedChats, bot.deletedMessageIDs)
+	}
+	if p.groupMsgID == 41 || p.privateMsgID == 42 {
+		t.Fatalf("stale challenge ID survived recovery: group %d/private %d", p.groupMsgID, p.privateMsgID)
+	}
+}
+
+func TestRenotifyUsesDeliveryModeAndRetainsUnconfirmedPrivateID(t *testing.T) {
+	const gid, uid = int64(-100), int64(7)
+	tests := []struct {
+		name      string
+		mode      string
+		sendErrAt map[int]error
+		wantChats []int64
+	}{
+		{
+			name:      "group",
+			mode:      config.DeliveryGroup,
+			wantChats: []int64{uid, gid},
+		},
+		{
+			name: "dm rejection falls back to group",
+			mode: config.DeliveryDM,
+			sendErrAt: map[int]error{
+				2: errors.New("Forbidden: bot can't initiate conversation with a user"),
+			},
+			wantChats: []int64{uid, uid, gid},
+		},
+		{
+			name: "both keeps private ID after uncertain send",
+			mode: config.DeliveryBoth,
+			sendErrAt: map[int]error{
+				3: errors.New("connection reset after request write"),
+			},
+			wantChats: []int64{uid, gid, uid},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newTestService(&config.Config{TimeoutSeconds: 240, DeliveryMode: tt.mode})
+			v.botUsername = "bot"
+			p := &pending{
+				nonce:              "x",
+				name:               "Applicant",
+				lang:               i18n.LangEN,
+				qText:              "Question",
+				qOpts:              []string{"a", "b"},
+				correctIdx:         0,
+				deadline:           time.Now().Add(time.Minute),
+				groupMsgID:         41,
+				privateMsgID:       42,
+				challengeDelivered: true,
+			}
+			v.pend[pkey{gid, uid}] = p
+			bot := newFakeVerifyBot()
+			bot.sendMessageID = 99
+			bot.sendErrAt = tt.sendErrAt
+
+			v.renotifyPending(context.Background(), bot, gid, uid, p.name, p.messages(), p, time.Minute)
+
+			if p.groupMsgID != 99 || p.privateMsgID != 42 || !p.challengeDelivered {
+				t.Fatalf("replacement state = group %d/private %d/delivered %t, want 99/42/true",
+					p.groupMsgID, p.privateMsgID, p.challengeDelivered)
+			}
+			if !reflect.DeepEqual(bot.sendChats, tt.wantChats) {
+				t.Fatalf("send chats = %v, want delivery-mode sequence %v", bot.sendChats, tt.wantChats)
+			}
+			if !reflect.DeepEqual(bot.deletedChats, []int64{gid, uid}) ||
+				!reflect.DeepEqual(bot.deletedMessageIDs, []int{41, 42}) {
+				t.Fatalf("deleted chats/messages = %v/%v, want both old challenges",
+					bot.deletedChats, bot.deletedMessageIDs)
+			}
+		})
+	}
 }
 
 func TestLoadQuickRestartKeepsWindow(t *testing.T) {
@@ -507,7 +935,7 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	seed.statePath = dir + "/pending.json"
 	seed.hbPath = dir + "/heartbeat.json"
 	seed.pend[pkey{-100, 8}] = &pending{nonce: "y", correctIdx: 0, qOpts: []string{"a", "b"},
-		deadline: time.Now().Add(120 * time.Second), groupMsgID: 6}
+		deadline: time.Now().Add(120 * time.Second), groupMsgID: 6, privateMsgID: 7}
 	seed.save()
 	seed.saveHeartbeat() // heartbeat = now (quick restart)
 
@@ -521,6 +949,9 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	if !ok {
 		t.Fatal("the pending should be restored")
 	}
+	if p.privateMsgID != 7 {
+		t.Fatalf("restored private challenge message = %d, want 7", p.privateMsgID)
+	}
 	if p.deadline.After(time.Now().Add(150 * time.Second)) {
 		t.Errorf("a quick restart should keep the remaining ~120s window, not reset to a full 240s (deadline=%v)", p.deadline)
 	}
@@ -529,6 +960,14 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	}
 	if p.timer != nil {
 		p.timer.Stop()
+	}
+	if !v.approve(context.Background(), fb, -100, 8) {
+		t.Fatal("restored pending did not settle")
+	}
+	if !reflect.DeepEqual(fb.deletedChats, []int64{-100, 8}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{6, 7}) {
+		t.Fatalf("quick-restart cleanup = chats %v messages %v, want restored group and private challenges",
+			fb.deletedChats, fb.deletedMessageIDs)
 	}
 }
 

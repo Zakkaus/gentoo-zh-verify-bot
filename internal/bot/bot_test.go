@@ -208,6 +208,14 @@ func expectedAdminCommands(language i18n.Lang, warnLimit int) []telego.BotComman
 		{Command: "bantime", Description: menu.BanTime.For(language)},
 	}, expectedMemberCommands(language)...)
 }
+
+func expectedOwnerCommands(language i18n.Lang) []telego.BotCommand {
+	menu := i18n.Messages.Bot.Menu.Owner
+	return append([]telego.BotCommand{
+		{Command: "enroll", Description: menu.Enroll.For(language)},
+		{Command: "unregister", Description: menu.Unregister.For(language)},
+	}, expectedMemberCommands(language)...)
+}
 func commandDifference(got, want []telego.BotCommand) string {
 	if len(got) != len(want) {
 		return fmt.Sprintf("length = %d, want %d", len(got), len(want))
@@ -301,6 +309,47 @@ func TestSetupCommandsRereadsRuntimeGroups(t *testing.T) {
 	}
 	if runtimeScopes != 2 {
 		t.Errorf("runtime group command scopes = %d, want 2", runtimeScopes)
+	}
+}
+
+func TestSetupCommandsAddsOwnerPrivateMenuFromRuntimeState(t *testing.T) {
+	const ownerID int64 = 42
+	cfg := &config.Config{WarnLimit: 3}
+	settings, err := store.NewSettings(t.TempDir()+"/settings.json", botTestSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(2_000_000_000, 0)
+	nonce, _, err := settings.EnsureOwnerClaim(now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.ClaimOwner(ownerID, nonce, now); err != nil {
+		t.Fatal(err)
+	}
+
+	caller := &commandRecordingCaller{}
+	service := &Service{cfg: cfg, settings: settings}
+	service.SetupCommands(context.Background(), testBot(t, caller))
+
+	ownerMenus := 0
+	languages := map[string]int{}
+	for _, request := range caller.requests {
+		if request.Scope.Type != "chat" || !strings.Contains(string(request.Scope.ChatID), "42") {
+			continue
+		}
+		ownerMenus++
+		languages[request.LanguageCode]++
+		language := i18n.LangZH
+		if request.LanguageCode == "en" {
+			language = i18n.LangEN
+		}
+		if difference := commandDifference(request.Commands, expectedOwnerCommands(language)); difference != "" {
+			t.Errorf("owner/%q commands: %s", request.LanguageCode, difference)
+		}
+	}
+	if ownerMenus != 3 || languages[""] != 1 || languages["zh"] != 1 || languages["en"] != 1 {
+		t.Fatalf("owner private menus/languages = %d/%v, want three localized scopes", ownerMenus, languages)
 	}
 }
 

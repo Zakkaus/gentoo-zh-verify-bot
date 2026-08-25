@@ -23,6 +23,26 @@ const (
 	ModeMixed = "mixed"
 )
 
+const (
+	// DeliveryGroup posts the challenge only in the guarded group.
+	DeliveryGroup = "group"
+	// DeliveryDM attempts a private challenge and posts in the group only after a definite rejection.
+	DeliveryDM = "dm"
+	// DeliveryBoth posts in the group before attempting the private challenge.
+	DeliveryBoth = "both"
+)
+
+const defaultDeliveryMode = DeliveryBoth
+
+// ValidDeliveryMode reports whether mode names a supported challenge delivery mode.
+func ValidDeliveryMode(mode string) bool {
+	switch mode {
+	case DeliveryGroup, DeliveryDM, DeliveryBoth:
+		return true
+	}
+	return false
+}
+
 const defaultVerifyMode = ModeKernel
 
 // ValidMode reports whether mode names a supported verification mode.
@@ -153,6 +173,8 @@ type GroupConfig struct {
 	Questions []Question `json:"questions"`
 	// VerifyMode is kernel, quiz, mixed, or empty to inherit.
 	VerifyMode string `json:"verify_mode"`
+	// DeliveryMode is group, dm, both, or empty to inherit.
+	DeliveryMode string `json:"delivery_mode"`
 	// TrustedMemberGroupIDs overrides, disables, or inherits the global bypass list.
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 	// Lang overrides the global language when non-empty.
@@ -250,6 +272,8 @@ type Config struct {
 	VerifyMaxFails int `json:"verify_max_fails"`
 	// VerifyMode selects kernel, quiz, or mixed verification.
 	VerifyMode string `json:"verify_mode"`
+	// DeliveryMode selects group-only, private-with-fallback, or group-and-private challenge delivery.
+	DeliveryMode string `json:"delivery_mode"`
 	// FallbackQuestions is the answer-hidden path for applicants without Linux.
 	FallbackQuestions []ShortQuestion `json:"fallback_questions"`
 	// Overlays lists GitHub overlays searched by /pkg.
@@ -409,6 +433,9 @@ func LoadConfig(path string) (*Config, error) {
 	if c.VerifyMode != "" && !ValidMode(c.VerifyMode) {
 		return nil, fmt.Errorf("verify_mode %q is not one of %q, %q, %q", c.VerifyMode, ModeKernel, ModeQuiz, ModeMixed)
 	}
+	if c.DeliveryMode != "" && !ValidDeliveryMode(c.DeliveryMode) {
+		return nil, fmt.Errorf("delivery_mode %q is not one of %q, %q, %q", c.DeliveryMode, DeliveryGroup, DeliveryDM, DeliveryBoth)
+	}
 	for i := range c.Groups {
 		g := &c.Groups[i]
 		if err := validateQuestions(g.Questions, fmt.Sprintf("group %d", g.ID)); err != nil {
@@ -416,6 +443,9 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		if g.VerifyMode != "" && !ValidMode(g.VerifyMode) {
 			return nil, fmt.Errorf("group %d: verify_mode %q is not one of %q, %q, %q", g.ID, g.VerifyMode, ModeKernel, ModeQuiz, ModeMixed)
+		}
+		if g.DeliveryMode != "" && !ValidDeliveryMode(g.DeliveryMode) {
+			return nil, fmt.Errorf("group %d: delivery_mode %q is not one of %q, %q, %q", g.ID, g.DeliveryMode, DeliveryGroup, DeliveryDM, DeliveryBoth)
 		}
 		if !ValidLanguage(g.Lang) {
 			return nil, fmt.Errorf("group %d: lang %q is not one of %q, %q, %q", g.ID, g.Lang, "zh", "zh-Hant", "en")
@@ -628,6 +658,17 @@ func (c *Config) VerifyModeFor(id int64) string {
 		return c.VerifyMode
 	}
 	return defaultVerifyMode
+}
+
+// DeliveryModeFor returns the effective challenge delivery mode for a group.
+func (c *Config) DeliveryModeFor(id int64) string {
+	if g := c.group(id); g != nil && ValidDeliveryMode(g.DeliveryMode) {
+		return g.DeliveryMode
+	}
+	if ValidDeliveryMode(c.DeliveryMode) {
+		return c.DeliveryMode
+	}
+	return defaultDeliveryMode
 }
 
 // QuestionsFor returns the effective verification quiz pool for a group.

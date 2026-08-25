@@ -85,6 +85,7 @@ type registrationService struct {
 	username            string
 	selfID              int64
 	now                 func() time.Time
+	onOwnerClaimed      func(context.Context)
 	onRegistered        func(context.Context, int64)
 	onMembershipChanged func(context.Context, int64)
 	onUnregistered      func(int64)
@@ -274,6 +275,9 @@ func (s *registrationService) onOwnerClaim(ctx *th.Context, update telego.Update
 	_, _ = s.bot.SendMessage(ctx.Context(), tu.Message(tu.ID(message.Chat.ID),
 		i18n.Messages.Bot.Registration.OwnerClaimed.For(l)))
 	log.Printf("owner claimed: user=%d", message.From.ID)
+	if s.onOwnerClaimed != nil {
+		s.onOwnerClaimed(ctx.Context())
+	}
 	return nil
 }
 

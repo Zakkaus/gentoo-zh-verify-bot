@@ -220,6 +220,7 @@ func testSettings(t *testing.T, cfg *config.Config) *store.Settings {
 	}
 	defaultGroup := store.GroupBaseline{
 		Enabled:                 store.BaselineValue[bool]{Value: true},
+		DeliveryMode:            store.BaselineValue[string]{Value: config.DeliveryBoth},
 		VerifyMode:              store.BaselineValue[string]{Value: config.ModeKernel},
 		NameSpoiler:             store.BaselineValue[bool]{Value: true},
 		BanSeconds:              store.BaselineValue[int]{Value: cfg.BanSeconds},

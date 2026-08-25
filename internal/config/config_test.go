@@ -142,6 +142,44 @@ func TestLoadConfigValidation(t *testing.T) {
 		t.Errorf("expected error for an unknown per-group verify_mode")
 	}
 }
+
+func TestLoadConfigRejectsUnknownDeliveryModes(t *testing.T) {
+	for _, value := range []map[string]any{
+		{"delivery_mode": "sidecar"},
+		{"groups": []map[string]any{{"id": -100, "delivery_mode": "sidecar"}}},
+	} {
+		if _, err := LoadConfig(writeConfig(t, value)); err == nil {
+			t.Errorf("expected error for unknown delivery_mode in %#v", value)
+		}
+	}
+}
+
+func TestDeliveryModeResolution(t *testing.T) {
+	loaded, err := LoadConfig(writeConfig(t, map[string]any{
+		"delivery_mode": DeliveryDM,
+		"groups": []map[string]any{
+			{"id": -100, "delivery_mode": DeliveryGroup},
+			{"id": -200},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.DeliveryModeFor(-100); got != DeliveryGroup {
+		t.Fatalf("group delivery mode = %q, want %q", got, DeliveryGroup)
+	}
+	if got := loaded.DeliveryModeFor(-200); got != DeliveryDM {
+		t.Fatalf("inherited delivery mode = %q, want %q", got, DeliveryDM)
+	}
+	defaults, err := LoadConfig(writeConfig(t, map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := defaults.DeliveryModeFor(-300); got != DeliveryBoth {
+		t.Fatalf("default delivery mode = %q, want %q", got, DeliveryBoth)
+	}
+}
+
 func TestLoadConfigLanguages(t *testing.T) {
 	base := func() map[string]any {
 		return map[string]any{

@@ -81,8 +81,14 @@ type adminTransport interface {
 	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
 }
 
+type challengeMessages struct {
+	groupMsgID   int
+	privateMsgID int
+}
+
 type pending struct {
 	groupMsgID         int
+	privateMsgID       int
 	challengeDelivered bool
 	mode               string    // challenge type this applicant got: config.ModeKernel (typed answer) or config.ModeQuiz (buttons)
 	lang               i18n.Lang // applicant locale from Telegram; every applicant message uses it
@@ -102,10 +108,12 @@ type pending struct {
 	nonce              string   // per-pending token; a quiz button only counts if its nonce matches
 	name               string   // applicant display name, kept so a post-outage re-notify can address them
 	deadline           time.Time
+	deferredSince      time.Time // first unreachable expiry; retained across recovery and restart
 	timer              *time.Timer
 	epoch              uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
 	lastRenotify       time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
 	failedAt           time.Time // claim time for rolling-window strike accounting
+	deferralCapReached bool      // persisted so the operator warning and short settlement retries survive restart
 	done               bool
 	removed            bool // group removal cancels an in-flight settlement without charging the applicant
 }
@@ -117,19 +125,24 @@ func (p *pending) persistedLang() string {
 	return p.lang.String()
 }
 
+func (p *pending) messages() challengeMessages {
+	return challengeMessages{groupMsgID: p.groupMsgID, privateMsgID: p.privateMsgID}
+}
+
 // renotifyItem is one applicant to re-notify after an outage — snapshotted under the lock, then
 // messaged outside it. Shared by the runtime-recovery (onRecovery) and restart-recovery (load) paths.
 type renotifyItem struct {
-	gid, uid int64
-	name     string
-	oldMsg   int
-	p        *pending
+	gid, uid    int64
+	name        string
+	oldMessages challengeMessages
+	p           *pending
 }
 
 type pendingRec struct {
 	UserID             int64    `json:"user_id"`
 	GroupID            int64    `json:"group_id"`
 	GroupMsgID         int      `json:"group_msg_id"`
+	PrivateMsgID       int      `json:"private_msg_id,omitempty"`
 	ChallengeDelivered bool     `json:"challenge_delivered,omitempty"`
 	Mode               string   `json:"mode,omitempty"`       // empty in a pre-kernel-mode record => quiz
 	Lang               string   `json:"lang,omitempty"`       // applicant locale; empty => Simplified Chinese
@@ -137,17 +150,19 @@ type pendingRec struct {
 	FallbackPending    bool     `json:"fallback_pending,omitempty"`
 	Prompted           bool     `json:"prompted,omitempty"` // the question was DM'd, so a reply counts as an answer
 	// Persist one-shot guards so process restarts cannot replenish free replies.
-	Hinted          bool     `json:"hinted,omitempty"`
-	SampleBounced   bool     `json:"sample_bounced,omitempty"`
-	NoLinuxReminded bool     `json:"no_linux_reminded,omitempty"`
-	OSClarified     bool     `json:"os_clarified,omitempty"`
-	Tries           int      `json:"tries,omitempty"`
-	QText           string   `json:"q_text"`
-	QOpts           []string `json:"q_opts"`
-	CorrectIdx      int      `json:"correct_idx"`
-	Nonce           string   `json:"nonce"`
-	Name            string   `json:"name,omitempty"`
-	Deadline        int64    `json:"deadline"`
+	Hinted             bool     `json:"hinted,omitempty"`
+	SampleBounced      bool     `json:"sample_bounced,omitempty"`
+	NoLinuxReminded    bool     `json:"no_linux_reminded,omitempty"`
+	OSClarified        bool     `json:"os_clarified,omitempty"`
+	Tries              int      `json:"tries,omitempty"`
+	QText              string   `json:"q_text"`
+	QOpts              []string `json:"q_opts"`
+	CorrectIdx         int      `json:"correct_idx"`
+	Nonce              string   `json:"nonce"`
+	Name               string   `json:"name,omitempty"`
+	Deadline           int64    `json:"deadline"`
+	DeferredSince      int64    `json:"deferred_since,omitempty"`
+	DeferralCapReached bool     `json:"deferral_cap_reached,omitempty"`
 }
 
 // Per-pending randomness makes stale quiz buttons unable to answer replacements.
@@ -341,10 +356,13 @@ func (v *Service) IsEnabled(groupID int64) bool {
 	return ok && group.Enabled().Value
 }
 
-// DMFirst reports whether one group attempts private challenge delivery before posting in-group.
-func (v *Service) DMFirst(groupID int64) bool {
+// DeliveryMode returns one group's effective challenge delivery mode.
+func (v *Service) DeliveryMode(groupID int64) string {
 	group, ok := v.groupSettings(groupID)
-	return ok && group.DMFirst().Value
+	if !ok {
+		return config.DeliveryBoth
+	}
+	return group.DeliveryMode().Value
 }
 
 // SetEnabled updates automated join verification for one group.
@@ -634,23 +652,23 @@ func (v *Service) expiryDelay(gid int64, reason string) time.Duration {
 }
 
 // Reserve capacity before delivery; only a confirmed challenge may install a striking timeout.
-func (v *Service) startPending(bot verifyBot, gid, uid int64, p *pending) (oldMsgID int, status pendingStartStatus) {
+func (v *Service) startPending(bot verifyBot, gid, uid int64, p *pending) (oldMessages challengeMessages, status pendingStartStatus) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	key := pkey{gid, uid}
 	old, replacing := v.pend[key]
 	if inFlight := v.terminal[key]; inFlight != nil || replacing && old.done {
-		return 0, pendingBlockedTerminal
+		return challengeMessages{}, pendingBlockedTerminal
 	}
 	if !replacing && !v.pendingCapacityOKLocked(gid) {
-		return 0, pendingBlockedCapacity
+		return challengeMessages{}, pendingBlockedCapacity
 	}
 	if replacing {
 		old.done = true
 		if old.timer != nil {
 			old.timer.Stop()
 		}
-		oldMsgID = old.groupMsgID
+		oldMessages = old.messages()
 		// Re-applying must not replenish attempts or one-shot guards.
 		p.tries, p.hinted, p.sampleBounced = old.tries, old.hinted, old.sampleBounced
 		p.noLinuxReminded, p.osClarified = old.noLinuxReminded, old.osClarified
@@ -659,11 +677,17 @@ func (v *Service) startPending(bot verifyBot, gid, uid int64, p *pending) (oldMs
 	p.deadline = v.wallNow().Add(delay)
 	v.pend[key] = p
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(false))
-	return oldMsgID, pendingStarted
+	return oldMessages, pendingStarted
 }
 
 // Start a full window after delivery while preserving no-fault status on send failure.
-func (v *Service) finishPendingChallenge(bot verifyBot, gid, uid int64, p *pending, groupMsgID int, delivered bool) bool {
+func (v *Service) finishPendingChallenge(
+	bot verifyBot,
+	gid, uid int64,
+	p *pending,
+	messages challengeMessages,
+	delivered bool,
+) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if cur, ok := v.pend[pkey{gid, uid}]; !ok || cur != p || p.done {
@@ -672,7 +696,8 @@ func (v *Service) finishPendingChallenge(bot verifyBot, gid, uid int64, p *pendi
 	if p.timer != nil {
 		p.timer.Stop()
 	}
-	p.groupMsgID = groupMsgID
+	p.groupMsgID = messages.groupMsgID
+	p.privateMsgID = messages.privateMsgID
 	p.challengeDelivered = delivered
 	delay := v.timeout(gid)
 	p.deadline = v.wallNow().Add(delay)
@@ -692,6 +717,66 @@ func (v *Service) alertPendingCap(c context.Context, bot verifyBot, gid int64) {
 	v.mu.Unlock()
 	admin := &v.messages.Verification.Admin
 	v.failAlert(c, bot, gid, admin.PendingCap.Render(v.groupLanguage(gid), pendingGlobalCap, pendingPerGroupCap, gid))
+}
+
+type challengeDeliveryResult struct {
+	messages             challengeMessages
+	delivered            bool
+	active               bool
+	modeLabel            string
+	replacedPrivateMsgID int
+}
+
+// deliverPendingChallenge is the single delivery-mode decision for initial and recovery challenges.
+func (v *Service) deliverPendingChallenge(
+	c context.Context,
+	bot modBot,
+	gid, uid int64,
+	name string,
+) challengeDeliveryResult {
+	result := challengeDeliveryResult{active: true, modeLabel: v.DeliveryMode(gid)}
+	groupLang := v.groupLanguage(gid)
+	switch result.modeLabel {
+	case config.DeliveryGroup:
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+		result.delivered = result.messages.groupMsgID != 0
+	case config.DeliveryBoth:
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+		result.delivered = result.messages.groupMsgID != 0
+		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
+		result.messages.privateMsgID = outcome.privateMsgID
+		result.replacedPrivateMsgID = outcome.replacedPrivateMsgID
+		switch outcome.result {
+		case privateDelivered:
+			result.delivered = true
+			result.modeLabel = "both-delivered"
+		case privateRejected:
+			result.modeLabel = "group-private-rejected"
+		case privateUncertain:
+			result.modeLabel = "group-private-uncertain"
+		case privateGone:
+			result.active = false
+			v.deleteChallenges(c, bot, gid, uid, result.messages)
+		}
+	case config.DeliveryDM:
+		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
+		result.messages.privateMsgID = outcome.privateMsgID
+		result.replacedPrivateMsgID = outcome.replacedPrivateMsgID
+		switch outcome.result {
+		case privateDelivered:
+			result.delivered = true
+			result.modeLabel = "private"
+		case privateRejected:
+			result.modeLabel = "group-fallback"
+			result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+			result.delivered = result.messages.groupMsgID != 0
+		case privateUncertain:
+			result.modeLabel = "private-uncertain"
+		case privateGone:
+			result.active = false
+		}
+	}
+	return result
 }
 
 // OnJoinRequest starts verification for one eligible group join request.
@@ -715,12 +800,11 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	if v.joinGate(c, bot, gid, uid, applicantLang) {
 		return nil
 	}
-	groupLang := v.groupLanguage(gid)
 	mode, text, opts, correctIdx := v.newChallenge(gid, applicantLang)
 	name := applicantDisplayName(&jr.From)
 	p := &pending{mode: mode, lang: applicantLang, qText: text, qOpts: opts, correctIdx: correctIdx,
 		nonce: newNonce(), name: name}
-	oldMsgID, status := v.startPending(bot, gid, uid, p)
+	oldMessages, status := v.startPending(bot, gid, uid, p)
 	switch status {
 	case pendingBlockedCapacity:
 		log.Printf("join %d in group %d: pending cap reached; left for manual review", uid, gid)
@@ -730,42 +814,22 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 		log.Printf("join %d in group %d: terminal action still in flight; deferred re-application", uid, gid)
 		return nil
 	}
-	if oldMsgID != 0 {
-		v.deleteChallenge(c, bot, gid, oldMsgID)
-	}
+	v.deleteChallenges(c, bot, gid, uid, oldMessages)
 
-	groupMsgID := 0
-	privateMsgID := 0
-	delivered := false
-	delivery := "group"
-	if v.DMFirst(gid) {
-		outcome := v.tryProactiveDMChallenge(c, bot, gid, uid)
-		privateMsgID = outcome.privateMsgID
-		switch outcome.result {
-		case dmFirstDelivered:
-			delivered = true
-			delivery = "private"
-		case dmFirstFallback:
-			delivery = "group-fallback"
-			groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
-			delivered = groupMsgID != 0
-		case dmFirstUncertain:
-			delivery = "private-uncertain"
-		case dmFirstGone:
-			return nil
-		}
-	} else {
-		groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
-		delivered = groupMsgID != 0
+	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name)
+	if !delivery.active {
+		return nil
 	}
-	if !v.finishPendingChallenge(bot, gid, uid, p, groupMsgID, delivered) {
-		v.deleteChallenge(c, bot, gid, groupMsgID)
-		v.deleteChallenge(c, bot, uid, privateMsgID)
+	if delivery.replacedPrivateMsgID != 0 {
+		v.deleteChallenge(c, bot, uid, delivery.replacedPrivateMsgID)
+	}
+	if !v.finishPendingChallenge(bot, gid, uid, p, delivery.messages, delivery.delivered) {
+		v.deleteChallenges(c, bot, gid, uid, delivery.messages)
 		return nil // another action handled or replaced this request while delivery was in flight
 	}
 	v.save()
-	log.Printf("join %d (@%s) in group %d: pending (%s challenge), delivery=%s, group message=%d",
-		uid, jr.From.Username, gid, mode, delivery, groupMsgID)
+	log.Printf("join %d (@%s) in group %d: pending (%s challenge), delivery=%s, group message=%d, private message=%d",
+		uid, jr.From.Username, gid, mode, delivery.modeLabel, delivery.messages.groupMsgID, delivery.messages.privateMsgID)
 	return nil
 }
 
@@ -836,9 +900,10 @@ type dmPrompt struct {
 }
 
 type dmSendResult struct {
-	messageID    int
-	current      bool
-	stateChanged bool
+	messageID         int
+	replacedMessageID int
+	current           bool
+	stateChanged      bool
 }
 
 func (v *Service) pendingDMChallenge(gid, uid int64) (dmPrompt, bool) {
@@ -876,47 +941,71 @@ func definiteDMFailure(err error) bool {
 }
 
 // Bind delivery completion to the pending pointer and nonce captured before the Bot API call.
-func (v *Service) completeDMDelivery(bot verifyBot, uid int64, prompt dmPrompt, sendErr error) (current, changed bool) {
+func (v *Service) completeDMDelivery(
+	bot verifyBot,
+	uid int64,
+	prompt dmPrompt,
+	messageID int,
+	sendErr error,
+	question bool,
+	resetExpiry bool,
+) (current, changed bool, oldPrivateMsgID int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{prompt.gid, uid}]
 	if !ok || p != prompt.pending || p.done || p.nonce != prompt.nonce {
-		return false, false
+		return false, false, 0
 	}
 	if sendErr != nil {
-		if prompt.fallbackPending && p.fallbackPending && definiteDMFailure(sendErr) {
+		if question && prompt.fallbackPending && p.fallbackPending && definiteDMFailure(sendErr) {
 			p.qText = kernelQuestion(v.messages, p.lang)
 			p.fbAnswers = nil
 			p.fallbackPending = false
 			p.hinted = false
-			if p.timer != nil {
-				p.timer.Stop()
+			if resetExpiry {
+				if p.timer != nil {
+					p.timer.Stop()
+				}
+				delay := v.timeout(prompt.gid)
+				p.deadline = v.wallNow().Add(delay)
+				v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 			}
-			delay := v.timeout(prompt.gid)
-			p.deadline = v.wallNow().Add(delay)
-			v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
-			return true, true
+			return true, true, 0
 		}
-		return true, false
+		return true, false, 0
 	}
-	if prompt.fallbackPending && p.fallbackPending {
+	resetDeadline := false
+	if question && prompt.fallbackPending && p.fallbackPending {
 		p.fallbackPending = false
+		resetDeadline = resetExpiry
+		changed = true
+	}
+	if messageID != 0 && p.privateMsgID != messageID {
+		oldPrivateMsgID = p.privateMsgID
+		p.privateMsgID = messageID
+		changed = true
+	}
+	if !p.challengeDelivered {
+		p.challengeDelivered = true
+		resetDeadline = resetExpiry
+		changed = true
+	}
+	if resetDeadline {
 		if p.timer != nil {
 			p.timer.Stop()
 		}
 		delay := v.timeout(prompt.gid)
 		p.deadline = v.wallNow().Add(delay)
 		v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
-		changed = true
 	}
-	if p.mode == config.ModeKernel && !p.prompted {
+	if question && p.mode == config.ModeKernel && !p.prompted {
 		p.prompted = true
 		changed = true
 	}
-	return true, changed
+	return true, changed, oldPrivateMsgID
 }
 
-func (v *Service) sendChannelPrompt(c context.Context, bot verifyBot, gid, uid int64, ul i18n.Lang) error {
+func (v *Service) sendChannelPrompt(c context.Context, bot verifyBot, gid, uid int64, ul i18n.Lang) (int, error) {
 	channel := &v.messages.Verification.Channel
 	var rows [][]telego.InlineKeyboardButton
 	if curl := v.channelURL(gid); curl != "" {
@@ -926,13 +1015,19 @@ func (v *Service) sendChannelPrompt(c context.Context, bot verifyBot, gid, uid i
 	}
 	rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: channel.ContinueButton.For(ul),
 		CallbackData: ChannelRecheckCallbackPrefix + strconv.FormatInt(gid, 10) + ":" + strconv.FormatInt(uid, 10)}))
-	_, err := bot.SendMessage(c, htmlMessage(uid,
+	sent, err := bot.SendMessage(c, htmlMessage(uid,
 		channel.FollowPrompt.Render(ul, v.channelLinkHTML(gid, ul))).
 		WithReplyMarkup(tu.InlineKeyboard(rows...)))
-	return err
+	return msgID(sent), err
 }
 
-func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, prompt dmPrompt) (dmSendResult, error) {
+func (v *Service) sendDMQuestionRetainingPrevious(
+	c context.Context,
+	bot verifyBot,
+	uid int64,
+	prompt dmPrompt,
+	resetExpiry bool,
+) (dmSendResult, error) {
 	var sent *telego.Message
 	var err error
 	if prompt.mode == config.ModeKernel {
@@ -955,82 +1050,118 @@ func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, pr
 			v.messages.Verification.Challenge.QuizPrompt.Render(prompt.lang, html.EscapeString(prompt.text))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	}
-	current, changed := v.completeDMDelivery(bot, uid, prompt, err)
-	return dmSendResult{messageID: msgID(sent), current: current, stateChanged: changed}, err
+	messageID := msgID(sent)
+	current, changed, oldPrivateMsgID := v.completeDMDelivery(bot, uid, prompt, messageID, err, true, resetExpiry)
+	return dmSendResult{
+		messageID:         messageID,
+		replacedMessageID: oldPrivateMsgID,
+		current:           current,
+		stateChanged:      changed,
+	}, err
 }
 
-// sendDMChallengeForGroup delivers only the named pending request.
-func (v *Service) sendDMChallengeForGroup(c context.Context, bot modBot, gid, uid int64) (active bool, privateMsgID int, err error) {
+func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, prompt dmPrompt) (dmSendResult, error) {
+	result, err := v.sendDMQuestionRetainingPrevious(c, bot, uid, prompt, true)
+	if result.replacedMessageID != 0 {
+		v.deleteChallenge(c, bot, uid, result.replacedMessageID)
+	}
+	return result, err
+}
+
+// sendDMChallengeForGroup delivers only the named pending request and lets its caller clean up the replaced message.
+func (v *Service) sendDMChallengeForGroup(
+	c context.Context,
+	bot modBot,
+	gid, uid int64,
+	resetExpiry bool,
+) (active bool, privateMsgID, replacedPrivateMsgID int, err error) {
 	prompt, ok := v.pendingDMChallenge(gid, uid)
 	if !ok {
-		return false, 0, nil
+		return false, 0, 0, nil
 	}
 	if v.RequiredChannelID(gid) != 0 && !v.isChannelMember(c, bot, gid, uid, v.groupLanguage(gid)) {
-		return true, 0, v.sendChannelPrompt(c, bot, gid, uid, prompt.lang)
+		privateMsgID, err := v.sendChannelPrompt(c, bot, gid, uid, prompt.lang)
+		current, changed, oldPrivateMsgID := v.completeDMDelivery(bot, uid, prompt, privateMsgID, err, false, resetExpiry)
+		if changed {
+			v.save()
+		}
+		if !current {
+			v.deleteChallenge(c, bot, uid, privateMsgID)
+			return false, 0, 0, err
+		}
+		return true, privateMsgID, oldPrivateMsgID, err
 	}
-	result, err := v.sendDMQuestion(c, bot, uid, prompt)
+	result, err := v.sendDMQuestionRetainingPrevious(c, bot, uid, prompt, resetExpiry)
 	if result.stateChanged {
 		v.save()
 	}
 	if !result.current {
 		v.deleteChallenge(c, bot, uid, result.messageID)
-		return false, 0, err
+		return false, 0, 0, err
 	}
-	return true, result.messageID, err
+	return true, result.messageID, result.replacedMessageID, err
 }
 
-type dmFirstResult uint8
+type privateDeliveryResult uint8
 
 const (
-	dmFirstDelivered dmFirstResult = iota
-	dmFirstFallback
-	dmFirstUncertain
-	dmFirstGone
+	privateDelivered privateDeliveryResult = iota
+	privateRejected
+	privateUncertain
+	privateGone
 )
 
-type dmFirstOutcome struct {
-	result       dmFirstResult
-	privateMsgID int
+type privateDeliveryOutcome struct {
+	result               privateDeliveryResult
+	privateMsgID         int
+	replacedPrivateMsgID int
 }
 
-// tryProactiveDMChallenge falls back only after Telegram definitively rejects the private send.
-func (v *Service) tryProactiveDMChallenge(c context.Context, bot modBot, gid, uid int64) dmFirstOutcome {
-	active, privateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid)
+// attemptPrivateChallenge classifies private delivery without assuming that ambiguous failures rejected the send.
+func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, uid int64) privateDeliveryOutcome {
+	active, privateMsgID, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid, false)
 	if !active {
-		return dmFirstOutcome{result: dmFirstGone}
+		return privateDeliveryOutcome{result: privateGone}
 	}
 	if err == nil {
-		return dmFirstOutcome{result: dmFirstDelivered, privateMsgID: privateMsgID}
+		return privateDeliveryOutcome{
+			result:               privateDelivered,
+			privateMsgID:         privateMsgID,
+			replacedPrivateMsgID: replacedPrivateMsgID,
+		}
 	}
 	if tg.IsRateLimited(err) {
 		wait := tg.RetryAfter(err)
 		if wait > 0 && wait < v.timeout(gid) {
 			log.Printf("join %d in %d: private challenge rate-limited; retrying after %s", uid, gid, wait)
 			if !tg.Pace(c, wait) {
-				return dmFirstOutcome{result: dmFirstUncertain}
+				return privateDeliveryOutcome{result: privateUncertain}
 			}
-			active, privateMsgID, err = v.sendDMChallengeForGroup(c, bot, gid, uid)
+			active, privateMsgID, replacedPrivateMsgID, err = v.sendDMChallengeForGroup(c, bot, gid, uid, false)
 			if !active {
-				return dmFirstOutcome{result: dmFirstGone}
+				return privateDeliveryOutcome{result: privateGone}
 			}
 			if err == nil {
-				return dmFirstOutcome{result: dmFirstDelivered, privateMsgID: privateMsgID}
+				return privateDeliveryOutcome{
+					result:               privateDelivered,
+					privateMsgID:         privateMsgID,
+					replacedPrivateMsgID: replacedPrivateMsgID,
+				}
 			}
 		}
 	}
 	switch {
 	case tg.CannotInitiateConversation(err):
-		return dmFirstOutcome{result: dmFirstFallback}
+		return privateDeliveryOutcome{result: privateRejected}
 	case tg.BotWasBlockedByUser(err):
-		log.Printf("join %d in %d: private challenge rejected because the bot is blocked; using group fallback", uid, gid)
-		return dmFirstOutcome{result: dmFirstFallback}
+		log.Printf("join %d in %d: private challenge rejected because the bot is blocked", uid, gid)
+		return privateDeliveryOutcome{result: privateRejected}
 	case tg.ErrorCode(err) >= 400 && tg.ErrorCode(err) < 500:
-		log.Printf("join %d in %d: private challenge rejected by Telegram (%v); using group fallback", uid, gid, err)
-		return dmFirstOutcome{result: dmFirstFallback}
+		log.Printf("join %d in %d: private challenge rejected by Telegram (%v)", uid, gid, err)
+		return privateDeliveryOutcome{result: privateRejected}
 	default:
-		// A transport or server failure may follow a send that Telegram accepted; suppress the group copy.
-		log.Printf("join %d in %d: private challenge delivery is uncertain (%v); group fallback suppressed", uid, gid, err)
-		return dmFirstOutcome{result: dmFirstUncertain}
+		log.Printf("join %d in %d: private challenge delivery is uncertain (%v)", uid, gid, err)
+		return privateDeliveryOutcome{result: privateUncertain}
 	}
 }
 
@@ -1045,7 +1176,11 @@ func (v *Service) SendDMChallenge(c context.Context, bot *telego.Bot, uid int64,
 		if !v.challengeResendOK(groupID, uid) {
 			return
 		}
-		if _, _, err := v.sendDMChallengeForGroup(c, bot, groupID, uid); err != nil {
+		active, _, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, groupID, uid, true)
+		if active && replacedPrivateMsgID != 0 {
+			v.deleteChallenge(c, bot, uid, replacedPrivateMsgID)
+		}
+		if err != nil {
 			log.Printf("verify DM for %d in %d failed: %v", uid, groupID, err)
 		}
 		return
@@ -1061,7 +1196,7 @@ func (v *Service) SendDMChallenge(c context.Context, bot *telego.Bot, uid int64,
 	}
 	// Bare links preserve the legacy first-pending channel gate and all-pending fan-out.
 	if v.RequiredChannelID(gid) != 0 && !v.isChannelMember(c, bot, gid, uid, v.groupLanguage(gid)) {
-		if err := v.sendChannelPrompt(c, bot, gid, uid, ul); err != nil {
+		if _, err := v.sendChannelPrompt(c, bot, gid, uid, ul); err != nil {
 			log.Printf("verify DM channel prompt for %d in %d failed: %v", uid, gid, err)
 		}
 		return
@@ -1400,6 +1535,11 @@ func (v *Service) deleteChallenge(c context.Context, bot verifyBot, gid int64, m
 	v.verificationTransport(bot).Delete(c, gid, msgID)
 }
 
+func (v *Service) deleteChallenges(c context.Context, bot verifyBot, gid, uid int64, messages challengeMessages) {
+	v.deleteChallenge(c, bot, gid, messages.groupMsgID)
+	v.deleteChallenge(c, bot, uid, messages.privateMsgID)
+}
+
 func (v *Service) adminAlert(c context.Context, bot verifyBot, text string) {
 	v.verificationTransport(bot).Alert(c, v.cfg.AdminLogChatID, text)
 }
@@ -1500,7 +1640,7 @@ func (v *Service) executeApprove(c context.Context, bot verifyBot, gid, uid int6
 	v.releaseTerminalLocked(key, p)
 	v.mu.Unlock()
 	v.clearVerifyFails(gid, uid) // verified successfully — reset any failure strikes
-	v.deleteChallenge(c, bot, gid, p.groupMsgID)
+	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	v.recordDecision(true)
 	v.save()
 	log.Printf("approve user=%d group=%d", uid, gid)
@@ -1579,7 +1719,8 @@ const noFaultGrace = 60 * time.Second
 // Timeouts and wrong answers strike; delivery, settlement, restart, and recovery failures do not.
 func strikesUser(reason string) bool {
 	switch reason {
-	case "approve-retry", "ban-retry", "decline-retry", "restart-lapsed", "recovered", "challenge-post-failed":
+	case "approve-retry", "ban-retry", "decline-retry", "restart-lapsed", "recovered",
+		"challenge-post-failed", deferredExpiryReason:
 		return false
 	default:
 		return true
@@ -1607,7 +1748,7 @@ func (v *Service) finishDecline(c context.Context, bot verifyBot, gid, uid int64
 		v.save()
 		return false, false
 	}
-	v.deleteChallenge(c, bot, gid, p.groupMsgID)
+	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	var count int
 	var doBan bool
 	if strikesUser(reason) {
@@ -1680,7 +1821,7 @@ func (v *Service) executeBan(c context.Context, bot verifyBot, gid, uid int64, p
 		v.save()
 		return false
 	}
-	v.deleteChallenge(c, bot, gid, p.groupMsgID)
+	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	v.recordDecision(false)
 	v.finishTerminal(gid, uid, p)
 	v.save()

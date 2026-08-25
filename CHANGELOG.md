@@ -24,11 +24,16 @@ All notable changes to this project are documented here. The format is based on
 - Rewrote the Simplified Chinese README as the source document and translated the English README
   from it. Both now focus on deployment fit and operating footprint, with current verification,
   runtime registration, settings, command scope, watchdog, persistence, and outage behavior.
-- **Join verification now tries the private challenge first by default.** Applicants who have
-  previously started the bot receive only the DM; Telegram's ordinary cannot-initiate 403 falls
-  back to the group challenge. New fallback links encode the group ID so concurrent requests
-  cannot select another group's pending challenge, while existing bare `verify` links remain
-  compatible. Administrators can toggle DM-first delivery per group in `/settings`.
+- **Join verification now has per-group `group`, `dm`, and `both` delivery modes.** `both` is the
+  new default: the group challenge is posted first, then the bot attempts the private challenge,
+  and either confirmed send starts the answer window. `dm` retains definite-rejection fallback
+  without duplicating an uncertain private send; `group` retains group-only delivery. Schema-v2
+  `dm_first` overrides migrate to the equivalent mode, and settings can also define global or
+  per-group `delivery_mode` baselines.
+- **Verification outage deferral now ends after 48 hours.** The first unreachable expiry starts a
+  persisted accumulator that recovery and restart do not reset. At the limit, the bot declines
+  strike-free, clears both challenges, and tells the applicant to reapply; an unreachable Telegram
+  service is retried every 60 seconds instead of receiving another full verification window.
 - **Join floods have bounded memory use.** The pending queue is capped at 2,000 requests across the
   process and 500 per group. Requests beyond either cap remain for manual review, with an admin
   alert throttled to once every 10 minutes.
@@ -52,6 +57,15 @@ All notable changes to this project are documented here. The format is based on
   govulncheck v1.7.0, and gosec v2.28.0.
 
 ### Fixed
+- **Claimed owners now receive a private command menu immediately.** A successful owner claim
+  refreshes Telegram command scopes without a restart and adds `/enroll` and `/unregister` beside
+  the member commands.
+- **Verification cleanup now tracks both challenge messages across restarts.** Settlement, timeout,
+  replacement, and mid-delivery abandonment independently delete the recorded group and private
+  messages, so one missing or failed deletion does not block the other.
+- **Outage re-notification now follows each group's delivery mode.** Recovery uses the initial
+  delivery decision for `group`, `dm`, and `both`, records a confirmed replacement private message,
+  and removes both stale challenges instead of leaving a live private button behind.
 - **External lookups now follow captured upstream contracts.** Package searches reject unrelated
   single-result redirects; Gentoo masks suppress stable and arm64 availability; Bugzilla feeds
   request the base user fields required for detail objects; Gentoo news uses the index date;
@@ -63,13 +77,13 @@ All notable changes to this project are documented here. The format is based on
   authorization, pending restoration, panel command guards, control-group policy, locale selection,
   and command menus read the live settings owner. Registration completion now directs the
   administrator to run `/settings` in the group instead of emitting an unroutable deep link.
-- **Schema-v2 migration now preserves the version-0 source and documents unsafe rollback.** Before
-  the first version-0-to-v2 write, the application atomically copies the original to
-  `settings.json.v0.bak` on a best-effort basis. Running a release without schema-v2 support still
-  erases every group/global override and revision, owner identity and claim, enrollment nonce,
-  pending registration, and registered group on its next settings write; it also reads the frozen
-  pre-migration antispam toggles and channel whitelist. Stop the service and back up the current
-  `settings.json` and `antispam.json` before rollback. The antispam migration remains one-way.
+- **Schema-v3 migration preserves the version-0 source and documents unsafe rollback.** Before
+  the first version-0-to-v3 write, the application atomically copies the original to
+  `settings.json.v0.bak` on a best-effort basis. A schema-v2 release preserves the newer file and
+  disables settings writes; releases without the newer-version guard can erase group/global
+  overrides and revisions, owner and registration state, enrollment capabilities, and pending
+  registrations on their next write. Stop the service and back up the current `settings.json` and
+  `antispam.json` before rollback. The antispam migration remains one-way.
 - **The bot now remains supervised through clean exits, crash loops, stalled polling, and reboot.**
   The systemd unit retries every 30 seconds without a start-limit latch, uses a 120-second
   progress-based watchdog, and allows 30 seconds for a bounded state-preserving shutdown. Update

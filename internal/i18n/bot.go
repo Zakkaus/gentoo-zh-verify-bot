@@ -12,12 +12,14 @@ type BotCatalog struct {
 	Registration BotRegistrationCatalog
 }
 
-// BotMenuCatalog contains member and administrator command descriptions.
+// BotMenuCatalog contains member, administrator, and owner command descriptions.
 type BotMenuCatalog struct {
 	// Member contains member command descriptions.
 	Member BotMemberMenuCatalog
 	// Admin contains administrator command descriptions.
 	Admin BotAdminMenuCatalog
+	// Owner contains private bot-owner command descriptions.
+	Owner BotOwnerMenuCatalog
 }
 
 // BotMemberMenuCatalog contains member command descriptions.
@@ -80,6 +82,14 @@ type BotAdminMenuCatalog struct {
 	AutoDelete Text
 	// BanTime describes ban-duration controls.
 	BanTime Text
+}
+
+// BotOwnerMenuCatalog contains private bot-owner command descriptions.
+type BotOwnerMenuCatalog struct {
+	// Enroll describes one-use group-enrollment link creation.
+	Enroll Text
+	// Unregister describes runtime-group removal.
+	Unregister Text
 }
 
 // BotLifecycleCatalog contains process-level bot alerts.

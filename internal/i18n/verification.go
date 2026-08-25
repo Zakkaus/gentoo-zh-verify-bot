@@ -100,6 +100,8 @@ type VerificationResultCatalog struct {
 	CooldownActive Format
 	// DeclinePending reports that Telegram may still hold the join request.
 	DeclinePending Text
+	// DeferralExpired reports a strike-free decline after a prolonged Telegram outage.
+	DeferralExpired Text
 	// TimeoutRetry formats a timeout rejection and its retry cooldown.
 	TimeoutRetry Format
 	// TimeoutNoWait reports a timeout rejection without a cooldown.

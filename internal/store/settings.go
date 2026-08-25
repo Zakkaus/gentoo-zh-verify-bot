@@ -19,7 +19,7 @@ import (
 )
 
 // SettingsSchemaVersion is the settings.json schema written by this package.
-const SettingsSchemaVersion = 2
+const SettingsSchemaVersion = 3
 
 // Source identifies where an effective setting came from.
 type Source uint8
@@ -62,7 +62,7 @@ type BaselineValue[T any] struct {
 type GroupBaseline struct {
 	ID                      int64
 	Enabled                 BaselineValue[bool]
-	DMFirst                 BaselineValue[bool]
+	DeliveryMode            BaselineValue[string]
 	VerifyMode              BaselineValue[string]
 	NameSpoiler             BaselineValue[bool]
 	BanSeconds              BaselineValue[int]
@@ -101,7 +101,7 @@ type SettingsBaseline struct {
 // GroupOverrides is the sparse per-group settings.json record. A nil field follows the baseline.
 type GroupOverrides struct {
 	Enabled                 *bool                   `json:"enabled,omitempty"`
-	DMFirst                 *bool                   `json:"dm_first,omitempty"`
+	DeliveryMode            *string                 `json:"delivery_mode,omitempty"`
 	VerifyMode              *string                 `json:"verify_mode,omitempty"`
 	NameSpoiler             *bool                   `json:"name_spoiler,omitempty"`
 	BanSeconds              *int                    `json:"ban_seconds,omitempty"`
@@ -222,7 +222,8 @@ func (e *ConflictError) Error() string {
 func (e *ConflictError) Is(target error) bool { return target == ErrSettingsConflict }
 
 type groupRecord struct {
-	Revision uint64 `json:"revision"`
+	Revision      uint64 `json:"revision"`
+	LegacyDMFirst *bool  `json:"dm_first,omitempty"`
 	GroupOverrides
 }
 
@@ -261,7 +262,7 @@ type effectiveGroup struct {
 	baseline                GroupBaseline
 	overrides               GroupOverrides
 	enabled                 Setting[bool]
-	dmFirst                 Setting[bool]
+	deliveryMode            Setting[string]
 	verifyMode              Setting[string]
 	nameSpoiler             Setting[bool]
 	banSeconds              Setting[int]
@@ -345,7 +346,8 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 	}
 	migrateAntispam := path != ""
 	writeMigration := false
-	var versionZeroSource []byte
+	var preMigrationSource []byte
+	var preMigrationVersion int
 	if exists {
 		var loaded settingsFile
 		source, err := loadWithSource(path, &loaded)
@@ -358,11 +360,16 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 		} else {
 			switch {
 			case loaded.Version == 0:
-				versionZeroSource = source
+				preMigrationSource, preMigrationVersion = source, loaded.Version
 				s.state = s.migrateLegacy(loaded)
 				writeMigration = true
 			case loaded.Version == 1:
-				s.state = migrateVersionOne(loaded)
+				preMigrationSource, preMigrationVersion = source, loaded.Version
+				s.state = migrateVersionTwo(migrateVersionOne(loaded))
+				writeMigration = true
+			case loaded.Version == 2:
+				preMigrationSource, preMigrationVersion = source, loaded.Version
+				s.state = migrateVersionTwo(loaded)
 				writeMigration = true
 			case loaded.Version == SettingsSchemaVersion:
 				s.state = normalizeFile(loaded)
@@ -390,10 +397,13 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 		}
 	}
 	if s.writable && writeMigration {
-		if versionZeroSource != nil {
-			backupPath := path + ".v0.bak"
-			if err := writeBytes(backupPath, versionZeroSource); err != nil {
-				log.Printf("ERROR settings migration: could not back up schema-v0 state %s to %s: %v", path, backupPath, err)
+		// Any upgrading migration rewrites the file in place, so keep the exact bytes it replaced.
+		// The copy is named by the schema it came from, so successive upgrades do not overwrite it.
+		if preMigrationSource != nil {
+			backupPath := fmt.Sprintf("%s.v%d.bak", path, preMigrationVersion)
+			if err := writeBytes(backupPath, preMigrationSource); err != nil {
+				log.Printf("ERROR settings migration: could not back up schema-v%d state %s to %s: %v",
+					preMigrationVersion, path, backupPath, err)
 			}
 		}
 		if err := s.writeState(&s.state); err != nil {
@@ -707,14 +717,14 @@ func (s *Settings) IssueEnrollmentNonce(ownerID int64, now time.Time, lifetime t
 	}
 }
 
-func (v GroupView) ID() int64                   { return v.group.id }
-func (v GroupView) Revision() uint64            { return v.group.revision }
-func (v GroupView) RuntimeRegistered() bool     { return v.group.registered }
-func (v GroupView) Enabled() Setting[bool]      { return v.group.enabled }
-func (v GroupView) DMFirst() Setting[bool]      { return v.group.dmFirst }
-func (v GroupView) VerifyMode() Setting[string] { return v.group.verifyMode }
-func (v GroupView) NameSpoiler() Setting[bool]  { return v.group.nameSpoiler }
-func (v GroupView) BanSeconds() Setting[int]    { return v.group.banSeconds }
+func (v GroupView) ID() int64                     { return v.group.id }
+func (v GroupView) Revision() uint64              { return v.group.revision }
+func (v GroupView) RuntimeRegistered() bool       { return v.group.registered }
+func (v GroupView) Enabled() Setting[bool]        { return v.group.enabled }
+func (v GroupView) DeliveryMode() Setting[string] { return v.group.deliveryMode }
+func (v GroupView) VerifyMode() Setting[string]   { return v.group.verifyMode }
+func (v GroupView) NameSpoiler() Setting[bool]    { return v.group.nameSpoiler }
+func (v GroupView) BanSeconds() Setting[int]      { return v.group.banSeconds }
 func (v GroupView) LookupTTLSeconds() Setting[int] {
 	return v.group.lookupTTLSeconds
 }
@@ -802,7 +812,7 @@ func (s *Settings) migrateLegacy(legacy settingsFile) settingsFile {
 
 func migrateVersionOne(state settingsFile) settingsFile {
 	migrated := normalizeFile(state)
-	migrated.Version = SettingsSchemaVersion
+	migrated.Version = 2
 	for groupID, record := range migrated.Groups {
 		if record.LookupTTLSeconds == nil {
 			continue
@@ -812,6 +822,23 @@ func migrateVersionOne(state settingsFile) settingsFile {
 		if !enabled {
 			record.LookupTTLSeconds = nil
 		}
+		migrated.Groups[groupID] = record
+	}
+	return migrated
+}
+
+func migrateVersionTwo(state settingsFile) settingsFile {
+	migrated := normalizeFile(state)
+	migrated.Version = SettingsSchemaVersion
+	for groupID, record := range migrated.Groups {
+		if record.DeliveryMode == nil && record.LegacyDMFirst != nil {
+			mode := config.DeliveryGroup
+			if *record.LegacyDMFirst {
+				mode = config.DeliveryDM
+			}
+			record.DeliveryMode = stringPtr(mode)
+		}
+		record.LegacyDMFirst = nil
 		migrated.Groups[groupID] = record
 	}
 	return migrated
@@ -925,7 +952,7 @@ func buildEffectiveGroup(baseline GroupBaseline, record groupRecord, registered 
 		baseline:         cloneGroupBaseline(baseline),
 		overrides:        cloneGroupOverrides(record.GroupOverrides),
 		enabled:          resolve(record.Enabled, baseline.Enabled),
-		dmFirst:          resolve(record.DMFirst, baseline.DMFirst),
+		deliveryMode:     resolve(record.DeliveryMode, baseline.DeliveryMode),
 		verifyMode:       resolve(record.VerifyMode, baseline.VerifyMode),
 		nameSpoiler:      resolve(record.NameSpoiler, baseline.NameSpoiler),
 		banSeconds:       resolve(record.BanSeconds, baseline.BanSeconds),
@@ -1010,7 +1037,7 @@ func validateBaseline(baseline SettingsBaseline) error {
 
 func validateBaselineSources(group GroupBaseline) error {
 	sources := []Source{
-		group.Enabled.Source, group.DMFirst.Source, group.VerifyMode.Source, group.NameSpoiler.Source,
+		group.Enabled.Source, group.DeliveryMode.Source, group.VerifyMode.Source, group.NameSpoiler.Source,
 		group.BanSeconds.Source, group.LookupTTLSeconds.Source, group.LookupAutoDeleteEnabled.Source,
 		group.TimeoutSeconds.Source, group.VerifyMaxFails.Source, group.VerifyRetrySeconds.Source,
 		group.AntispamEnabled.Source, group.ChannelWhitelist.Source,
@@ -1027,6 +1054,9 @@ func validateBaselineSources(group GroupBaseline) error {
 }
 
 func validateEffectiveGroup(group *effectiveGroup) error {
+	if !config.ValidDeliveryMode(group.deliveryMode.Value) {
+		return fmt.Errorf("invalid delivery mode %q", group.deliveryMode.Value)
+	}
 	if !config.ValidMode(group.verifyMode.Value) {
 		return fmt.Errorf("invalid verify mode %q", group.verifyMode.Value)
 	}
@@ -1319,6 +1349,7 @@ func cloneSettingsFile(value settingsFile) settingsFile {
 	out.Groups = make(map[int64]groupRecord, len(value.Groups))
 	for id, record := range value.Groups {
 		record.GroupOverrides = cloneGroupOverrides(record.GroupOverrides)
+		record.LegacyDMFirst = clonePtr(record.LegacyDMFirst)
 		out.Groups[id] = record
 	}
 	return out
@@ -1336,7 +1367,7 @@ func cloneRegistrationState(value RegistrationState) RegistrationState {
 func cloneGroupOverrides(value GroupOverrides) GroupOverrides {
 	out := value
 	out.Enabled = clonePtr(value.Enabled)
-	out.DMFirst = clonePtr(value.DMFirst)
+	out.DeliveryMode = clonePtr(value.DeliveryMode)
 	out.VerifyMode = clonePtr(value.VerifyMode)
 	out.NameSpoiler = clonePtr(value.NameSpoiler)
 	out.BanSeconds = clonePtr(value.BanSeconds)
@@ -1368,7 +1399,7 @@ func cloneGlobalOverrides(value GlobalOverrides) GlobalOverrides {
 
 func compactGroupOverrides(value GroupOverrides, baseline GroupBaseline) GroupOverrides {
 	value.Enabled = omitBaseline(value.Enabled, baseline.Enabled.Value)
-	value.DMFirst = omitBaseline(value.DMFirst, baseline.DMFirst.Value)
+	value.DeliveryMode = omitBaseline(value.DeliveryMode, baseline.DeliveryMode.Value)
 	value.VerifyMode = omitBaseline(value.VerifyMode, baseline.VerifyMode.Value)
 	value.NameSpoiler = omitBaseline(value.NameSpoiler, baseline.NameSpoiler.Value)
 	value.BanSeconds = omitBaseline(value.BanSeconds, baseline.BanSeconds.Value)

@@ -78,15 +78,16 @@ type PanelMenuCatalog struct {
 
 // PanelSettingsCatalog contains every in-Telegram settings-panel surface.
 type PanelSettingsCatalog struct {
-	Launch PanelSettingsLaunchCatalog
-	Common PanelSettingsCommonCatalog
-	Source PanelSettingsSourceCatalog
-	Mode   PanelSettingsModeCatalog
-	Screen PanelSettingsScreenCatalog
-	Field  PanelSettingsFieldCatalog
-	Prompt PanelSettingsPromptCatalog
-	Error  PanelSettingsErrorCatalog
-	Value  PanelSettingsValueCatalog
+	Launch   PanelSettingsLaunchCatalog
+	Common   PanelSettingsCommonCatalog
+	Source   PanelSettingsSourceCatalog
+	Mode     PanelSettingsModeCatalog
+	Delivery PanelSettingsDeliveryCatalog
+	Screen   PanelSettingsScreenCatalog
+	Field    PanelSettingsFieldCatalog
+	Prompt   PanelSettingsPromptCatalog
+	Error    PanelSettingsErrorCatalog
+	Value    PanelSettingsValueCatalog
 }
 
 type PanelSettingsLaunchCatalog struct {
@@ -125,6 +126,12 @@ type PanelSettingsModeCatalog struct {
 	Mixed  Text
 }
 
+type PanelSettingsDeliveryCatalog struct {
+	Group Text
+	DM    Text
+	Both  Text
+}
+
 type PanelSettingsScreenCatalog struct {
 	Groups         Format
 	NoGroups       Text
@@ -150,7 +157,9 @@ type PanelSettingsFieldCatalog struct {
 	Content                Text
 	ChangeGroup            Text
 	Verification           Text
-	DMFirst                Text
+	DeliveryGroup          Text
+	DeliveryDM             Text
+	DeliveryBoth           Text
 	ModeKernel             Text
 	ModeQuiz               Text
 	ModeMixed              Text

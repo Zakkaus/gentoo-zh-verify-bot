@@ -44,7 +44,7 @@ func assertGlobalOverrides(t *testing.T, settings *store.Settings, want store.Gl
 func expectedRuntimeScreen(panel *Panel, group store.GroupView, language i18n.Lang) string {
 	return i18n.Messages.Panel.Settings.Screen.Runtime.Render(language, group.ID(),
 		panel.sourcedBool(language, group.Enabled()), panel.sourcedMode(language, group.VerifyMode()),
-		panel.sourcedBool(language, group.DMFirst()), panel.sourcedBool(language, group.NameSpoiler()),
+		panel.sourcedDeliveryMode(language, group.DeliveryMode()), panel.sourcedBool(language, group.NameSpoiler()),
 		panel.sourcedSeconds(language, group.BanSeconds(), true),
 		panel.sourcedBool(language, group.LookupAutoDeleteEnabled()), panel.sourcedSeconds(language, group.LookupTTLSeconds(), false),
 		panel.sourcedLanguage(language, group.Lang()))
@@ -210,7 +210,8 @@ func testSettingsScreenContracts(t *testing.T) {
 		{
 			screen: "rt", wantText: expectedRuntimeScreen(panel, group, language),
 			actions: []string{
-				action(panelTestGroupA, "en", "_"), action(panelTestGroupA, "df", "_"),
+				action(panelTestGroupA, "en", "_"),
+				action(panelTestGroupA, "df", "g"), action(panelTestGroupA, "df", "d"), action(panelTestGroupA, "df", "b"),
 				action(panelTestGroupA, "vm", "k"), action(panelTestGroupA, "vm", "q"), action(panelTestGroupA, "vm", "m"),
 				action(panelTestGroupA, "ns", "_"), action(panelTestGroupA, "bd", "_"), action(panelTestGroupA, "ld", "_"),
 				action(panelTestGroupA, "lt", "_"), action(panelTestGroupA, "lg", "z"), action(panelTestGroupA, "lg", "h"),
@@ -347,6 +348,41 @@ func TestPanelRuntimeControlsMutateOnlyTargetRenderAndRejectStale(t *testing.T) 
 		checkEffective func(*testing.T, store.GroupView)
 		language       i18n.Lang
 	}{
+		{
+			name: "group delivery", field: "df", value: "g", language: i18n.LangEN,
+			setExpected: func(next *store.GroupOverrides, _ store.GroupView) {
+				value := config.DeliveryGroup
+				next.DeliveryMode = &value
+			},
+			checkEffective: func(t *testing.T, group store.GroupView) {
+				if got := group.DeliveryMode(); got.Value != config.DeliveryGroup || got.Source != store.SourceRuntime {
+					t.Fatalf("delivery mode = %+v", got)
+				}
+			},
+		},
+		{
+			name: "DM delivery", field: "df", value: "d", language: i18n.LangEN,
+			setExpected: func(next *store.GroupOverrides, _ store.GroupView) {
+				value := config.DeliveryDM
+				next.DeliveryMode = &value
+			},
+			checkEffective: func(t *testing.T, group store.GroupView) {
+				if got := group.DeliveryMode(); got.Value != config.DeliveryDM || got.Source != store.SourceRuntime {
+					t.Fatalf("delivery mode = %+v", got)
+				}
+			},
+		},
+		{
+			name: "both delivery", field: "df", value: "b", language: i18n.LangEN,
+			setExpected: func(next *store.GroupOverrides, _ store.GroupView) {
+				next.DeliveryMode = nil
+			},
+			checkEffective: func(t *testing.T, group store.GroupView) {
+				if got := group.DeliveryMode(); got.Value != config.DeliveryBoth || got.Source != store.SourceDefault {
+					t.Fatalf("delivery mode = %+v", got)
+				}
+			},
+		},
 		{
 			name: "kernel mode", field: "vm", value: "k", language: i18n.LangEN,
 			seed: func(t *testing.T, settings *store.Settings) {

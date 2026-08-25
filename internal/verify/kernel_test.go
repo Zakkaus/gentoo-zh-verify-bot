@@ -621,7 +621,7 @@ func TestUncertainFallbackPromptDeliveryDoesNotChargeAnswersBeforeRetry(t *testi
 	}
 
 	retry := newFakeVerifyBot()
-	active, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid)
+	active, _, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid, true)
 	if err != nil || !active {
 		t.Fatalf("fallback retry = active %v error %v, want confirmed delivery", active, err)
 	}
@@ -1009,10 +1009,10 @@ func TestRepliesCannotChargeAReplacedPending(t *testing.T) {
 
 func TestReapplyKeepsAttempts(t *testing.T) {
 	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100},
-		TimeoutSeconds: 240, VerifyMode: config.ModeKernel})
+		TimeoutSeconds: 240, VerifyMode: config.ModeKernel, DeliveryMode: config.DeliveryGroup})
 	key := pkey{-100, 5}
 	old := &pending{mode: config.ModeKernel, nonce: "old", prompted: true, tries: 2, hinted: true,
-		sampleBounced: true, noLinuxReminded: true, osClarified: true, groupMsgID: 42,
+		sampleBounced: true, noLinuxReminded: true, osClarified: true, groupMsgID: 42, privateMsgID: 43,
 		deadline: time.Now().Add(time.Hour)}
 	v.pend[key] = old
 	bot := newFakeVerifyBot()
@@ -1033,8 +1033,13 @@ func TestReapplyKeepsAttempts(t *testing.T) {
 	if p.tries != 2 || !p.hinted || !p.sampleBounced || !p.noLinuxReminded || !p.osClarified {
 		t.Errorf("replacement did not inherit attempts and spent guards: %+v", p)
 	}
-	if bot.sends != 1 || bot.deletes != 1 {
-		t.Errorf("real reapply path sent/deleted = %d/%d, want 1/1", bot.sends, bot.deletes)
+	if bot.sends != 1 || bot.deletes != 2 {
+		t.Errorf("real reapply path sent/deleted = %d/%d, want 1/2", bot.sends, bot.deletes)
+	}
+	if len(bot.deletedChats) != 2 || bot.deletedChats[0] != -100 || bot.deletedChats[1] != 5 ||
+		bot.deletedMessageIDs[0] != 42 || bot.deletedMessageIDs[1] != 43 {
+		t.Errorf("reapply cleanup = chats %v messages %v, want old group and private challenges",
+			bot.deletedChats, bot.deletedMessageIDs)
 	}
 	if p.timer != nil {
 		p.timer.Stop()

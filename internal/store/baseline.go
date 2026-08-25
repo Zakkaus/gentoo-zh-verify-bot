@@ -79,6 +79,12 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 		verifyMode = config.ModeKernel
 		verifyModeSource = SourceDefault
 	}
+	deliveryMode := cfg.DeliveryMode
+	deliveryModeSource := baselineSource(topHas("delivery_mode"))
+	if !config.ValidDeliveryMode(deliveryMode) {
+		deliveryMode = config.DeliveryBoth
+		deliveryModeSource = SourceDefault
+	}
 	lang := cfg.Lang
 	langSource := baselineSource(topHas("lang"))
 	if lang == "" {
@@ -88,7 +94,7 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 
 	defaultGroup := GroupBaseline{
 		Enabled:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
-		DMFirst:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
+		DeliveryMode:            BaselineValue[string]{Value: deliveryMode, Source: deliveryModeSource},
 		VerifyMode:              BaselineValue[string]{Value: verifyMode, Source: verifyModeSource},
 		NameSpoiler:             BaselineValue[bool]{Value: true, Source: SourceDefault},
 		BanSeconds:              BaselineValue[int]{Value: config.ClampBanSeconds(cfg.BanSeconds), Source: baselineSource(topHas("ban_seconds"))},
@@ -138,6 +144,9 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 		}
 		if config.ValidMode(configured.VerifyMode) {
 			group.VerifyMode = BaselineValue[string]{Value: configured.VerifyMode, Source: SourceConfig}
+		}
+		if config.ValidDeliveryMode(configured.DeliveryMode) {
+			group.DeliveryMode = BaselineValue[string]{Value: configured.DeliveryMode, Source: SourceConfig}
 		}
 		if len(configured.Questions) > 0 {
 			group.Questions = BaselineValue[[]config.Question]{Value: configured.Questions, Source: SourceConfig}
