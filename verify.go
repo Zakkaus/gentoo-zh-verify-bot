@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"log"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
@@ -33,7 +33,6 @@ const (
 	pendingGlobalCap        = 2000
 	pendingPerGroupCap      = 500
 	pendingCapAlertCooldown = 10 * time.Minute
-	warnCounterMax          = 4096
 )
 
 type pendingStartStatus uint8
@@ -55,15 +54,11 @@ type verifyBot interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 }
 
-// modBot adds fresh authorization and moderation operations.
-// Keeping authorization on this interface makes fail-closed paths testable.
+// modBot adds membership lookups and callback acknowledgements to verification.
 type modBot interface {
 	verifyBot
 	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
 	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
-	RestrictChatMember(ctx context.Context, params *telego.RestrictChatMemberParams) error
-	UnbanChatMember(ctx context.Context, params *telego.UnbanChatMemberParams) error
-	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
 }
 
 // verifyTransport is the caller-owned Telegram mechanics used by verification.
@@ -75,14 +70,11 @@ type verifyTransport interface {
 	Ban(ctx context.Context, chatID, userID int64, seconds int, revokeMessages bool) error
 }
 
-// moderationTransport extends verification transport with authorization and moderation mechanics.
-type moderationTransport interface {
-	verifyTransport
+// adminTransport is the caller-owned authorization and notice surface used outside moderation.
+type adminTransport interface {
 	CachedAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 	FreshAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
-	Mute(ctx context.Context, chatID, userID int64, seconds int) error
-	Unmute(ctx context.Context, chatID, userID int64) error
 }
 
 type pending struct {
@@ -157,59 +149,32 @@ func newNonce() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Warning paths mutate their map directly, so the state lock enforces the cap at every release.
-type verifierStateMutex struct {
-	sync.Mutex
-	owner *Verifier
-}
-
-func (m *verifierStateMutex) Unlock() {
-	if m.owner != nil {
-		m.owner.pruneWarnsLocked()
-	}
-	m.Mutex.Unlock()
-}
-
 // Verifier owns mutable runtime state; fields document their guarding mutex.
 type Verifier struct {
 	cfg               *config.Config
 	botUsername       string
 	botID             int64
 	statePath         string
-	warnPath          string
-	acPath            string
 	loc               *time.Location
 	startTime         time.Time
-	mu                verifierStateMutex
+	mu                sync.Mutex
 	pend              map[pkey]*pending
-	warns             map[pkey]int      // group+user -> warning count (persisted)
 	terminal          map[pkey]*pending // claimed terminal actions remain here until their Telegram call returns
-	enabled           bool
-	shuttingDown      bool   // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
-	rich              bool   // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
-	nameSpoiler       bool   // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
-	vmode             string // runtime verification-mode override (/vmode, persisted); "" => follow the config
+	shuttingDown      bool              // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
 	statDate          string
 	approved          int
 	declined          int
-	acMu              sync.RWMutex // guards the channel-sock-puppet filter's runtime state
-	acOn              bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
-	acWhite           map[int64]bool
-	acWhiteOrder      []int64
 	chanAlert         map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
 	pendingCapAlertAt time.Time             // last queue-cap alert; one global throttle prevents a join flood from flooding the admin log
 	dmLast            map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
 	challengeAt       map[int64]time.Time   // user -> last verification prompt sent (resend throttle), guarded by mu
 	queryHits         map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
-	lookupOn          bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
-	lookupTTL         time.Duration         // how long before that deletion, guarded by mu
-	banSecs           int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
 	vfail             map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
 	vfailPath         string                // persistence path for vfail
 	agentMu           sync.Mutex            // guards agents; separate from mu so the tally's file write never blocks the verification hot paths
 	agents            agentTally            // tripped automated agents, counted per claimed model
 	agentPath         string                // persistence path for the automated-agent tally
-	settingsPath      string                // persistence path for runtime settings (verification enabled state)
+	settings          *store.Settings       // authoritative runtime-settings transaction
 	tgMu              sync.Mutex            // guards telegramBot and telegramClient
 	telegramBot       *telego.Bot           // concrete handler bot wrapped by telegramClient
 	telegramClient    *tg.Client            // shared transport client; owns admin cache and cleanup timer counts
@@ -237,57 +202,29 @@ func replyParams(msgID int) *telego.ReplyParameters {
 	return tg.ReplyParameters(msgID)
 }
 
-// Evict the least severe counters first; key order makes equal-count eviction deterministic.
-func (v *Verifier) pruneWarnsLocked() {
-	over := len(v.warns) - warnCounterMax
-	if over <= 0 {
-		return
-	}
-	type warning struct {
-		key   pkey
-		count int
-	}
-	all := make([]warning, 0, len(v.warns))
-	for key, count := range v.warns {
-		all = append(all, warning{key: key, count: count})
-	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].count != all[j].count {
-			return all[i].count < all[j].count
-		}
-		if all[i].key.gid != all[j].key.gid {
-			return all[i].key.gid < all[j].key.gid
-		}
-		return all[i].key.uid < all[j].key.uid
-	})
-	for _, item := range all[:over] {
-		delete(v.warns, item.key)
-	}
-}
-
 // NewVerifier seeds runtime defaults and bounds mutable maps.
 func NewVerifier(cfg *config.Config) *Verifier {
-	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
-		pend: make(map[pkey]*pending), terminal: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
-		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, challengeAt: map[int64]time.Time{},
-		queryHits: map[int64][]time.Time{},
-		vfail:     map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
-		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders,
+	return newVerifier(cfg, nil)
+}
+
+func newVerifier(cfg *config.Config, settings *store.Settings) *Verifier {
+	v := &Verifier{
+		cfg:         cfg,
+		startTime:   time.Now(),
+		loc:         loadStatsLoc(cfg.StatsTimezone),
+		pend:        make(map[pkey]*pending),
+		terminal:    make(map[pkey]*pending),
+		chanAlert:   map[int64]time.Time{},
+		dmLast:      map[int64]time.Time{},
+		challengeAt: map[int64]time.Time{},
+		queryHits:   map[int64][]time.Time{},
+		vfail:       map[pkey]*vfailRec{},
 		lastOnline:  time.Now(), // begin online; the heartbeat only flips us offline after missed contact
-		nameSpoiler: true}       // default ON: spam joiners often set their NAME to an advert; hide it behind a spoiler
-	v.mu.owner = v
-	for _, id := range cfg.ChannelWhitelist {
-		v.addChannelWhiteLocked(id)
 	}
-	// Lookup auto-delete: unset => on at 3 min; 0/negative => off; positive => that many seconds.
-	v.lookupTTL = 180 * time.Second
-	v.lookupOn = true
-	if cfg.LookupTTLSeconds != nil {
-		if *cfg.LookupTTLSeconds <= 0 {
-			v.lookupOn = false
-		} else {
-			v.lookupTTL = time.Duration(*cfg.LookupTTLSeconds) * time.Second
-		}
+	if settings == nil {
+		installBaselineRuntimeSettings(v)
+	} else {
+		installRuntimeSettings(v, settings)
 	}
 	return v
 }
@@ -309,31 +246,44 @@ func (v *Verifier) verificationTransport(bot verifyBot) verifyTransport {
 	return v.telegram(bot.(*telego.Bot))
 }
 
-func (v *Verifier) moderationTransport(bot modBot) moderationTransport {
-	if transport, ok := bot.(moderationTransport); ok {
+func (v *Verifier) adminTransport(bot modBot) adminTransport {
+	if transport, ok := bot.(adminTransport); ok {
 		return transport
 	}
 	return v.telegram(bot.(*telego.Bot))
 }
 
-func (v *Verifier) lookupAutoDelete() (time.Duration, bool) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.lookupTTL, v.lookupOn
+func (v *Verifier) lookupAutoDelete(groupID int64) (time.Duration, bool) {
+	if group, ok := v.groupSettings(groupID); ok {
+		return time.Duration(group.LookupTTLSeconds().Value) * time.Second, group.LookupAutoDeleteEnabled().Value
+	}
+	fallback := v.fallbackGroupSettings(groupID)
+	return time.Duration(fallback.LookupTTLSeconds.Value) * time.Second, fallback.LookupAutoDeleteEnabled.Value
 }
 
-func (v *Verifier) setLookupAutoDelete(ttl time.Duration, on bool) {
-	v.mu.Lock()
-	if ttl > 0 {
-		v.lookupTTL = ttl
+func (v *Verifier) setLookupAutoDelete(groupID int64, ttl time.Duration, on bool) error {
+	return v.updateGroupSettings(groupID, func(group store.GroupView, overrides *store.GroupOverrides) {
+		if ttl <= 0 && on && group.LookupTTLSeconds().Value <= 0 {
+			ttl = 3 * time.Minute
+		}
+		if ttl > 0 {
+			seconds := int(ttl / time.Second)
+			overrides.LookupTTLSeconds = &seconds
+		}
+		overrides.LookupAutoDeleteEnabled = &on
+	})
+}
+
+func (v *Verifier) lookupSettingsGroupID(chatID int64) int64 {
+	if v.settings != nil && v.settings.IsGroup(chatID) {
+		return chatID
 	}
-	v.lookupOn = on
-	v.mu.Unlock()
+	return v.controlGroupID()
 }
 
 // Delete group lookup commands and answers together using a fresh timer context.
 func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID, respMsgID int) {
-	ttl, on := v.lookupAutoDelete()
+	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
 	if !on {
 		ttl = 0
 	}
@@ -346,7 +296,7 @@ func msgID(m *telego.Message) int {
 
 // Plain text preserves angle-bracket placeholders and still follows reply/cleanup semantics.
 func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID int64, replyTo int, text string) {
-	ttl, on := v.lookupAutoDelete()
+	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
 	if !on {
 		ttl = 0
 	}
@@ -355,7 +305,7 @@ func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID i
 
 // HTML lookup replies require callers to escape dynamic content.
 func (v *Verifier) replyLookupHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, htmlText string) *telego.Message {
-	ttl, on := v.lookupAutoDelete()
+	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
 	if !on {
 		ttl = 0
 	}
@@ -376,7 +326,7 @@ func (v *Verifier) queryRateOK(userID int64) bool {
 			kept = append(kept, t)
 		}
 	}
-	if len(kept) >= v.cfg.PrivateQueryPerMin {
+	if len(kept) >= v.privateQueryPerMin() {
 		v.queryHits[userID] = kept
 		return false
 	}
@@ -409,33 +359,205 @@ func (v *Verifier) queryAllowed(ctx *th.Context, msg *telego.Message) bool {
 			return true
 		}
 		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(msg.Chat.ID),
-			fmt.Sprintf("⏳ 查询太频繁:私聊每分钟最多 %d 次,请稍后再试(在群里不限次)。", v.cfg.PrivateQueryPerMin)))
+			fmt.Sprintf("⏳ 查询太频繁:私聊每分钟最多 %d 次,请稍后再试(在群里不限次)。", v.privateQueryPerMin())))
 		return false
 	}
 	return false
 }
 
-func (v *Verifier) isEnabled() bool   { v.mu.Lock(); defer v.mu.Unlock(); return v.enabled }
-func (v *Verifier) setEnabled(b bool) { v.mu.Lock(); v.enabled = b; v.mu.Unlock(); v.saveSettings() }
-
-func (v *Verifier) isRichEnabled() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.rich }
-func (v *Verifier) toggleRich() bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.rich = !v.rich
-	return v.rich
+func (v *Verifier) isEnabled(groupID int64) bool {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.Enabled().Value
+	}
+	return v.fallbackGroupSettings(groupID).Enabled.Value
 }
 
-func (v *Verifier) nameSpoilerOn() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.nameSpoiler }
+func (v *Verifier) setEnabled(groupID int64, enabled bool) error {
+	return v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
+		overrides.Enabled = &enabled
+	})
+}
 
-// Persist /spoiler like /start and /stop.
-func (v *Verifier) toggleNameSpoiler() bool {
-	v.mu.Lock()
-	v.nameSpoiler = !v.nameSpoiler
-	on := v.nameSpoiler
-	v.mu.Unlock()
-	v.saveSettings()
-	return on
+func (v *Verifier) isRichEnabled() bool {
+	if v.settings != nil {
+		return v.settings.Global().RichMessages().Value
+	}
+	return settingsBaselineFromConfig(v.cfg, configPresence{}).Global.RichMessages.Value
+}
+
+func (v *Verifier) toggleRich() (bool, error) {
+	var enabled bool
+	err := v.updateGlobalSettings(func(global store.GlobalView, overrides *store.GlobalOverrides) {
+		enabled = !global.RichMessages().Value
+		overrides.RichMessages = &enabled
+	})
+	return enabled, err
+}
+
+func (v *Verifier) privateQueryPerMin() int {
+	if v.settings != nil {
+		return v.settings.Global().PrivateQueryPerMin().Value
+	}
+	return settingsBaselineFromConfig(v.cfg, configPresence{}).Global.PrivateQueryPerMin.Value
+}
+
+func (v *Verifier) nameSpoilerOn(groupID int64) bool {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.NameSpoiler().Value
+	}
+	return v.fallbackGroupSettings(groupID).NameSpoiler.Value
+}
+
+func (v *Verifier) toggleNameSpoiler(groupID int64) (bool, error) {
+	var enabled bool
+	err := v.updateGroupSettings(groupID, func(group store.GroupView, overrides *store.GroupOverrides) {
+		enabled = !group.NameSpoiler().Value
+		overrides.NameSpoiler = &enabled
+	})
+	return enabled, err
+}
+func (v *Verifier) timeout(groupID int64) time.Duration {
+	if group, ok := v.groupSettings(groupID); ok {
+		return time.Duration(group.TimeoutSeconds().Value) * time.Second
+	}
+	return time.Duration(v.fallbackGroupSettings(groupID).TimeoutSeconds.Value) * time.Second
+}
+
+func (v *Verifier) verificationBanDuration(groupID int64) int {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.BanSeconds().Value
+	}
+	return v.fallbackGroupSettings(groupID).BanSeconds.Value
+}
+
+func verificationBanDurationText(seconds int) string {
+	if seconds <= 0 {
+		return "永久"
+	}
+	switch {
+	case seconds%86400 == 0:
+		return fmt.Sprintf("%d 天", seconds/86400)
+	case seconds%3600 == 0:
+		return fmt.Sprintf("%d 小时", seconds/3600)
+	case seconds%60 == 0:
+		return fmt.Sprintf("%d 分钟", seconds/60)
+	default:
+		return fmt.Sprintf("%d 秒", seconds)
+	}
+}
+
+func (v *Verifier) applyVerificationBan(ctx context.Context, bot verifyBot, groupID, userID int64, seconds int, revoke bool) error {
+	return v.verificationTransport(bot).Ban(ctx, groupID, userID, seconds, revoke)
+}
+
+func (v *Verifier) requiredChannelID(groupID int64) int64 {
+	if group, ok := v.groupSettings(groupID); ok {
+		overrides := group.Overrides()
+		if overrides.RequiredChannelID != nil {
+			return *overrides.RequiredChannelID
+		}
+		return group.Baseline().RequiredChannelID.Value
+	}
+	return v.fallbackGroupSettings(groupID).RequiredChannelID.Value
+}
+
+func (v *Verifier) channelDisplay(groupID int64) string {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.ChannelDisplay().Value
+	}
+	return v.fallbackGroupSettings(groupID).ChannelDisplay.Value
+}
+
+func (v *Verifier) channelInviteURL(groupID int64) string {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.ChannelInviteURL().Value
+	}
+	return v.fallbackGroupSettings(groupID).ChannelInviteURL.Value
+}
+
+func (v *Verifier) trustedGroups(groupID int64) []int64 {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.TrustedMemberGroupIDs().Value
+	}
+	return v.fallbackGroupSettings(groupID).TrustedMemberGroupIDs.Value
+}
+
+func (v *Verifier) groupLanguage(groupID int64, telegramCode string) i18n.Lang {
+	if group, ok := v.groupSettings(groupID); ok {
+		if language := group.Lang().Value; language != "" {
+			return i18n.FromStored(language)
+		}
+	} else if language := v.fallbackGroupSettings(groupID).Lang.Value; language != "" {
+		return i18n.FromStored(language)
+	}
+	return i18n.FromTelegram(telegramCode)
+}
+
+func (v *Verifier) isKnownChat(chatID int64) bool {
+	if v.settings == nil {
+		return v.cfg.IsKnownChat(chatID)
+	}
+	if v.settings.IsGroup(chatID) || v.cfg.AdminLogChatID == chatID {
+		return true
+	}
+	for _, feed := range v.cfg.Feeds {
+		if feed.ChatID == chatID {
+			return true
+		}
+	}
+	for _, groupID := range v.settings.GroupIDs() {
+		if v.requiredChannelID(groupID) == chatID {
+			return true
+		}
+		group, _ := v.settings.Group(groupID)
+		for _, knownID := range group.KnownChatIDs().Value {
+			if knownID == chatID {
+				return true
+			}
+		}
+		for _, trustedID := range group.TrustedMemberGroupIDs().Value {
+			if trustedID == chatID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// logVerificationAccess reports required-channel and trusted-group membership visibility.
+func (v *Verifier) logVerificationAccess(ctx context.Context, bot modBot, selfID int64) {
+	groupIDs := v.cfg.GroupIDs
+	if v.settings != nil {
+		groupIDs = v.settings.GroupIDs()
+	}
+	seen := make(map[int64]bool)
+	for _, groupID := range groupIDs {
+		requiredChannelID := v.requiredChannelID(groupID)
+		if requiredChannelID == 0 || seen[requiredChannelID] {
+			continue
+		}
+		seen[requiredChannelID] = true
+		if _, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(requiredChannelID), UserID: selfID}); err != nil {
+			log.Printf("required channel %d: bot CANNOT read membership (%v) — the follow-gate can't be enforced; make the bot an admin of this channel", requiredChannelID, err)
+		} else {
+			log.Printf("required channel %d: bot can read membership ✓", requiredChannelID)
+		}
+	}
+	var trusted []int64
+	for _, groupID := range groupIDs {
+		trusted = append(trusted, v.trustedGroups(groupID)...)
+	}
+	for _, sourceID := range trusted {
+		if sourceID == 0 || seen[sourceID] {
+			continue
+		}
+		seen[sourceID] = true
+		if _, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(sourceID), UserID: selfID}); err != nil {
+			log.Printf("trusted group %d: bot CANNOT read membership (%v) — its members can't be auto-approved; add the bot there (member/admin)", sourceID, err)
+		} else {
+			log.Printf("trusted group %d: bot can read membership ✓ — its members skip verification", sourceID)
+		}
+	}
 }
 
 // Spoilered names use one non-nested entity so hostile names cannot break challenge HTML.
@@ -446,6 +568,13 @@ func joinerLabel(uid int64, name string, spoiler bool) string {
 		return "<tg-spoiler>" + esc + "</tg-spoiler>"
 	}
 	return fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>", uid, esc)
+}
+
+func applicantDisplayName(user *telego.User) string {
+	if user.Username != "" {
+		return "@" + user.Username
+	}
+	return user.FirstName
 }
 
 func (v *Verifier) now() time.Time { return time.Now().In(v.loc) }
@@ -541,7 +670,7 @@ func (v *Verifier) load(bot verifyBot) {
 		switch {
 		case longOutage:
 			// The outage consumed the window, so refresh and do not strike on this lapse.
-			delay = v.timeout()
+			delay = v.timeout(gid)
 			p.deadline = time.Now().Add(delay)
 			p.lastRenotify = time.Now() // mark re-notified so a runtime recovery right after doesn't re-message
 			reason = "recovered"
@@ -585,14 +714,14 @@ func (v *Verifier) load(bot verifyBot) {
 	}
 }
 
-func (v *Verifier) register(bh *th.BotHandler) {
+func (v *Verifier) register(bh *th.BotHandler, moderation *moderate.Service) {
 	// One malformed update must not terminate the bot.
 	bh.Use(th.PanicRecoveryHandler(func(recovered any) error {
 		log.Printf("recovered from handler panic: %v", recovered)
 		return nil
 	}))
 	// Channel-sender filtering runs before handlers.
-	bh.Use(v.antispam)
+	bh.Use(moderation.FilterChannelSenders)
 	bh.Handle(v.onAnswer, th.CallbackDataPrefix(answerPrefix))
 	bh.Handle(v.onAdminAction, th.CallbackDataPrefix(adminPrefix))
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))
@@ -602,11 +731,11 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onKernelAnswer, v.kernelAnswerDM)
 	// The generic DM reply precedes command handlers except /start and allowed DM commands.
 	bh.Handle(v.onPrivateDM, privateNonStart)
-	bh.Handle(v.onSb, th.CommandEqual("sb"))
-	bh.Handle(v.onBan, th.CommandEqual("ban"))
-	bh.Handle(v.onWarn, th.CommandEqual("warn"))
-	bh.Handle(v.onClearWarn, th.CommandEqual("clearwarn"))
-	bh.Handle(v.onBc, th.CommandEqual("bc"))
+	bh.Handle(moderation.OnPurge, th.CommandEqual("sb"))
+	bh.Handle(moderation.OnBan, th.CommandEqual("ban"))
+	bh.Handle(moderation.OnWarn, th.CommandEqual("warn"))
+	bh.Handle(moderation.OnClearWarn, th.CommandEqual("clearwarn"))
+	bh.Handle(moderation.OnBC, th.CommandEqual("bc"))
 	bh.Handle(v.onPing, th.CommandEqual("ping"))
 	bh.Handle(v.onStart, th.CommandEqual("start"))
 	bh.Handle(v.onStop, th.CommandEqual("stop"))
@@ -625,9 +754,9 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onSpoiler, th.CommandEqual("spoiler"))
 	bh.Handle(v.onVMode, th.CommandEqual("vmode"))
 	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
-	bh.Handle(v.onBanTime, th.CommandEqual("bantime"))
-	bh.Handle(v.onMute, th.CommandEqual("mute"))
-	bh.Handle(v.onUnmute, th.CommandEqual("unmute"))
+	bh.Handle(moderation.OnBanTime, th.CommandEqual("bantime"))
+	bh.Handle(moderation.OnMute, th.CommandEqual("mute"))
+	bh.Handle(moderation.OnUnmute, th.CommandEqual("unmute"))
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 
@@ -642,7 +771,7 @@ func (v *Verifier) onMyChatMember(ctx *th.Context, update telego.Update) error {
 	case "left", "kicked": // the bot was removed — nothing to do
 		return nil
 	}
-	if v.cfg.IsKnownChat(cm.Chat.ID) {
+	if v.isKnownChat(cm.Chat.ID) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -675,7 +804,7 @@ func (v *Verifier) isChatMember(c context.Context, bot modBot, chatID, uid int64
 // Lookup failure is untrusted and follows normal verification.
 // Approval failure returns trusted=true so normal verification runs without cooldown rejection.
 func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) (handled, trusted bool) {
-	for _, src := range v.cfg.TrustedGroups(gid) {
+	for _, src := range v.trustedGroups(gid) {
 		if src == 0 || src == gid {
 			continue // ignore a blank or self-referential entry
 		}
@@ -760,7 +889,7 @@ func (v *Verifier) startPending(bot verifyBot, gid, uid int64, p *pending) (oldM
 		p.tries, p.hinted, p.sampleBounced = old.tries, old.hinted, old.sampleBounced
 		p.noLinuxReminded, p.osClarified = old.noLinuxReminded, old.osClarified
 	}
-	delay := v.timeout()
+	delay := v.timeout(gid)
 	p.deadline = time.Now().Add(delay)
 	v.pend[key] = p
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(0))
@@ -778,7 +907,7 @@ func (v *Verifier) finishPendingChallenge(bot verifyBot, gid, uid int64, p *pend
 		p.timer.Stop()
 	}
 	p.groupMsgID = groupMsgID
-	delay := v.timeout()
+	delay := v.timeout(gid)
 	p.deadline = time.Now().Add(delay)
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(groupMsgID))
 	return true
@@ -802,7 +931,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	if jr == nil || !v.cfg.IsGroup(jr.Chat.ID) {
 		return nil
 	}
-	if !v.isEnabled() {
+	if !v.isEnabled(jr.Chat.ID) {
 		log.Printf("verification disabled — leaving join request from %d for manual review", jr.From.ID)
 		return nil
 	}
@@ -816,9 +945,9 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	// Applicant messages follow Telegram's interface language.
-	ul := i18n.FromTelegram(jr.From.LanguageCode)
+	ul := v.groupLanguage(gid, jr.From.LanguageCode)
 	mode, text, opts, correctIdx := v.newChallenge(gid, ul)
-	name := displayName(&jr.From)
+	name := applicantDisplayName(&jr.From)
 	p := &pending{mode: mode, lang: ul, qText: text, qOpts: opts, correctIdx: correctIdx,
 		nonce: newNonce(), name: name}
 	oldMsgID, status := v.startPending(bot, gid, uid, p)
@@ -895,11 +1024,11 @@ func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64
 		return
 	}
 	// The DM prompt uses one channel; answer settlement enforces each group separately.
-	if v.cfg.RequiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
+	if v.requiredChannelID(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		var rows [][]telego.InlineKeyboardButton
 		if curl := v.channelURL(gid); curl != "" {
 			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{
-				Text: channel.FollowButton.Render(ul, v.cfg.ChannelDisplayFor(gid)), URL: curl,
+				Text: channel.FollowButton.Render(ul, v.channelDisplay(gid)), URL: curl,
 			}))
 		}
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: channel.ContinueButton.For(ul),
@@ -986,7 +1115,7 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 	}
 	gid, _ := strconv.ParseInt(parts[0], 10, 64)
 	uid, _ := strconv.ParseInt(parts[1], 10, 64)
-	ul := i18n.FromTelegram(cq.From.LanguageCode)
+	ul := v.groupLanguage(gid, cq.From.LanguageCode)
 	result := &i18n.Messages.Verification.Result
 	channel := &i18n.Messages.Verification.Channel
 	if cq.From.ID != uid {
@@ -997,9 +1126,9 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.AlreadyHandled.For(ul)))
 		return nil
 	}
-	if v.cfg.RequiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
+	if v.requiredChannelID(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(channel.NotFollowedYet.Render(ul, v.cfg.ChannelDisplayFor(gid))).WithShowAlert())
+			WithText(channel.NotFollowedYet.Render(ul, v.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
 	// Acknowledge before sends; membership toasts remain result-driven and happen first.
@@ -1034,7 +1163,7 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
 	}
-	ul := i18n.FromTelegram(cq.From.LanguageCode)
+	ul := v.groupLanguage(gid, cq.From.LanguageCode)
 	result := &i18n.Messages.Verification.Result
 	channel := &i18n.Messages.Verification.Channel
 	if cq.From.ID != owner {
@@ -1062,12 +1191,12 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 
 	if choice != correctIdx {
 		_, banned := v.decline(c, bot, gid, owner, nonce, "wrong answer")
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(ul, banned)).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(gid, ul, banned)).WithShowAlert())
 		return nil
 	}
 	if !v.isChannelMember(c, bot, gid, owner) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(channel.NotFollowedYet.Render(ul, v.cfg.ChannelDisplayFor(gid))).WithShowAlert())
+			WithText(channel.NotFollowedYet.Render(ul, v.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
 	p, claimed := v.claimPendingNonce(gid, owner, nonce)
@@ -1118,7 +1247,7 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 			return nil
 		}
 		// Acknowledge before ban; failures remain visible and the request stays declined.
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", banDurationText(v.banDuration()))))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", verificationBanDurationText(v.verificationBanDuration(gid)))))
 		v.executeBan(c, bot, gid, target, p)
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
@@ -1128,7 +1257,7 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 
 // Required-channel lookup uses modBot so fail-open policy remains testable.
 func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID int64) bool {
-	rc := v.cfg.RequiredChannel(gid)
+	rc := v.requiredChannelID(gid)
 	if rc == 0 {
 		return true
 	}
@@ -1157,17 +1286,17 @@ func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID in
 
 // Prefer an explicit private-channel invite; otherwise derive a public t.me URL.
 func (v *Verifier) channelURL(gid int64) string {
-	if u := v.cfg.ChannelInvite(gid); u != "" {
+	if u := v.channelInviteURL(gid); u != "" {
 		return u
 	}
-	if d := v.cfg.ChannelDisplayFor(gid); strings.HasPrefix(d, "@") {
+	if d := v.channelDisplay(gid); strings.HasPrefix(d, "@") {
 		return "https://t.me/" + d[1:]
 	}
 	return ""
 }
 
 func (v *Verifier) channelLinkHTML(gid int64, ul i18n.Lang) string {
-	d := v.cfg.ChannelDisplayFor(gid)
+	d := v.channelDisplay(gid)
 	if d == "" {
 		d = i18n.Messages.Verification.Channel.FallbackName.For(ul) // unnamed channels still read naturally
 	}
@@ -1378,12 +1507,12 @@ func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 }
 
 // Wrong-answer feedback distinguishes automatic ban from cooldown retry.
-func (v *Verifier) wrongAnswerText(l i18n.Lang, banned bool) string {
+func (v *Verifier) wrongAnswerText(groupID int64, l i18n.Lang, banned bool) string {
 	result := &i18n.Messages.Verification.Result
 	if banned {
 		return result.WrongBanned.For(l)
 	}
-	if seconds := v.cfg.VerifyRetrySeconds; seconds > 0 {
+	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
 		return result.WrongRetry.Render(l, seconds)
 	}
 	return result.WrongNoWait.For(l)
@@ -1427,13 +1556,13 @@ func (v *Verifier) finishDecline(c context.Context, bot verifyBot, gid, uid int6
 		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 拒绝用户 %d 加入群 %d 失败(可能缺权限):%v;该申请仍需管理员手动处理", uid, gid, err))
 	}
 	if doBan {
-		secs := v.banDuration()
-		if err := v.applyBan(c, bot, gid, uid, secs, false); err != nil {
+		secs := v.verificationBanDuration(gid)
+		if err := v.applyVerificationBan(c, bot, gid, uid, secs, false); err != nil {
 			log.Printf("verify auto-ban %d in %d: %v", uid, gid, err)
 			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 在群 %d 验证连续失败 %d 次,自动封禁失败(可能缺权限):%v", uid, gid, count, err))
 			banned = false
 		} else {
-			v.adminAlert(c, bot, fmt.Sprintf("🚫 用户 %d 在群 %d 验证连续失败 %d 次,已自动封禁(%s)", uid, gid, count, banDurationText(secs)))
+			v.adminAlert(c, bot, fmt.Sprintf("🚫 用户 %d 在群 %d 验证连续失败 %d 次,已自动封禁(%s)", uid, gid, count, verificationBanDurationText(secs)))
 			banned = true
 		}
 		if banned {
@@ -1466,7 +1595,7 @@ func (v *Verifier) executeBan(c context.Context, bot verifyBot, gid, uid int64, 
 	defer v.finishTerminal(gid, uid, p)
 	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
 	banned = true
-	if err := v.applyBan(c, bot, gid, uid, v.banDuration(), true); err != nil { // honour /bantime like the other ban paths
+	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil { // Honor /bantime like the other ban paths.
 		banned = false
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
 		v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 封禁用户 %d(群 %d)失败(可能缺权限):%v;申请已拒绝,请手动封禁", uid, gid, err))
@@ -1485,8 +1614,6 @@ const (
 	outageRecovery        = 90 * time.Second // an outage longer than this triggers fresh windows + a re-notify on recovery
 	renotifyCap           = 30               // most applicants to re-notify per recovery, so a big backlog can't become a message storm
 )
-
-func (v *Verifier) timeout() time.Duration { return time.Duration(v.cfg.TimeoutSeconds) * time.Second }
 
 // liveProbe is the cheap GetMe liveness surface.
 type liveProbe interface {
@@ -1546,15 +1673,16 @@ func (v *Verifier) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoc
 	if p.timer != nil {
 		p.timer.Stop() // stop the current timer before armExpiry installs the next (matches every other re-arm site)
 	}
-	p.deadline = time.Now().Add(v.timeout())
-	v.armExpiry(bot, p, gid, uid, v.timeout(), reason)
+	delay := v.timeout(gid)
+	p.deadline = time.Now().Add(delay)
+	v.armExpiry(bot, p, gid, uid, delay, reason)
 	log.Printf("verify: bot offline — deferred %s for %d in %d, re-armed a fresh window", reason, uid, gid)
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.
 func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, ul i18n.Lang) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
-	mention := joinerLabel(uid, name, v.nameSpoilerOn())
+	mention := joinerLabel(uid, name, v.nameSpoilerOn(gid))
 	link := ""
 	if v.botUsername != "" {
 		link = "https://t.me/" + v.botUsername + "?start=verify"
@@ -1562,14 +1690,14 @@ func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid
 	// Keep channel navigation inside the DM verification flow.
 	group := &i18n.Messages.Verification.Group
 	channelHint := ""
-	if v.cfg.RequiredChannel(gid) != 0 {
-		channelHint = group.ChannelHint.Render(ul, html.EscapeString(v.cfg.ChannelDisplayFor(gid)))
+	if v.requiredChannelID(gid) != 0 {
+		channelHint = group.ChannelHint.Render(ul, html.EscapeString(v.channelDisplay(gid)))
 	}
 	linkText := ""
 	if link != "" {
 		linkText = group.LinkText.Render(ul, link)
 	}
-	body := group.Body.Render(ul, mention, linkText, v.cfg.TimeoutSeconds, channelHint)
+	body := group.Body.Render(ul, mention, linkText, int(v.timeout(gid)/time.Second), channelHint)
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
@@ -1687,10 +1815,11 @@ func (v *Verifier) onRecovery(c context.Context, bot verifyBot, outage time.Dura
 		if p.timer != nil {
 			p.timer.Stop()
 		}
-		p.deadline = now.Add(v.timeout())
-		v.armExpiry(bot, p, k.gid, k.uid, v.timeout(), "recovered")
+		delay := v.timeout(k.gid)
+		p.deadline = now.Add(delay)
+		v.armExpiry(bot, p, k.gid, k.uid, delay, "recovered")
 		refreshed++
-		if !p.lastRenotify.IsZero() && now.Sub(p.lastRenotify) < v.timeout() {
+		if !p.lastRenotify.IsZero() && now.Sub(p.lastRenotify) < delay {
 			continue // re-notified recently (flapping) — refresh the window silently, don't re-message
 		}
 		p.lastRenotify = now

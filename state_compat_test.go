@@ -80,7 +80,7 @@ func stateCompatConfig() *config.Config {
 		VerifyMaxFails: 3}
 }
 
-// Regenerate only by explicit request. Every current fixture below is emitted through its owner save path.
+// Regenerate only by explicit request. Historical legacy fixtures are never rewritten.
 func TestStateCompatGenerateFixtures(t *testing.T) {
 	if os.Getenv("UPDATE_STATE_COMPAT_FIXTURES") != "1" {
 		t.Skip("set UPDATE_STATE_COMPAT_FIXTURES=1 to regenerate state compatibility fixtures")
@@ -107,36 +107,11 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 	}
 	pendingV.save()
 
-	warnV := NewVerifier(stateCompatConfig())
-	warnV.warnPath = filepath.Join(dir, "warns.json")
-	warnV.warns[pkey{stateCompatGroupA, 7101}] = 1
-	warnV.warns[pkey{stateCompatGroupA, 7102}] = 2
-	warnV.warns[pkey{stateCompatGroupB, 7101}] = 4
-	warnV.saveWarns()
-
-	antispamV := NewVerifier(stateCompatConfig())
-	antispamV.acPath = filepath.Join(dir, "antispam.json")
-	antispamV.acOn = true
-	antispamV.acWhite = map[int64]bool{
-		-1007000000001: true,
-		-1007000000002: true,
-		-1007000000003: true,
-	}
-	antispamV.saveAntispam()
-
 	strikeV := NewVerifier(stateCompatConfig())
 	strikeV.vfailPath = filepath.Join(dir, "verifyfail.json")
 	strikeV.vfail[pkey{stateCompatGroupA, 7201}] = &vfailRec{count: 2, last: stateCompatStrikeA}
 	strikeV.vfail[pkey{stateCompatGroupB, 7202}] = &vfailRec{count: 3, last: stateCompatStrikeB}
 	strikeV.saveVerifyFails()
-
-	settingsV := &Verifier{
-		settingsPath: filepath.Join(dir, "settings.json"),
-		enabled:      false,
-		nameSpoiler:  false,
-		vmode:        config.ModeMixed,
-	}
-	settingsV.saveSettings()
 
 	heartbeatV := NewVerifier(stateCompatConfig())
 	heartbeatV.hbPath = filepath.Join(dir, "heartbeat.json")
@@ -257,80 +232,45 @@ func TestStateCompatPending(t *testing.T) {
 	}
 }
 
-func TestStateCompatWarnings(t *testing.T) {
-	fixture := stateCompatFixture(t, "warns.json")
-	want := map[pkey]int{
-		{stateCompatGroupA, 7101}: 1,
-		{stateCompatGroupA, 7102}: 2,
-		{stateCompatGroupB, 7101}: 4,
-	}
-	tests := []struct {
-		name      string
-		data      []byte
-		roundTrip bool
-	}{
-		{name: "current", data: fixture, roundTrip: true},
-		{name: "unknown record key", data: stateCompatWithUnknown(t, fixture)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(stateCompatConfig())
-			v.warnPath = stateCompatTempFile(t, "warns.json", tt.data)
-			v.loadWarns()
-			v.mu.Lock()
-			got := make(map[pkey]int, len(v.warns))
-			for key, count := range v.warns {
-				got[key] = count
-			}
-			v.mu.Unlock()
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("loaded warnings = %#v, want %#v", got, want)
-			}
-			if tt.roundTrip {
-				out := filepath.Join(t.TempDir(), "warns.json")
-				v.warnPath = out
-				v.saveWarns()
-				stateCompatAssertStableJSON(t, "warnings", fixture, stateCompatRead(t, out))
-			}
-		})
-	}
-}
-
-func TestStateCompatAntispam(t *testing.T) {
+func TestStateCompatAntispamMigration(t *testing.T) {
 	fixture := stateCompatFixture(t, "antispam.json")
-	wantWhite := map[int64]bool{
-		-1007000000001: true,
-		-1007000000002: true,
-		-1007000000003: true,
+	wantWhitelist := []int64{
+		-1007000000003,
+		-1007000000001,
+		-1007000000002,
 	}
 	tests := []struct {
-		name      string
-		data      []byte
-		roundTrip bool
+		name string
+		data []byte
 	}{
-		{name: "current", data: fixture, roundTrip: true},
+		{name: "current", data: fixture},
 		{name: "unknown top-level key", data: stateCompatWithUnknown(t, fixture)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(stateCompatConfig())
-			v.acPath = stateCompatTempFile(t, "antispam.json", tt.data)
-			v.loadAntispam()
-			v.acMu.RLock()
-			on := v.acOn
-			gotWhite := make(map[int64]bool, len(v.acWhite))
-			for id, allowed := range v.acWhite {
-				gotWhite[id] = allowed
+			dir := t.TempDir()
+			legacyPath := filepath.Join(dir, "antispam.json")
+			if err := os.WriteFile(legacyPath, tt.data, 0o600); err != nil {
+				t.Fatal(err)
 			}
-			v.acMu.RUnlock()
-			if !on || !reflect.DeepEqual(gotWhite, wantWhite) {
-				t.Fatalf("loaded antispam = enabled:%v whitelist:%#v, want enabled:true whitelist:%#v", on, gotWhite, wantWhite)
+			settings, err := store.NewSettings(
+				filepath.Join(dir, "settings.json"),
+				settingsBaselineFromConfig(stateCompatConfig(), configPresence{}),
+			)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if tt.roundTrip {
-				out := filepath.Join(t.TempDir(), "antispam.json")
-				v.acPath = out
-				v.saveAntispam()
-				stateCompatAssertStableJSON(t, "antispam", fixture, stateCompatRead(t, out))
+			for _, groupID := range []int64{stateCompatGroupA, stateCompatGroupB} {
+				group, ok := settings.Group(groupID)
+				if !ok {
+					t.Fatalf("group %d missing after antispam migration", groupID)
+				}
+				if !group.AntispamEnabled().Value || !reflect.DeepEqual(group.ChannelWhitelist().Value, wantWhitelist) {
+					t.Fatalf("group %d antispam = enabled:%v whitelist:%v", groupID, group.AntispamEnabled().Value, group.ChannelWhitelist().Value)
+				}
+			}
+			if after := stateCompatRead(t, legacyPath); !bytes.Equal(after, tt.data) {
+				t.Fatal("legacy antispam fixture changed during migration")
 			}
 		})
 	}
@@ -384,34 +324,37 @@ func TestStateCompatVerificationFailures(t *testing.T) {
 }
 
 func TestStateCompatSettings(t *testing.T) {
-	fixture := stateCompatFixture(t, "settings.json")
 	tests := []struct {
-		name      string
-		data      []byte
-		roundTrip bool
+		name string
+		data []byte
 	}{
-		{name: "current", data: fixture, roundTrip: true},
-		{name: "unknown top-level key", data: stateCompatWithUnknown(t, fixture)},
+		{name: "existing legacy fixture", data: stateCompatFixture(t, "settings.json")},
+		{name: "legacy v0 golden", data: stateCompatFixture(t, "settings-legacy-v0.json")},
+		{name: "unknown legacy key", data: stateCompatWithUnknown(t, stateCompatFixture(t, "settings.json"))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &Verifier{
-				settingsPath: stateCompatTempFile(t, "settings.json", tt.data),
-				enabled:      true,
-				nameSpoiler:  true,
+			path := stateCompatTempFile(t, "settings.json", tt.data)
+			settings, err := store.NewSettings(path, settingsBaselineFromConfig(stateCompatConfig(), configPresence{}))
+			if err != nil {
+				t.Fatal(err)
 			}
-			v.loadSettings()
-			v.mu.Lock()
-			enabled, spoiler, mode := v.enabled, v.nameSpoiler, v.vmode
-			v.mu.Unlock()
-			if enabled || spoiler || mode != "mixed" {
-				t.Fatalf("loaded settings = enabled:%v name_spoiler:%v verify_mode:%q, want false, false, mixed", enabled, spoiler, mode)
+			for _, groupID := range []int64{stateCompatGroupA, stateCompatGroupB} {
+				group, ok := settings.Group(groupID)
+				if !ok {
+					t.Fatalf("group %d missing after migration", groupID)
+				}
+				if group.Enabled().Value || group.NameSpoiler().Value || group.VerifyMode().Value != config.ModeMixed {
+					t.Fatalf("group %d settings = enabled:%v name_spoiler:%v verify_mode:%q", groupID, group.Enabled().Value, group.NameSpoiler().Value, group.VerifyMode().Value)
+				}
 			}
-			if tt.roundTrip {
-				out := filepath.Join(t.TempDir(), "settings.json")
-				v.settingsPath = out
-				v.saveSettings()
-				stateCompatAssertStableJSON(t, "settings", fixture, stateCompatRead(t, out))
+			var migrated map[string]any
+			stateCompatDecode(t, stateCompatRead(t, path), &migrated)
+			if migrated["version"] != float64(store.SettingsSchemaVersion) {
+				t.Fatalf("migrated settings version = %v", migrated["version"])
+			}
+			if groups, ok := migrated["groups"].(map[string]any); !ok || len(groups) != 2 {
+				t.Fatalf("migrated settings groups = %#v", migrated["groups"])
 			}
 		})
 	}

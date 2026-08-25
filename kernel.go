@@ -13,6 +13,7 @@ import (
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -193,26 +194,28 @@ func benignKernelContext(before, after, distribution string) bool {
 // kernelUnameTailRe matches the `#<build>` field that follows the release in `uname -a` output.
 var kernelUnameTailRe = regexp.MustCompile(`^\s*#\d+`)
 
-func (v *Verifier) verifyModeOverride() string {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.vmode
+func (v *Verifier) setVerifyMode(groupID int64, mode string) error {
+	return v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
+		if mode == "" {
+			overrides.VerifyMode = nil
+			return
+		}
+		overrides.VerifyMode = &mode
+	})
 }
 
-// Persist runtime /vmode overrides.
-func (v *Verifier) setVerifyMode(mode string) {
-	v.mu.Lock()
-	v.vmode = mode
-	v.mu.Unlock()
-	v.saveSettings()
-}
-
-// Runtime /vmode overrides per-group and global config.
-func (v *Verifier) effectiveMode(gid int64) string {
-	if o := v.verifyModeOverride(); config.ValidMode(o) {
-		return o
+func (v *Verifier) effectiveMode(groupID int64) string {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.VerifyMode().Value
 	}
-	return v.cfg.VerifyModeFor(gid)
+	return v.fallbackGroupSettings(groupID).VerifyMode.Value
+}
+
+func (v *Verifier) questions(groupID int64) []config.Question {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.Questions().Value
+	}
+	return v.fallbackGroupSettings(groupID).Questions.Value
 }
 
 // Mixed mode uses a cryptographic coin flip; an empty quiz pool falls back to kernel.
@@ -224,7 +227,7 @@ func (v *Verifier) pickMode(gid int64) string {
 			mode = (config.ModeKernel)
 		}
 	}
-	if mode == (config.ModeQuiz) && len(v.cfg.QuestionsFor(gid)) == 0 {
+	if mode == (config.ModeQuiz) && len(v.questions(gid)) == 0 {
 		return config.ModeKernel
 	}
 	return mode
@@ -236,7 +239,7 @@ func (v *Verifier) newChallenge(gid int64, ul i18n.Lang) (mode, text string, opt
 	if mode == (config.ModeKernel) {
 		return mode, kernelQuestion(ul), nil, -1
 	}
-	text, opts, correctIdx = shuffledQuestion(randomQuestion(v.cfg, gid))
+	text, opts, correctIdx = shuffledQuestion(randomQuestion(v.questions(gid)))
 	return mode, text, opts, correctIdx
 }
 
@@ -297,13 +300,24 @@ func copiedSample(text string) bool {
 }
 
 // Operator fallback questions override the localized built-in questions.
-func (v *Verifier) fallbackQuestion(l i18n.Lang) (string, []string) {
-	if questions := v.cfg.FallbackQuestions; len(questions) > 0 {
+func (v *Verifier) fallbackQuestion(groupID int64, l i18n.Lang) (string, []string) {
+	var questions []config.ShortQuestion
+	if group, ok := v.groupSettings(groupID); ok {
+		if !group.FallbackBuiltin().Value {
+			questions = group.FallbackQuestions().Value
+		}
+	} else {
+		fallback := v.fallbackGroupSettings(groupID)
+		if !fallback.FallbackBuiltin.Value {
+			questions = fallback.FallbackQuestions.Value
+		}
+	}
+	if len(questions) != 0 {
 		question := questions[cryptoIntn(len(questions))]
 		return question.Q, question.Answers
 	}
-	questions := i18n.Messages.Verification.Challenge.FallbackQuestions
-	return questions[cryptoIntn(len(questions))].For(l)
+	builtin := i18n.Messages.Verification.Challenge.FallbackQuestions
+	return builtin[cryptoIntn(len(builtin))].For(l)
 }
 
 // Accept one normalized whole reply, never a matching word embedded in prose.
@@ -565,7 +579,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 		}
 		// Decline only the nonce charged by recordKernelTry, never a replacement pending.
 		_, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer")
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(ul, banned)))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(gid, ul, banned)))
 		return
 	}
 	// Give WSL or VM users one free clarification before accepting the same real kernel.
@@ -586,7 +600,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 					return
 				}
 			} else if v.markKernelHinted(gid, uid, nonce) {
-				qText, answers := v.fallbackQuestion(ul)
+				qText, answers := v.fallbackQuestion(gid, ul)
 				left := kernelMaxTries - v.kernelTriesUsed(gid, uid)
 				if v.setKernelFallback(gid, uid, nonce, qText, answers) {
 					v.save()
@@ -607,7 +621,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 			return
 		}
 		_, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer") // the nonce as of the charge, see above
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(ul, banned)))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(gid, ul, banned)))
 		return
 	}
 	v.finishKernelPass(c, bot, gid, uid, nonce, ul)

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -16,16 +19,16 @@ func uptimeStr(start time.Time) string {
 	return time.Since(start).Round(time.Second).String()
 }
 
-func (v *Verifier) stateText() string {
-	if v.isEnabled() {
+func (v *Verifier) stateText(groupID int64) string {
+	if v.isEnabled(groupID) {
 		return "开启"
 	}
 	return "关闭"
 }
 
 func (v *Verifier) onPing(ctx *th.Context, update telego.Update) error {
-	return v.memberCmd(ctx, update, func() string {
-		return fmt.Sprintf("🏓 pong | %s | 运行 %s | 验证:%s", version, uptimeStr(v.startTime), v.stateText())
+	return v.memberCmd(ctx, update, func(groupID int64) string {
+		return fmt.Sprintf("🏓 pong | %s | 运行 %s | 验证:%s", version, uptimeStr(v.startTime), v.stateText(groupID))
 	})
 }
 
@@ -38,24 +41,28 @@ func (v *Verifier) onStart(ctx *th.Context, update telego.Update) error {
 		}
 		return nil
 	}
-	return v.adminCmd(ctx, update, func() string {
-		v.setEnabled(true)
-		return "✅ 入群验证已开启。"
+	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
+		if err := v.setEnabled(groupID, true); err != nil {
+			return "", err
+		}
+		return "✅ 入群验证已开启。", nil
 	})
 }
 
 func (v *Verifier) onStop(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
-		v.setEnabled(false)
-		return "⏸ 入群验证已关闭。新入群申请将不再自动验证(留给人工审批)。"
+	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
+		if err := v.setEnabled(groupID, false); err != nil {
+			return "", err
+		}
+		return "⏸ 入群验证已关闭。新入群申请将不再自动验证(留给人工审批)。", nil
 	})
 }
 
 func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
-	return v.memberCmd(ctx, update, func() string {
+	return v.memberCmd(ctx, update, func(groupID int64) string {
 		date, ap, de := v.stats()
 		out := fmt.Sprintf("📊 今日(%s)\n✅ 通过:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
-			date, ap, de, v.stateText(), uptimeStr(v.startTime))
+			date, ap, de, v.stateText(groupID), uptimeStr(v.startTime))
 		if ai := v.agentStatsText(); ai != "" { // Lifetime tally; daily stats reset separately.
 			out += "\n" + ai
 		}
@@ -64,48 +71,59 @@ func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
 }
 
 func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
-		if v.toggleRich() {
-			return "🎨 富文本输出已开启(/pkg、/use 用富消息;旧版/第三方客户端可能渲染不佳)。"
+	return v.globalSettingsAdminCmd(ctx, update, func(_ int64) (string, error) {
+		enabled, err := v.toggleRich()
+		if err != nil {
+			return "", err
 		}
-		return "📄 富文本输出已关闭,/pkg、/use 改用纯文本。"
+		if enabled {
+			return "🎨 富文本输出已开启(/pkg、/use 用富消息;旧版/第三方客户端可能渲染不佳)。", nil
+		}
+		return "📄 富文本输出已关闭,/pkg、/use 改用纯文本。", nil
 	})
 }
 
 // The persisted spoiler hides advertising placed in applicant display names.
 func (v *Verifier) onSpoiler(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
-		if v.toggleNameSpoiler() {
-			return "🫥 已开启:新成员的名字会用「防剧透」遮盖,不点开看不到 —— 防止有人拿广告当名字在群里刷屏。"
+	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
+		enabled, err := v.toggleNameSpoiler(groupID)
+		if err != nil {
+			return "", err
 		}
-		return "👁 已关闭:新成员的名字将正常显示(不再遮盖)。"
+		if enabled {
+			return "🫥 已开启:新成员的名字会用「防剧透」遮盖,不点开看不到 —— 防止有人拿广告当名字在群里刷屏。", nil
+		}
+		return "👁 已关闭:新成员的名字将正常显示(不再遮盖)。", nil
 	})
 }
 
-// /vmode is a persisted process-wide override of per-group configuration.
+// /vmode changes the invoking group's verification mode.
 func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
-		gid := update.Message.Chat.ID
+	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
 		arg := strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text)))
 		switch arg {
 		case "":
-			src := "配置文件"
-			if config.ValidMode(v.verifyModeOverride()) {
-				src = "/vmode 设定"
+			source := "配置文件"
+			if group, ok := v.groupSettings(groupID); ok && group.VerifyMode().Source == store.SourceRuntime {
+				source = "/vmode 设定"
 			}
 			return fmt.Sprintf("🔐 当前入群验证方式:%s(来自%s)。\n用法:/vmode kernel 改为填内核版本号;/vmode quiz 改回选择题;/vmode mixed 两者随机;/vmode auto 恢复按配置文件。",
-				modeName(v.effectiveMode(gid)), src)
+				modeName(v.effectiveMode(groupID)), source), nil
 		case config.ModeKernel, config.ModeQuiz, config.ModeMixed:
-			v.setVerifyMode(arg)
-			if arg == (config.ModeKernel) {
-				return "🔐 入群验证已改为:填写内核版本号 —— 申请者必须自己输入 uname -r 的版本号,只会乱点按钮的机器人进不来。"
+			if err := v.setVerifyMode(groupID, arg); err != nil {
+				return "", err
 			}
-			return "🔐 入群验证已改为:" + modeName(arg) + "。"
+			if arg == (config.ModeKernel) {
+				return "🔐 入群验证已改为:填写内核版本号 —— 申请者必须自己输入 uname -r 的版本号,只会乱点按钮的机器人进不来。", nil
+			}
+			return "🔐 入群验证已改为:" + modeName(arg) + "。", nil
 		case "auto", "config", "default":
-			v.setVerifyMode("")
-			return fmt.Sprintf("🔐 已恢复按配置文件决定验证方式,本群当前为:%s。", modeName(v.effectiveMode(gid)))
+			if err := v.setVerifyMode(groupID, ""); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("🔐 已恢复按配置文件决定验证方式,本群当前为:%s。", modeName(v.effectiveMode(groupID))), nil
 		}
-		return "用法:/vmode kernel|quiz|mixed|auto(不带参数查看当前设置)。"
+		return "用法:/vmode kernel|quiz|mixed|auto(不带参数查看当前设置)。", nil
 	})
 }
 
@@ -125,26 +143,32 @@ func parseAutoDelArg(arg string) (action string, ttl time.Duration) {
 }
 
 func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
-	return v.adminCmd(ctx, update, func() string {
+	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
 		action, ttl := parseAutoDelArg(strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text))))
 		switch action {
 		case "show":
-			if cur, on := v.lookupAutoDelete(); on {
-				return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(cur/time.Minute))
+			if current, enabled := v.lookupAutoDelete(groupID); enabled {
+				return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(current/time.Minute)), nil
 			}
-			return "查询结果自动删除:已关闭。\n用法:/autodel on 开启;/autodel <分钟> 设定时间并开启。"
+			return "查询结果自动删除:已关闭。\n用法:/autodel on 开启;/autodel <分钟> 设定时间并开启。", nil
 		case "off":
-			v.setLookupAutoDelete(0, false)
-			return "已关闭查询结果自动删除(查询命令 /pkg、/use、/bug、/news、/wiki、/bbs、/pkgs、/arm、/armpkgs 的回复将保留)。"
+			if err := v.setLookupAutoDelete(groupID, 0, false); err != nil {
+				return "", err
+			}
+			return "已关闭查询结果自动删除(查询命令 /pkg、/use、/bug、/news、/wiki、/bbs、/pkgs、/arm、/armpkgs 的回复将保留)。", nil
 		case "on":
-			v.setLookupAutoDelete(0, true)
-			cur, _ := v.lookupAutoDelete()
-			return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(cur/time.Minute))
+			if err := v.setLookupAutoDelete(groupID, 0, true); err != nil {
+				return "", err
+			}
+			current, _ := v.lookupAutoDelete(groupID)
+			return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(current/time.Minute)), nil
 		case "set":
-			v.setLookupAutoDelete(ttl, true)
-			return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute))
+			if err := v.setLookupAutoDelete(groupID, ttl, true); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute)), nil
 		default:
-			return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。"
+			return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。", nil
 		}
 	})
 }
@@ -166,6 +190,29 @@ func memberHelpText() string {
 		"/help — 显示本帮助"
 }
 
+// Root settings and verification commands require a fresh, successful admin lookup.
+func (v *Verifier) isGroupAdmin(ctx context.Context, bot modBot, chatID, userID int64) bool {
+	ok, err := v.adminTransport(bot).FreshAdmin(ctx, chatID, userID)
+	if err != nil {
+		log.Printf("isGroupAdmin getChatMember chat=%d user=%d: %v", chatID, userID, err)
+		return false
+	}
+	return ok
+}
+
+func (v *Verifier) isGroupAdminCached(ctx context.Context, bot modBot, chatID, userID int64) bool {
+	ok, err := v.adminTransport(bot).CachedAdmin(ctx, chatID, userID)
+	if err != nil {
+		log.Printf("isGroupAdminCached getChatMember chat=%d user=%d: %v", chatID, userID, err)
+		return false
+	}
+	return ok
+}
+
+func (v *Verifier) notify(ctx context.Context, bot modBot, chatID int64, text string) {
+	v.adminTransport(bot).Notify(ctx, chatID, text, v.cfg.NotifyTTLSeconds)
+}
+
 func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.dmOrGroup(msg) { // /help is free (no external request)
@@ -176,6 +223,9 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	chatID := msg.Chat.ID
 	inGroup := v.cfg.IsGroup(chatID)
 	help := memberHelpText()
+	if inGroup {
+		help += "\n\n入群验证:" + v.stateText(chatID)
+	}
 	if inGroup && v.isGroupAdminCached(c, bot, chatID, msg.From.ID) {
 		help += "\n\n👮 管理员(回复某条消息使用):\n" +
 			"/mute — 禁言(留群不能发言,到期自动解除);默认1h,可 /mute 30m\n" +
@@ -204,42 +254,62 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 }
 
 // Informational commands are unrestricted; only external lookups are rate-limited.
-func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() string) error {
+func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func(groupID int64) string) error {
 	msg := update.Message
 	if msg == nil || !v.dmOrGroup(msg) {
 		return nil
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	if v.cfg.IsGroup(msg.Chat.ID) {
-		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(msg.Chat.ID), MessageID: msg.MessageID})
-		v.notify(c, bot, msg.Chat.ID, fn())
+	groupID := msg.Chat.ID
+	if v.cfg.IsGroup(groupID) {
+		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(groupID), MessageID: msg.MessageID})
+		v.notify(c, bot, groupID, fn(groupID))
 		return nil
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(msg.Chat.ID), fn())) // DM: reply as plain text, no delete
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(groupID), fn(v.controlGroupID())))
 	return nil
 }
 
-// adminCmd enforces the process-wide control-group boundary.
-func (v *Verifier) adminCmd(ctx *th.Context, update telego.Update, fn func() string) error {
+func (v *Verifier) notifySettingsFailure(c context.Context, bot modBot, groupID int64, err error) {
+	log.Printf("settings command in group %d failed: %v", groupID, err)
+	v.notify(c, bot, groupID, "❌ 无法保存设置,请稍后重试。")
+}
+
+func (v *Verifier) settingsAdminCmd(ctx *th.Context, update telego.Update, fn func(groupID int64) (string, error)) error {
+	return v.runSettingsAdminCmd(ctx, update, false, fn)
+}
+
+func (v *Verifier) globalSettingsAdminCmd(ctx *th.Context, update telego.Update, fn func(groupID int64) (string, error)) error {
+	return v.runSettingsAdminCmd(ctx, update, true, fn)
+}
+
+func (v *Verifier) runSettingsAdminCmd(ctx *th.Context, update telego.Update, controlGroupOnly bool, fn func(groupID int64) (string, error)) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
 		return nil
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	gid := msg.Chat.ID
+	groupID := msg.Chat.ID
 	defer func() {
-		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
+		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(groupID), MessageID: msg.MessageID})
 	}()
-	if allowed, refusal := v.cfg.ControlGroupAllowed(gid); !allowed {
-		v.notify(c, bot, gid, refusal)
+	if controlGroupOnly {
+		if allowed, refusal := v.cfg.ControlGroupAllowed(groupID); !allowed {
+			v.notify(c, bot, groupID, refusal)
+			return nil
+		}
+	}
+	if !v.isGroupAdmin(c, bot, groupID, msg.From.ID) {
+		v.notify(c, bot, groupID, "⛔ 该命令仅群管理员可用。")
 		return nil
 	}
-	if !v.isGroupAdminCached(c, bot, gid, msg.From.ID) {
-		v.notify(c, bot, gid, "⛔ 该命令仅群管理员可用。")
+	text, err := fn(groupID)
+	if err != nil {
+		v.notifySettingsFailure(c, bot, groupID, err)
 		return nil
 	}
-	v.notify(c, bot, gid, fn())
+	v.notify(c, bot, groupID, text)
 	return nil
 }

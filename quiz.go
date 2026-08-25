@@ -19,9 +19,8 @@ func cryptoIntn(n int) int {
 	return int(v.Int64())
 }
 
-func randomQuestion(c *config.Config, gid int64) config.Question {
-	qs := c.QuestionsFor(gid)
-	return qs[cryptoIntn(len(qs))]
+func randomQuestion(questions []config.Question) config.Question {
+	return questions[cryptoIntn(len(questions))]
 }
 
 // Shuffling prevents fixed-position clicks while preserving the correct option's new index.

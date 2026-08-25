@@ -8,32 +8,45 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
 
+const testLookupGroup int64 = -1
+
 func newTestVerifier(ttl *int) *Verifier {
-	return NewVerifier(&config.Config{GroupIDs: []int64{-1},
+	return NewVerifier(&config.Config{GroupIDs: []int64{testLookupGroup},
 		Questions:        []config.Question{{Q: "x", Options: []string{"a", "b"}, Answer: 0}},
 		LookupTTLSeconds: ttl})
 }
 
 func TestLookupAutoDelete(t *testing.T) {
 	// default: unset => enabled, 3 minutes
-	if ttl, on := newTestVerifier(nil).lookupAutoDelete(); !on || ttl != 3*time.Minute {
+	if ttl, on := newTestVerifier(nil).lookupAutoDelete(testLookupGroup); !on || ttl != 3*time.Minute {
 		t.Errorf("default = (%v, %v), want (3m, true)", ttl, on)
 	}
 	// config 0 => disabled
 	zero := 0
-	if _, on := newTestVerifier(&zero).lookupAutoDelete(); on {
+	disabled := newTestVerifier(&zero)
+	if _, on := disabled.lookupAutoDelete(testLookupGroup); on {
 		t.Errorf("lookup_ttl_seconds=0 should disable")
 	}
+	if err := disabled.setLookupAutoDelete(testLookupGroup, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if ttl, on := disabled.lookupAutoDelete(testLookupGroup); !on || ttl != 3*time.Minute {
+		t.Errorf("re-enabled zero baseline = (%v, %v), want (3m, true)", ttl, on)
+	}
 	// config positive => enabled with that duration
-	s := 600
-	if ttl, on := newTestVerifier(&s).lookupAutoDelete(); !on || ttl != 10*time.Minute {
+	seconds := 600
+	if ttl, on := newTestVerifier(&seconds).lookupAutoDelete(testLookupGroup); !on || ttl != 10*time.Minute {
 		t.Errorf("lookup_ttl_seconds=600 = (%v, %v), want (10m, true)", ttl, on)
 	}
 	// runtime: set minutes, then disable — the TTL must persist for a later re-enable
 	v := newTestVerifier(nil)
-	v.setLookupAutoDelete(5*time.Minute, true)
-	v.setLookupAutoDelete(0, false) // ttl<=0 => don't change the duration, just toggle off
-	if ttl, on := v.lookupAutoDelete(); on || ttl != 5*time.Minute {
+	if err := v.setLookupAutoDelete(testLookupGroup, 5*time.Minute, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.setLookupAutoDelete(testLookupGroup, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if ttl, on := v.lookupAutoDelete(testLookupGroup); on || ttl != 5*time.Minute {
 		t.Errorf("after off = (%v, %v), want (5m, false)", ttl, on)
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 )
 
@@ -169,14 +170,19 @@ func TestVerifyModeResolution(t *testing.T) {
 		t.Errorf("per-group override = %q, want %q", got, config.ModeQuiz)
 	}
 	cfg.VerifyMode = (config.ModeQuiz)
+	v = NewVerifier(cfg)
 	if got := v.effectiveMode(-100); got != (config.ModeQuiz) {
 		t.Errorf("global verify_mode = %q, want %q", got, config.ModeQuiz)
 	}
-	v.setVerifyMode(config.ModeKernel) // /vmode wins over both
-	if got := v.effectiveMode(-200); got != (config.ModeKernel) {
-		t.Errorf("/vmode override = %q, want %q", got, config.ModeKernel)
+	if err := v.setVerifyMode(-200, config.ModeKernel); err != nil {
+		t.Fatal(err)
 	}
-	v.setVerifyMode("") // …and clearing it goes back to the config
+	if got := v.effectiveMode(-200); got != (config.ModeKernel) {
+		t.Errorf("/vmode group override = %q, want %q", got, config.ModeKernel)
+	}
+	if err := v.setVerifyMode(-200, ""); err != nil {
+		t.Fatal(err)
+	}
 	if got := v.effectiveMode(-200); got != (config.ModeQuiz) {
 		t.Errorf("after clearing the override = %q, want %q", got, config.ModeQuiz)
 	}
@@ -242,10 +248,10 @@ func noLinuxNow(prefix string) string {
 }
 
 // kernelTestV builds a Verifier with one kernel pending for user 5 in group -100.
-func kernelTestV() (*Verifier, *fakeModBot) {
+func kernelTestV() (*Verifier, *fakeVerifyBot) {
 	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMaxFails: 3})
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "n", prompted: true, groupMsgID: 42, deadline: time.Now().Add(time.Hour)}
-	return v, newFakeMod()
+	return v, newFakeVerifyBot()
 }
 
 func TestGradeKernelAnswerCorrect(t *testing.T) {
@@ -348,7 +354,14 @@ func TestGradeKernelAnswerChannelGate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			v, bot := kernelTestV()
-			v.cfg.RequiredChannelID = requiredChannel
+			if err := v.updateGroupSettings(-100, func(_ store.GroupView, overrides *store.GroupOverrides) {
+				channelID := requiredChannel
+				display := "@required"
+				overrides.RequiredChannelID = &channelID
+				overrides.ChannelDisplay = &display
+			}); err != nil {
+				t.Fatal(err)
+			}
 			v.botID = 1
 			bot.member = tt.member
 			bot.memberErr = tt.memberErr
@@ -512,7 +525,7 @@ func TestFallbackAnswerMatching(t *testing.T) {
 		Q:       "Which package manager?",
 		Answers: []string{"emerge", "Portage"},
 	}}})
-	_, answers := v.fallbackQuestion(i18n.LangZH)
+	_, answers := v.fallbackQuestion(-100, i18n.LangZH)
 	tests := []struct {
 		text string
 		want bool
@@ -682,7 +695,7 @@ func TestTripwireCountsOncePerMessage(t *testing.T) {
 	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
 	v.pend[pkey{-200, 5}] = &pending{mode: config.ModeKernel, nonce: "bbb", prompted: true, deadline: time.Now().Add(time.Hour)}
-	fb := newFakeMod()
+	fb := newFakeVerifyBot()
 	for _, gid := range v.kernelPendingGroups(5) {
 		v.gradeKernelAnswer(context.Background(), fb, gid, 5, "AGENT-AAA model=deepseek-v3.2")
 	}
@@ -833,7 +846,7 @@ func TestReapplyKeepsAttempts(t *testing.T) {
 		sampleBounced: true, noLinuxReminded: true, osClarified: true, groupMsgID: 42,
 		deadline: time.Now().Add(time.Hour)}
 	v.pend[key] = old
-	bot := newFakeMod()
+	bot := newFakeVerifyBot()
 	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
 		Chat: telego.Chat{ID: -100},
 		From: telego.User{ID: 5, FirstName: "Applicant"},
@@ -883,7 +896,7 @@ func TestAgentReplyDeclinesEveryPending(t *testing.T) {
 	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
 	v.pend[pkey{-200, 5}] = &pending{mode: config.ModeKernel, nonce: "bbb", prompted: true, deadline: time.Now().Add(time.Hour)}
-	fb := newFakeMod()
+	fb := newFakeVerifyBot()
 	const reply = "AGENT-AAA model=deepseek-v3.2"
 
 	gid, nonce, tripped := v.trippedPending(5, reply)

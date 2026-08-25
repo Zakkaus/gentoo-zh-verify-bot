@@ -358,7 +358,7 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 // Bot API 10.1 rich messages fall back to HTML on server rejection.
 // Client-side rendering failures are not observable.
 func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, richHTML, plainHTML string) {
-	ttl, on := v.lookupAutoDelete()
+	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
 	if !on {
 		ttl = 0
 	}

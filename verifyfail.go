@@ -89,7 +89,7 @@ func (v *Verifier) recordVerifyFail(gid, uid int64) (count int, ban bool) {
 	count = r.count
 	v.mu.Unlock()
 	v.saveVerifyFails()
-	max := v.cfg.VerifyMaxFails
+	max := v.verifyMaxFails(gid)
 	return count, max > 0 && count >= max
 }
 
@@ -104,9 +104,23 @@ func (v *Verifier) clearVerifyFails(gid, uid int64) {
 	}
 }
 
+func (v *Verifier) verifyMaxFails(groupID int64) int {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.VerifyMaxFails().Value
+	}
+	return v.fallbackGroupSettings(groupID).VerifyMaxFails.Value
+}
+
+func (v *Verifier) verifyRetrySeconds(groupID int64) int {
+	if group, ok := v.groupSettings(groupID); ok {
+		return group.VerifyRetrySeconds().Value
+	}
+	return v.fallbackGroupSettings(groupID).VerifyRetrySeconds.Value
+}
+
 // verifyCooldownRemaining returns zero when the applicant may reapply.
 func (v *Verifier) verifyCooldownRemaining(gid, uid int64) time.Duration {
-	secs := v.cfg.VerifyRetrySeconds
+	secs := v.verifyRetrySeconds(gid)
 	if secs <= 0 {
 		return 0
 	}

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,8 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
+	th "github.com/mymmrac/telego/telegohandler"
 )
 
 func TestJoinerLabel(t *testing.T) {
@@ -34,14 +38,19 @@ func TestJoinerLabel(t *testing.T) {
 }
 
 func TestNameSpoilerDefaultAndToggle(t *testing.T) {
-	v := NewVerifier(&config.Config{})
-	if !v.nameSpoilerOn() {
+	const groupID int64 = -100
+	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: groupID}}, GroupIDs: []int64{groupID}})
+	if !v.nameSpoilerOn(groupID) {
 		t.Error("name spoiler should default ON (spam names are often adverts)")
 	}
-	if v.toggleNameSpoiler() {
+	enabled, err := v.toggleNameSpoiler(groupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
 		t.Error("toggle should turn it OFF and return the new state (false)")
 	}
-	if v.nameSpoilerOn() {
+	if v.nameSpoilerOn(groupID) {
 		t.Error("name spoiler should now be OFF")
 	}
 }
@@ -50,22 +59,30 @@ func TestNameSpoilerDefaultAndToggle(t *testing.T) {
 // exercised without a real Telegram connection; it records call counts and returns configured
 // errors for those network actions.
 type fakeVerifyBot struct {
-	approveErr    error
-	declineErr    error
-	banErr        error
-	getMeErr      error
-	sendErr       error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
-	sendFailN     int
-	approves      int
-	declines      int
-	bans          int
-	deletes       int
-	sends         int
-	getMeCalls    int
-	lastSendChat  int64
-	lastSendText  string
-	lastParseMode string
+	approveErr      error
+	declineErr      error
+	banErr          error
+	getMeErr        error
+	sendErr         error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
+	sendFailN       int
+	approves        int
+	declines        int
+	bans            int
+	deletes         int
+	sends           int
+	getMeCalls      int
+	lastSendChat    int64
+	lastSendText    string
+	lastParseMode   string
+	member          telego.ChatMember
+	memberByID      map[int64]telego.ChatMember
+	memberErr       error
+	memberRequests  []telego.GetChatMemberParams
+	answers         int
+	callbackAnswers []telego.AnswerCallbackQueryParams
 }
+
+func newFakeVerifyBot() *fakeVerifyBot { return &fakeVerifyBot{} }
 
 // GetMe lets the fake stand in for the heartbeat's liveness probe (liveProbe / heartbeatBot).
 func (b *fakeVerifyBot) GetMe(context.Context) (*telego.User, error) {
@@ -155,6 +172,168 @@ func (b *fakeVerifyBot) Ban(ctx context.Context, chatID, userID int64, _ int, re
 	})
 }
 
+func (b *fakeVerifyBot) GetChatMember(_ context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error) {
+	b.memberRequests = append(b.memberRequests, *params)
+	if b.memberErr != nil {
+		return nil, b.memberErr
+	}
+	if member, ok := b.memberByID[params.UserID]; ok {
+		return member, nil
+	}
+	return b.member, nil
+}
+
+func (b *fakeVerifyBot) AnswerCallbackQuery(_ context.Context, params *telego.AnswerCallbackQueryParams) error {
+	b.answers++
+	b.callbackAnswers = append(b.callbackAnswers, *params)
+	return nil
+}
+
+func (b *fakeVerifyBot) CachedAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
+	return b.adminStatus(ctx, chatID, userID)
+}
+
+func (b *fakeVerifyBot) FreshAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
+	return b.adminStatus(ctx, chatID, userID)
+}
+
+func (b *fakeVerifyBot) Notify(ctx context.Context, chatID int64, text string, _ int) {
+	_, _ = b.SendMessage(ctx, &telego.SendMessageParams{ChatID: telego.ChatID{ID: chatID}, Text: text})
+}
+
+func (b *fakeVerifyBot) adminStatus(ctx context.Context, chatID, userID int64) (bool, error) {
+	member, err := b.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: telego.ChatID{ID: chatID}, UserID: userID})
+	if err != nil {
+		return false, err
+	}
+	if member == nil {
+		return false, nil
+	}
+	status := member.MemberStatus()
+	return status == telego.MemberStatusCreator || status == telego.MemberStatusAdministrator, nil
+}
+
+func fakeTelegramResponse(value any, err error) (*ta.Response, error) {
+	if err != nil {
+		return nil, err
+	}
+	if value == nil {
+		return &ta.Response{Ok: true}, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return &ta.Response{Ok: true, Result: raw}, nil
+}
+
+func fakeSendMessageParams(raw []byte) (*telego.SendMessageParams, error) {
+	var wire struct {
+		ChatID              int64                   `json:"chat_id"`
+		Text                string                  `json:"text"`
+		ParseMode           string                  `json:"parse_mode"`
+		DisableNotification bool                    `json:"disable_notification"`
+		ReplyParameters     *telego.ReplyParameters `json:"reply_parameters"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, err
+	}
+	return &telego.SendMessageParams{
+		ChatID:              telego.ChatID{ID: wire.ChatID},
+		Text:                wire.Text,
+		ParseMode:           wire.ParseMode,
+		DisableNotification: wire.DisableNotification,
+		ReplyParameters:     wire.ReplyParameters,
+	}, nil
+}
+
+// Call adapts fakeVerifyBot to telego's transport hook for concrete handler tests.
+func (b *fakeVerifyBot) Call(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+	method := url[strings.LastIndexByte(url, '/')+1:]
+	switch method {
+	case "getChatMember":
+		var params telego.GetChatMemberParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		member, err := b.GetChatMember(ctx, &params)
+		return fakeTelegramResponse(member, err)
+	case "answerCallbackQuery":
+		var params telego.AnswerCallbackQueryParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		return fakeTelegramResponse(nil, b.AnswerCallbackQuery(ctx, &params))
+	case "approveChatJoinRequest":
+		var params telego.ApproveChatJoinRequestParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		return fakeTelegramResponse(nil, b.ApproveChatJoinRequest(ctx, &params))
+	case "declineChatJoinRequest":
+		var params telego.DeclineChatJoinRequestParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		return fakeTelegramResponse(nil, b.DeclineChatJoinRequest(ctx, &params))
+	case "banChatMember":
+		var params telego.BanChatMemberParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		return fakeTelegramResponse(nil, b.BanChatMember(ctx, &params))
+	case "deleteMessage":
+		var params telego.DeleteMessageParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		return fakeTelegramResponse(nil, b.DeleteMessage(ctx, &params))
+	case "sendMessage":
+		params, err := fakeSendMessageParams(data.BodyRaw)
+		if err != nil {
+			return nil, err
+		}
+		message, err := b.SendMessage(ctx, params)
+		return fakeTelegramResponse(message, err)
+	default:
+		return nil, fmt.Errorf("unexpected Telegram method %q", method)
+	}
+}
+
+func newAPITestBot(t *testing.T, caller ta.Caller) *telego.Bot {
+	t.Helper()
+	bot, err := telego.NewBot("1:"+strings.Repeat("a", 35), telego.WithAPICaller(caller), telego.WithDiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bot
+}
+
+func runFakeHandler(t *testing.T, bot *telego.Bot, handler th.Handler, update telego.Update) {
+	t.Helper()
+	updates := make(chan telego.Update, 1)
+	botHandler, err := th.NewBotHandler(bot, updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan error, 1)
+	botHandler.Handle(func(ctx *th.Context, update telego.Update) error {
+		err := handler(ctx, update)
+		handled <- err
+		return err
+	})
+	started := make(chan error, 1)
+	go func() { started <- botHandler.Start() }()
+	updates <- update
+	close(updates)
+	if err := <-handled; err != nil {
+		t.Fatalf("handler returned %v", err)
+	}
+	if err := <-started; err != nil {
+		t.Fatalf("bot handler returned %v", err)
+	}
+}
+
 type blockingTerminalBot struct {
 	*fakeVerifyBot
 	approveStarted chan struct{}
@@ -215,7 +394,7 @@ func TestOnAnswer(t *testing.T) {
 			v := NewVerifier(cfg)
 			key := pkey{gid: gid, uid: uid}
 			v.pend[key] = &pending{nonce: "current", correctIdx: 1, groupMsgID: 42, deadline: time.Now().Add(time.Hour)}
-			bot := newFakeMod()
+			bot := newFakeVerifyBot()
 			if tt.required {
 				bot.member = &telego.ChatMemberLeft{Status: telego.MemberStatusLeft}
 			}
@@ -519,7 +698,7 @@ func TestTrustedBypass(t *testing.T) {
 
 	v := mkV()
 	v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()} // a prior failed-verify strike
-	member := newFakeMod()
+	member := newFakeVerifyBot()
 	member.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
 	if handled, trusted := v.tryTrustedBypass(ctx, member, gid, uid); !handled || !trusted {
 		t.Fatalf("a member must be approved: handled=%v trusted=%v", handled, trusted)
@@ -531,19 +710,19 @@ func TestTrustedBypass(t *testing.T) {
 		t.Error("a successful bypass must clearVerifyFails (clean slate)")
 	}
 
-	left := newFakeMod()
+	left := newFakeVerifyBot()
 	left.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
 	if handled, trusted := mkV().tryTrustedBypass(ctx, left, gid, uid); handled || trusted || left.approves != 0 {
 		t.Errorf("a non-member must be (false,false): handled=%v trusted=%v", handled, trusted)
 	}
 
-	errBot := newFakeMod()
+	errBot := newFakeVerifyBot()
 	errBot.memberErr = errors.New("bot not in the trusted group")
 	if handled, trusted := mkV().tryTrustedBypass(ctx, errBot, gid, uid); handled || trusted || errBot.approves != 0 {
 		t.Errorf("a lookup error must be (false,false) — fail-closed: handled=%v trusted=%v", handled, trusted)
 	}
 
-	fail := newFakeMod()
+	fail := newFakeVerifyBot()
 	fail.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
 	fail.approveErr = errors.New("no rights")
 	if handled, trusted := mkV().tryTrustedBypass(ctx, fail, gid, uid); handled || !trusted {
@@ -551,7 +730,7 @@ func TestTrustedBypass(t *testing.T) {
 	}
 
 	plain := &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{}, cfg: &config.Config{Groups: []config.GroupConfig{{ID: gid}}}}
-	if handled, trusted := plain.tryTrustedBypass(ctx, newFakeMod(), gid, uid); handled || trusted {
+	if handled, trusted := plain.tryTrustedBypass(ctx, newFakeVerifyBot(), gid, uid); handled || trusted {
 		t.Errorf("no trusted config -> (false,false): handled=%v trusted=%v", handled, trusted)
 	}
 }
@@ -568,7 +747,7 @@ func TestJoinGate(t *testing.T) {
 	// trusted member IN cooldown -> bypassed (handled), approved, NOT declined
 	v := mkV()
 	cooldown(v)
-	bot := newFakeMod()
+	bot := newFakeVerifyBot()
 	bot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
 	if !v.joinGate(ctx, bot, gid, uid) {
 		t.Error("a trusted member in cooldown must be handled (bypassed)")
@@ -580,7 +759,7 @@ func TestJoinGate(t *testing.T) {
 	// trusted member in cooldown whose approve FAILS -> not handled (proceed to quiz), NOT declined
 	vf := mkV()
 	cooldown(vf)
-	failBot := newFakeMod()
+	failBot := newFakeVerifyBot()
 	failBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
 	failBot.approveErr = errors.New("no rights")
 	if vf.joinGate(ctx, failBot, gid, uid) {
@@ -593,7 +772,7 @@ func TestJoinGate(t *testing.T) {
 	// NON-member in cooldown -> declined (the ordinary cooldown applies)
 	vn := mkV()
 	cooldown(vn)
-	nonBot := newFakeMod()
+	nonBot := newFakeVerifyBot()
 	nonBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
 	if !vn.joinGate(ctx, nonBot, gid, uid) {
 		t.Error("a non-member in cooldown must be handled (declined)")
@@ -604,7 +783,7 @@ func TestJoinGate(t *testing.T) {
 
 	// non-member, NO cooldown -> proceed to the challenge (not handled)
 	vp := mkV()
-	pBot := newFakeMod()
+	pBot := newFakeVerifyBot()
 	pBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
 	if vp.joinGate(ctx, pBot, gid, uid) {
 		t.Error("a non-member with no cooldown must proceed to the challenge (not handled)")
@@ -808,35 +987,6 @@ func TestPendingCapAlertThrottled(t *testing.T) {
 			v.alertPendingCap(context.Background(), fb, tt.groupID)
 			if fb.sends != 2 {
 				t.Errorf("an alert after the cooldown brought sends to %d, want 2", fb.sends)
-			}
-		})
-	}
-}
-
-func TestWarnCounterBound(t *testing.T) {
-	tests := []struct {
-		name         string
-		evicted      pkey
-		evictedCount int
-	}{
-		{name: "lowest count is evicted", evicted: pkey{-200, 1}, evictedCount: 1},
-		{name: "key order breaks equal-count ties", evicted: pkey{-200, 1}, evictedCount: 2},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(&config.Config{})
-			v.mu.Lock()
-			for i := range warnCounterMax {
-				v.warns[pkey{-100, int64(i + 1)}] = 2
-			}
-			v.warns[tt.evicted] = tt.evictedCount
-			v.mu.Unlock()
-
-			if len(v.warns) != warnCounterMax {
-				t.Fatalf("warning counters = %d, want cap %d", len(v.warns), warnCounterMax)
-			}
-			if _, ok := v.warns[tt.evicted]; ok {
-				t.Errorf("eviction candidate %v remains in warning counters", tt.evicted)
 			}
 		})
 	}

@@ -49,7 +49,7 @@ func TestOnExpiryOfflineDefers(t *testing.T) {
 	if _, struck := v.vfail[key]; struck {
 		t.Error("offline expiry must not record a strike")
 	}
-	if !cur.deadline.After(time.Now().Add(v.timeout() - 5*time.Second)) {
+	if !cur.deadline.After(time.Now().Add(v.timeout(key.gid) - 5*time.Second)) {
 		t.Errorf("deferred expiry should re-arm a fresh full window, deadline=%v", cur.deadline)
 	}
 	if cur.timer != nil {
@@ -187,7 +187,7 @@ func TestHeartbeatTickRecovers(t *testing.T) {
 		t.Error("recovery after a long outage should re-notify")
 	}
 	p, ok := v.pend[key]
-	if !ok || !p.deadline.After(time.Now().Add(v.timeout()-10*time.Second)) {
+	if !ok || !p.deadline.After(time.Now().Add(v.timeout(key.gid)-10*time.Second)) {
 		t.Error("recovery should refresh the pending's window")
 	}
 	if p != nil && p.timer != nil {
@@ -229,7 +229,7 @@ func TestOnRecoveryRefreshesAndRenotifies(t *testing.T) {
 		if !ok || p.done {
 			t.Fatalf("pending %v should stay live after recovery", k)
 		}
-		if !p.deadline.After(time.Now().Add(v.timeout() - 10*time.Second)) {
+		if !p.deadline.After(time.Now().Add(v.timeout(k.gid) - 10*time.Second)) {
 			t.Errorf("pending %v should get a fresh full window, deadline=%v", k, p.deadline)
 		}
 		if p.timer != nil {
@@ -294,7 +294,7 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	if !ok {
 		t.Fatal("the pending should be restored")
 	}
-	if !p.deadline.After(time.Now().Add(v.timeout() - 10*time.Second)) {
+	if !p.deadline.After(time.Now().Add(v.timeout(-100) - 10*time.Second)) {
 		t.Errorf("a long outage should restore a fresh full window, not the ~30s remaining (deadline=%v)", p.deadline)
 	}
 	if fb.sends == 0 {

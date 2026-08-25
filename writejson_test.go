@@ -14,9 +14,6 @@ func TestLoadStateReadErrorDisablesWrites(t *testing.T) {
 		path func(*Verifier) string
 	}{
 		{name: "pending", set: func(v *Verifier, p string) { v.statePath = p }, load: func(v *Verifier) { v.load(nil) }, path: func(v *Verifier) string { return v.statePath }},
-		{name: "warns", set: func(v *Verifier, p string) { v.warnPath = p }, load: func(v *Verifier) { v.loadWarns() }, path: func(v *Verifier) string { return v.warnPath }},
-		{name: "antispam", set: func(v *Verifier, p string) { v.acPath = p }, load: func(v *Verifier) { v.loadAntispam() }, path: func(v *Verifier) string { return v.acPath }},
-		{name: "settings", set: func(v *Verifier, p string) { v.settingsPath = p }, load: func(v *Verifier) { v.loadSettings() }, path: func(v *Verifier) string { return v.settingsPath }},
 		{name: "verify failures", set: func(v *Verifier, p string) { v.vfailPath = p }, load: func(v *Verifier) { v.loadVerifyFails() }, path: func(v *Verifier) string { return v.vfailPath }},
 		{name: "heartbeat", set: func(v *Verifier, p string) { v.hbPath = p }, load: func(v *Verifier) { v.loadHeartbeat() }, path: func(v *Verifier) string { return v.hbPath }},
 		{name: "agents", set: func(v *Verifier, p string) { v.agentPath = p }, load: func(v *Verifier) { v.loadAgents() }, path: func(v *Verifier) string { return v.agentPath }},

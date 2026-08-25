@@ -6,12 +6,15 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -34,10 +37,32 @@ func main() {
 		log.Fatal("BOT_TOKEN environment variable is required")
 	}
 
-	cfg, err := (config.LoadConfig(*configPath))
+	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	sd := os.Getenv("STATE_DIRECTORY")
+	settingsPath := ""
+	if sd != "" {
+		if err := os.MkdirAll(sd, 0o700); err != nil {
+			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
+		}
+		store.ReclaimTemps(sd)
+		settingsPath = filepath.Join(sd, "settings.json")
+	}
+	baseline, err := settingsBaseline(*configPath, cfg)
+	if err != nil {
+		log.Fatalf("settings baseline: %v", err)
+	}
+	runtimeSettings, err := store.NewSettings(settingsPath, baseline)
+	if err != nil {
+		log.Fatalf("settings: %v", err)
+	}
+	if status := runtimeSettings.Persistence(); status.LastError != nil {
+		log.Printf("WARNING: runtime settings persistence unavailable: %v", status.LastError)
+	}
+	cfg = configWithEffectiveGroups(cfg, runtimeSettings)
+
 	configurePkg(cfg)
 	configureNews(cfg)
 	githubToken = os.Getenv("GITHUB_TOKEN") // optional: lifts GitHub API rate limit for /pkg
@@ -55,6 +80,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create bot: %v", err)
 	}
+	telegram := tg.New(bot)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -73,7 +99,9 @@ func main() {
 	}
 	// Fatal exits skip defers; the graceful path stops the handler explicitly.
 
-	v := NewVerifier(cfg)
+	v := newVerifier(cfg, runtimeSettings)
+	v.telegramBot = bot
+	v.telegramClient = telegram
 	me, err := bot.GetMe(ctx)
 	if err != nil {
 		log.Fatalf("GetMe failed (required for the verification deep link): %v", err)
@@ -81,38 +109,30 @@ func main() {
 	v.botUsername = me.Username
 	v.botID = me.ID
 	v.probe = bot // liveness prober for the on-demand reachability check in the expiry path
-	log.Printf("verify bot @%s (%s) started — groups=%d timeout=%ds", me.Username, version, len(cfg.Groups), cfg.TimeoutSeconds)
-	for i := range cfg.Groups {
-		g := &cfg.Groups[i]
-		log.Printf("  group %d: required_channel=%d questions=%d", g.ID, cfg.RequiredChannel(g.ID), len(cfg.QuestionsFor(g.ID)))
-	}
-	go v.logGroupAdmin(ctx, bot, me.ID) // non-fatal: report which groups the bot can actually moderate
-	v.register(bh)
-	setupCommands(ctx, bot, cfg.WarnLimit)
-	sd := os.Getenv("STATE_DIRECTORY")
 	if sd != "" {
-		if err := os.MkdirAll(sd, 0o700); err != nil {
-			// Persistence failure is non-fatal and logged by every save.
-			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
-		}
-		// Remove temp files orphaned between atomic creation and rename.
-		store.ReclaimTemps(sd)
-		v.statePath = sd + "/pending.json"
-		v.hbPath = sd + "/heartbeat.json"
-		v.load(bot)
-		v.warnPath = sd + "/warns.json"
-		v.loadWarns()
-		v.acPath = sd + "/antispam.json"
-		v.loadAntispam()
-		v.vfailPath = sd + "/verifyfail.json"
+		v.hbPath = filepath.Join(sd, "heartbeat.json")
+		v.statePath = filepath.Join(sd, "pending.json")
+		v.load(bot) // reads the heartbeat before interpreting pending deadlines
+		v.vfailPath = filepath.Join(sd, "verifyfail.json")
 		v.loadVerifyFails()
-		v.settingsPath = sd + "/settings.json"
-		v.loadSettings() // restore a persisted /stop (verification paused) across restarts
-		v.agentPath = sd + "/agents.json"
-		v.loadAgents() // keep the AI-agent tally across restarts so /stats totals stay meaningful
+		v.agentPath = filepath.Join(sd, "agents.json")
+		v.loadAgents()
 	} else {
-		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: pending verifications, warn counts, the /bc state and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
+		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: settings changes are runtime-only, and pending verifications, warn counts, and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
 	}
+	moderation := moderate.New(runtimeSettings, telegram, cfg, sd)
+	log.Printf("verify bot @%s (%s) started — groups=%d", me.Username, version, len(runtimeSettings.GroupIDs()))
+	for _, groupID := range runtimeSettings.GroupIDs() {
+		group, _ := runtimeSettings.Group(groupID)
+		log.Printf("  group %d: required_channel=%d questions=%d timeout=%ds", groupID,
+			v.requiredChannelID(groupID), len(group.Questions().Value), group.TimeoutSeconds().Value)
+	}
+	go func() {
+		moderation.LogGroupAdmin(ctx, bot, me.ID)
+		v.logVerificationAccess(ctx, bot, me.ID)
+	}()
+	v.register(bh, moderation)
+	setupCommands(ctx, bot, cfg.WarnLimit)
 
 	var feeds []*config.FeedConfig // one shared poller fans new bugs + news out to all configured feeds
 	for i := range cfg.Feeds {
