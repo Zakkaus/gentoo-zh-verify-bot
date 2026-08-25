@@ -16,35 +16,35 @@
 
 **实现位置：**`internal/store` 包；`internal/store/settings.go` 中的 `NewSettings`、`(*Settings).CommitGroup`、`(*Settings).CommitGlobal` 和 `(*Settings).CommitRegistrations`。
 
-Schema 版本 2 保存稀疏的群组和全局覆盖值、群组和全局 revision、旧格式兼容镜像、owner 认领 nonce 及过期时间、owner ID、持久控制群组、已注册群组、注册 capability 和待注册记录。有效值按运行时覆盖、不可变 `config.json` baseline、内置默认值的优先级重建。
+Schema 版本 3 保存稀疏的群组和全局覆盖值、群组和全局 revision、旧格式兼容镜像、owner 认领 nonce、过期时间和 owner ID。该版本还保存持久控制群组、已注册群组、注册 capability 和待注册记录。有效值按运行时覆盖、不可变 `config.json` baseline、内置默认值的优先级重建。验证题发送方式保存为经过校验的 `delivery_mode` 字符串。
 
 群组和全局提交采用乐观 revision。没有设置路径时，提交更新内存快照并报告未持久化成功。注册提交必须具有真实持久路径。写入成功后才发布不可变快照，因此读取者不会看到写入失败的覆盖值。
 
 - 文件缺失：从 baseline 开始，首次持久提交可创建文件。
-- JSON 损坏：原文件成功改名为 `.corrupt` 后，进程从 baseline 开始且仍可写；后续提交会创建新的 schema 版本 2 状态。旧 owner 和注册信息在人工恢复前不可用。备份重命名失败时，程序停用设置写入，并把原文件留在原路径。
+- JSON 损坏：原文件成功改名为 `.corrupt` 后，进程从 baseline 开始且仍可写；后续提交会创建新的 schema 版本 3 状态。旧 owner 和注册信息在人工恢复前不可用。备份重命名失败时，程序停用设置写入，并把原文件留在原路径。
 - 现有文件不可读：从 baseline 开始，但把设置标记为不可用；群组、全局和注册写入在重启前全部失败，原文件不会覆盖。
 - 版本更新于当前支持版本或版本非法：保留文件并停用写入。
 - 路径不可写：每次提交失败，原有效快照继续使用。
 
-版本 0 和 1 有明确迁移。适用迁移还会导入旧 `antispam.json`；当前版本 2 不读取该旧文件。
+版本 0、1 和 2 有明确迁移。Schema 版本 2 中的 `dm_first: true` 转换为 `delivery_mode: "dm"`，`false` 转换为 `"group"`；两者均不存在时继承新的默认值 `"both"`。两个键同时存在时以 `delivery_mode` 为准。适用迁移还会导入旧 `antispam.json`；当前版本 3 不读取该旧文件。
 
 ## 升级与回滚
 
-当前版本首次将版本 0 的 `settings.json` 写成 schema 版本 2 前，会按原子写入流程尽力把原文件逐字节备份为 `settings.json.v0.bak`。备份失败会记录 `ERROR`，但不会阻止迁移。该文件只保存升级前的版本 0 状态，不含升级后的 schema 版本 2 状态，因此不能替代回滚前的备份。
+任何升级迁移首次写入前，当前版本都会按原子写入流程尽力把即将被替换的文件逐字节备份，文件名取自原 schema 版本：`settings.json.v0.bak`、`settings.json.v1.bak` 或 `settings.json.v2.bak`。备份失败会记录 `ERROR`，但不会阻止迁移。因为备份按原版本命名，所以后续升级不会覆盖先前的备份。
 
-回滚到不支持 schema 版本 2 的旧版本后，旧程序下一次写入设置就会破坏当前状态。旧格式只保留 `enabled`、`name_spoiler` 和 `verify_mode`，会删除全部群组和全局覆盖值及 revision、`registration_revision`、owner 身份和认领信息、已注册群组、enrollment nonce 及待注册记录。再次升级时，程序会把该结果视为版本 0，只能恢复这三个旧设置。旧版本还会读取迁移后不再更新的 `antispam.json`，静默恢复迁移前的 antispam 开关和频道白名单。
+回滚到只支持 schema 版本 2 的版本时，旧程序会保留 schema 版本 3 的 `settings.json` 并停用设置写入，因为文件版本高于其支持范围。更早且没有新版本保护的程序可能在下一次写入时破坏当前状态。回滚前先停止服务并备份整个 `STATE_DIRECTORY`；至少应复制 `settings.json` 和 `antispam.json`。
 
-回滚前先停止服务并备份整个 `STATE_DIRECTORY`；至少应复制当前的 `settings.json` 和 `antispam.json`。再次启动当前版本前，先还原 schema 版本 2 的 `settings.json`。当前版本不会持续把 antispam 开关和频道白名单镜像到 `antispam.json`；该迁移按设计只从 `antispam.json` 写入 `settings.json`。
+再次启动当前版本前，先还原 schema 版本 3 的 `settings.json`。当前版本不会持续把 antispam 开关和频道白名单镜像到 `antispam.json`；该迁移按设计只从 `antispam.json` 写入 `settings.json`。
 
 ## `pending.json`
 
 **实现位置：**`internal/verify` 包；`internal/verify/state.go` 中的 `(*Service).save` 和 `(*Service).load`；`internal/verify/service.go` 中的 `(*Service).Shutdown`。
 
-该文件是有效待验证记录数组，包含群组和用户 ID、群内提示消息 ID、模式和语言、备用答案、已发送提示和一次性标记、已用次数、题目和选项及正确索引、nonce、申请者姓名和截止时间。优雅停止先停止计时器，再执行最终保存。重启时恢复计时器，同时应用故障恢复、群组有效性、容量和题目校验。
+该文件是有效待验证记录数组，包含群组和用户 ID、群内与私聊验证消息 ID、送达确认状态、模式和语言、备用答案、已发送提示和一次性标记、已用次数、题目和选项及正确索引、nonce、申请者姓名和截止时间。优雅停止先停止计时器，再执行最终保存。重启时恢复计时器，同时应用故障恢复、群组有效性、容量和题目校验。
 
 文件缺失或损坏后成功备份时，不恢复待验证记录，后续写入仍启用。文件不可读或损坏文件备份失败时，不恢复记录，并清空服务中的路径，避免本进程覆盖可恢复原件。后续保存失败时，存储层记录日志，当前申请仍在内存中处理，但重启后可能丢失。
 
-没有模式字段的旧记录按选择题处理。截止时间调整和重新通知见[故障与恢复](outage-recovery.md)。
+没有模式字段的旧记录按选择题处理。缺少私聊消息 ID 表示没有可删除的私聊验证消息。截止时间调整和重新通知见[故障与恢复](outage-recovery.md)。
 
 ## `verifyfail.json`、`agents.json` 和 `heartbeat.json`
 
@@ -76,7 +76,7 @@ Schema 版本 2 保存稀疏的群组和全局覆盖值、群组和全局 revisi
 
 **实现位置：**`internal/store` 包；`internal/store/settings.go` 中的 `loadLegacyAntispam` 和 `(*Settings).migrateLegacyAntispam`；`internal/store/json.go` 中的 `Load` 和 `ReclaimTemps`。
 
-`antispam.json` 只用于迁移。`settings.json` 不存在或为版本 0、1 时，其全局启用值和白名单会复制到每个群组的 `settings.json` 覆盖值。生产代码不会写 `antispam.json`，版本 2 设置会跳过读取。迁移适用时，旧文件损坏或不可读会停用设置写入。迁移源文件不会删除。
+`antispam.json` 只用于迁移。`settings.json` 不存在或为版本 0、1、2 时，其全局启用值和白名单会复制到每个群组的 `settings.json` 覆盖值。生产代码不会写 `antispam.json`，当前 schema 版本 3 设置会跳过读取。迁移适用时，旧文件损坏或不可读会停用设置写入。迁移源文件不会删除。
 
 备份重命名成功时，`<name>.corrupt` 保存解码失败的输入，程序不会自动读取。重命名失败时，原文件留在 `<name>`，本进程停用该路径的写入。`.<name>.tmp-*` 是中断的原子写入，匹配存储模式时会在启动阶段清理。
 

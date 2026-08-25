@@ -52,8 +52,8 @@ func TestStateWriteFailuresKeepRuntimeStateButLoseRestartRecovery(t *testing.T) 
 			t.Fatal("test group is missing")
 		}
 		overrides := group.Overrides()
-		dmFirst := false
-		overrides.DMFirst = &dmFirst
+		deliveryMode := config.DeliveryGroup
+		overrides.DeliveryMode = &deliveryMode
 		if _, err := v.settings.CommitGroup(gid, group.Revision(), overrides); err != nil {
 			t.Fatal(err)
 		}

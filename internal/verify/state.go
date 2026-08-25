@@ -449,8 +449,10 @@ func (v *Service) save() {
 		defer v.mu.Unlock()
 		recs := make([]pendingRec, 0, len(v.pend))
 		for k, p := range v.pend {
-			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-				ChallengeDelivered: p.challengeDelivered && p.groupMsgID == 0, Mode: p.mode, Lang: p.persistedLang(),
+			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid,
+				GroupMsgID: p.groupMsgID, PrivateMsgID: p.privateMsgID,
+				ChallengeDelivered: p.challengeDelivered && p.groupMsgID == 0 && p.privateMsgID == 0,
+				Mode:               p.mode, Lang: p.persistedLang(),
 				FbAnswers: p.fbAnswers, FallbackPending: p.fallbackPending, Prompted: p.prompted,
 				Tries: p.tries, Hinted: p.hinted, SampleBounced: p.sampleBounced,
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
@@ -498,12 +500,16 @@ func (v *Service) load(bot verifyBot) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
 		}
-		p := &pending{groupMsgID: r.GroupMsgID, challengeDelivered: r.ChallengeDelivered || r.GroupMsgID != 0,
-			mode: mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
+		p := &pending{
+			groupMsgID: r.GroupMsgID, privateMsgID: r.PrivateMsgID,
+			challengeDelivered: r.ChallengeDelivered || r.GroupMsgID != 0 || r.PrivateMsgID != 0,
+			mode:               mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
 			fbAnswers: r.FbAnswers, fallbackPending: r.FallbackPending, prompted: r.Prompted,
 			tries: r.Tries, hinted: r.Hinted, sampleBounced: r.SampleBounced,
-			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
-			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
+			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
+			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
+			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
+		}
 		delay := time.Until(p.deadline)
 		reason := challengeExpiryReason(p.challengeDelivered && !p.fallbackPending)
 		switch {

@@ -7,6 +7,7 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"log"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func TestOfflineExpiryDoesNotLogPerPending(t *testing.T) {
 func TestOnExpiryOnlineDeclines(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240, VerifyMaxFails: 3}) // seeded online, no probe => reachable
 	key := pkey{-100, 5}
-	v.pend[key] = &pending{nonce: "n", deadline: time.Now(), groupMsgID: 42}
+	v.pend[key] = &pending{nonce: "n", deadline: time.Now(), groupMsgID: 42, privateMsgID: 43}
 	fb := &fakeVerifyBot{}
 	v.onExpiry(context.Background(), fb, -100, 5, "n", 0, "timeout")
 	if fb.declines != 1 {
@@ -95,6 +96,10 @@ func TestOnExpiryOnlineDeclines(t *testing.T) {
 	}
 	if r := v.vfail[key]; r == nil || r.count != 1 {
 		t.Error("online timeout should record one strike")
+	}
+	if fb.deletes != 2 || !reflect.DeepEqual(fb.deletedChats, []int64{-100, 5}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{42, 43}) {
+		t.Errorf("online timeout cleanup = chats %v messages %v, want both challenge messages", fb.deletedChats, fb.deletedMessageIDs)
 	}
 }
 
@@ -204,12 +209,15 @@ func TestExpiryDeferThenOnlineStrikes(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240, VerifyMaxFails: 3})
 	setOffline(v)
 	key := pkey{-100, 5}
-	v.pend[key] = &pending{nonce: "n", deadline: time.Now().Add(-time.Second)}
+	v.pend[key] = &pending{nonce: "n", deadline: time.Now().Add(-time.Second), groupMsgID: 44, privateMsgID: 45}
 	fb := &fakeVerifyBot{}
 	v.onExpiry(context.Background(), fb, -100, 5, "n", 0, "timeout") // offline -> defer
 	cur, ok := v.pend[key]
 	if !ok || cur.done || fb.declines != 0 {
 		t.Fatal("offline expiry should keep the pending and not decline")
+	}
+	if fb.deletes != 0 {
+		t.Fatalf("offline expiry deleted %d challenge messages before settlement", fb.deletes)
 	}
 	deferredEpoch := cur.epoch
 	if cur.timer != nil {
@@ -225,6 +233,10 @@ func TestExpiryDeferThenOnlineStrikes(t *testing.T) {
 	}
 	if r := v.vfail[key]; r == nil || r.count != 1 {
 		t.Error("the deferred timeout should still strike once online — no strike laundering")
+	}
+	if fb.deletes != 2 || !reflect.DeepEqual(fb.deletedChats, []int64{-100, 5}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{44, 45}) {
+		t.Errorf("deferred timeout cleanup = chats %v messages %v, want both challenge messages", fb.deletedChats, fb.deletedMessageIDs)
 	}
 }
 
@@ -472,7 +484,7 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	seed.statePath = dir + "/pending.json"
 	seed.hbPath = dir + "/heartbeat.json"
 	seed.pend[pkey{-100, 7}] = &pending{nonce: "x", name: "Carol", correctIdx: 0,
-		qOpts: []string{"a", "b"}, deadline: time.Now().Add(30 * time.Second), groupMsgID: 5}
+		qOpts: []string{"a", "b"}, deadline: time.Now().Add(30 * time.Second), groupMsgID: 5, privateMsgID: 6}
 	seed.save()
 	seed.mu.Lock()
 	seed.lastOnline = time.Now().Add(-10 * time.Minute) // a long outage
@@ -490,6 +502,9 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	if !ok {
 		t.Fatal("the pending should be restored")
 	}
+	if p.privateMsgID != 6 {
+		t.Fatalf("restored private challenge message = %d, want 6", p.privateMsgID)
+	}
 	if !p.deadline.After(time.Now().Add(v.timeout(-100) - 10*time.Second)) {
 		t.Errorf("a long outage should restore a fresh full window, not the ~30s remaining (deadline=%v)", p.deadline)
 	}
@@ -499,6 +514,14 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	if !v.approve(context.Background(), fb, -100, 7) {
+		t.Fatal("restored pending did not settle")
+	}
+	if !reflect.DeepEqual(fb.deletedChats, []int64{-100, -100, 7}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{5, 1, 6}) {
+		t.Fatalf("outage recovery cleanup = chats %v messages %v, want old group, replacement group, and private challenges",
+			fb.deletedChats, fb.deletedMessageIDs)
+	}
 }
 
 func TestLoadQuickRestartKeepsWindow(t *testing.T) {
@@ -507,7 +530,7 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	seed.statePath = dir + "/pending.json"
 	seed.hbPath = dir + "/heartbeat.json"
 	seed.pend[pkey{-100, 8}] = &pending{nonce: "y", correctIdx: 0, qOpts: []string{"a", "b"},
-		deadline: time.Now().Add(120 * time.Second), groupMsgID: 6}
+		deadline: time.Now().Add(120 * time.Second), groupMsgID: 6, privateMsgID: 7}
 	seed.save()
 	seed.saveHeartbeat() // heartbeat = now (quick restart)
 
@@ -521,6 +544,9 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	if !ok {
 		t.Fatal("the pending should be restored")
 	}
+	if p.privateMsgID != 7 {
+		t.Fatalf("restored private challenge message = %d, want 7", p.privateMsgID)
+	}
 	if p.deadline.After(time.Now().Add(150 * time.Second)) {
 		t.Errorf("a quick restart should keep the remaining ~120s window, not reset to a full 240s (deadline=%v)", p.deadline)
 	}
@@ -529,6 +555,14 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	}
 	if p.timer != nil {
 		p.timer.Stop()
+	}
+	if !v.approve(context.Background(), fb, -100, 8) {
+		t.Fatal("restored pending did not settle")
+	}
+	if !reflect.DeepEqual(fb.deletedChats, []int64{-100, 8}) ||
+		!reflect.DeepEqual(fb.deletedMessageIDs, []int{6, 7}) {
+		t.Fatalf("quick-restart cleanup = chats %v messages %v, want restored group and private challenges",
+			fb.deletedChats, fb.deletedMessageIDs)
 	}
 }
 

@@ -10,21 +10,29 @@ This document follows one Telegram join request from receipt to settlement. It d
 
 An untrusted applicant with an active cooldown is declined immediately, receives a localized DM with the current remaining seconds, and receives no new challenge. If that decline fails, the bot alerts the admin-log chat or affected group and tells the applicant that the request may still be pending. Queue limits are 2,000 live requests process-wide and 500 per group. At either limit, the request is left for manual review and the operator alert is throttled to one per ten minutes.
 
-A new request for the same group and user replaces the old pending request, deletes the old group challenge when possible, and receives a fresh deadline. It does not restore used kernel attempts or one-shot hints. A request arriving while an approval or ban is in flight is deferred without replacing that terminal action.
+A new request for the same group and user replaces the old pending request, deletes the old group and private challenges when possible, and receives a fresh deadline. It does not restore used kernel attempts or one-shot hints. A request arriving while an approval or ban is in flight is deferred without replacing that terminal action.
 
-## Private-first challenge and group fallback
+## Challenge delivery modes
 
-**Implementation:** package `internal/verify`, `(*Service).tryProactiveDMChallenge`, `(*Service).postGroupChallenge`, `(*Service).SendDMChallenge`, and `(*Service).sendQuizzes` in `internal/verify/state.go` and `internal/verify/service.go`; package `internal/panel`, `(*Panel).OnStart` in `internal/panel/panel.go`.
+**Implementation:** package `internal/verify`, `(*Service).attemptPrivateChallenge`, `(*Service).postGroupChallenge`, `(*Service).SendDMChallenge`, and `(*Service).sendQuizzes` in `internal/verify/state.go` and `internal/verify/service.go`; package `internal/panel`, `(*Panel).OnStart` in `internal/panel/panel.go`.
 
-The bot first reserves a pending record. The per-group `dm_first` setting defaults to on, so the bot then tries to deliver that group's required-channel prompt or challenge in DM. Telegram permits this private send only when the applicant has started the bot at least once. A confirmed DM suppresses the group challenge and starts a fresh full deadline.
+The bot first reserves a pending record, then applies the group's `delivery_mode`:
 
-Telegram's specific 403 response for a bot that cannot initiate a conversation causes an immediate, silent group fallback. A 403 because the applicant blocked the bot also falls back, but is logged separately. A 429 is a confirmed rejection: the handler waits for Telegram's `retry_after` and retries the DM once when that delay fits inside the verification timeout. Another definite 4xx rejection falls back and is logged. A transport, cancellation, 5xx, or other ambiguous failure does not post a group copy because the private request may have reached Telegram; its pending expiry remains a strike-free delivery failure.
+- `group` posts only the group challenge.
+- `dm` attempts the private required-channel prompt or challenge. A definite Telegram rejection falls back to the group challenge.
+- `both`, the default, posts the group challenge first and then attempts the private prompt or challenge. The request counts as delivered when either send succeeds.
 
-The fallback message contains the applicant, a fresh full deadline, an optional required-channel hint, a `t.me/<bot>?start=verify_<groupID>` button when the bot username is available, and administrator approve/ban buttons. `Panel.OnStart` passes the encoded group to `SendDMChallenge`, which opens only that pending request. If the named request no longer exists, the same localized no-pending result used for an expired request is sent. Repeated starts for the same group within 15 seconds do not resend its live prompt.
+Telegram permits a proactive private send only when the applicant has started the bot at least once. A 403 because the bot cannot initiate a conversation or because the applicant blocked it is a definite rejection. A 429 is also definite: the handler waits for Telegram's `retry_after` and retries once when that delay fits inside the verification timeout. Other definite 4xx responses are logged as rejections.
+
+A transport, cancellation, 5xx, or other ambiguous failure may follow an accepted send. In `dm`, that uncertainty suppresses the group fallback. In `both`, the existing group message remains and no second group message is posted.
+
+The group challenge contains the applicant, a fresh full deadline, an optional required-channel hint, a `t.me/<bot>?start=verify_<groupID>` button when the bot username is available, and administrator approve/ban buttons. `Panel.OnStart` passes the encoded group to `SendDMChallenge`, which opens only that pending request. If the named request no longer exists, the same localized no-pending result used for an expired request is sent. Repeated starts for the same group within 15 seconds do not resend its live prompt.
 
 Bare `?start=verify` links already in flight retain the old behavior: one live pending is selected from the Go map for the initial channel gate, then `sendQuizzes` sends every live challenge. New group-scoped links do not depend on map order and cannot be diverted by another group's required-channel gate.
 
-A failed group fallback produces message ID zero, alerts administrators, and keeps the pending request. Its eventual expiry is classified as a bot-caused delivery failure: a successful decline records no verification strike, and the applicant receives a localized timeout result without a cooldown. The applicant can still open the bot manually and run `/start`. Kernel answers are not graded until a kernel prompt was successfully delivered.
+The pending record persists the current group and private message IDs. A missing private ID in an older record means there is no private message to delete. Settlement and timeout delete both messages independently; outage re-notification replaces only the group message and retains the private ID for later cleanup.
+
+If neither delivery can be confirmed, expiry is classified as a bot-caused delivery failure: a successful decline records no verification strike, and the applicant receives a localized timeout result without a cooldown. A confirmed delivery starts the normal full answer window.
 
 ## Required-channel gate
 
@@ -56,11 +64,11 @@ Every kernel and fallback prompt contains a localized AI tripwire with a nonce-d
 
 **Implementation:** package `internal/verify`, `(*Service).executeApprove`, `(*Service).executeBan`, and `(*Service).finishDecline` in `internal/verify/service.go`; `(*Service).recordVerifyFail` and `(*Service).verifyCooldownRemaining` in `internal/verify/state.go`.
 
-A successful Bot API approval removes the pending record, clears prior strikes for that group and user, deletes the group challenge best-effort, and increments the in-memory daily approval count. If approval fails, the bot alerts the admin-log chat or affected group, reopens the same pending request, and grants at least a 60-second strike-free retry window.
+A successful Bot API approval removes the pending record, clears prior strikes for that group and user, deletes both recorded challenges best-effort, and increments the in-memory daily approval count. If approval fails, the bot alerts the admin-log chat or affected group, reopens the same pending request, and grants at least a 60-second strike-free retry window.
 
-An administrator decline-and-ban callback keeps the same pending record and group challenge until Telegram confirms both operations. It bans first, so a rejected ban does not discard the join request before the action can be retried. Either failure posts a localized result to the group, alerts the admin-log chat or affected group, and grants a strike-free retry window.
+An administrator decline-and-ban callback keeps the same pending record and both recorded challenges until Telegram confirms both operations. It bans first, so a rejected ban does not discard the join request before the action can be retried. Either failure posts a localized result to the group, alerts the admin-log chat or affected group, and grants a strike-free retry window.
 
-Wrong quiz answers, the final failed kernel/fallback reply, the AI tripwire, and ordinary online timeouts first ask Telegram to decline the join request. A confirmed decline deletes the challenge best-effort, records the failure and decline decision, and applies the automatic-ban threshold. A failed decline records no strike, keeps the challenge, reopens and re-arms the same pending request with at least 60 seconds, alerts the admin-log chat or affected group, and tells the applicant that the request may still be pending.
+Wrong quiz answers, the final failed kernel/fallback reply, the AI tripwire, and ordinary online timeouts first ask Telegram to decline the join request. A confirmed decline deletes both challenges best-effort, records the failure and decline decision, and applies the automatic-ban threshold. A failed decline records no strike, keeps both challenges, reopens and re-arms the same pending request with at least 60 seconds, alerts the admin-log chat or affected group, and tells the applicant that the request may still be pending.
 
 Failures from the same group and user accumulate only while consecutive failures remain within a six-hour rolling window. `verify_retry_seconds` blocks early re-application after any recorded failure; a nonpositive effective value disables the cooldown. An early re-application receives the current remaining seconds. An ordinary timeout reports whether the applicant may reapply immediately, must wait for the cooldown, or received an automatic ban. At `verify_max_fails`, a positive threshold triggers the effective verification ban. A successful automatic ban clears the strike record. A failed automatic ban is alerted and leaves the threshold strikes in place, so a later failure attempts the ban again. A negative threshold disables automatic bans. Ban duration follows the group’s effective ban setting; zero means permanent.
 

@@ -30,13 +30,17 @@
       "verification_mode": "[Administrator] Change verification mode",
       "auto_delete": "[Administrator] Toggle automatic result deletion",
       "ban_time": "[Administrator] Set ban duration"
+    },
+    "owner": {
+      "enroll": "Create a one-use group-enrollment link",
+      "unregister": "Unregister a runtime group"
     }
   },
   "lifecycle": {
     "unauthorized_chat": "🚪 Automatically left unauthorized chat: %[1]s (ID: %[2]d, type: %[3]s)."
   },
   "direct_message": {
-    "auto_reply": "👋 This bot handles join verification for the Gentoo Chinese community and provides Gentoo/Linux lookup commands.\n\n• To join: submit a join request in the group. If you have started this bot before, it sends the verification challenge here immediately. Otherwise, select “✅ Start verification” in the bot's group message.\n• Lookup commands (/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs) also work in direct messages. Direct messages are limited to %[1]d queries per minute; group chats are not rate-limited.\n• Review and administration commands only work in the group."
+    "auto_reply": "👋 This bot handles join verification for the Gentoo Chinese community and provides Gentoo/Linux lookup commands.\n\n• To join: submit a join request in the group. Answer a challenge sent here, or select “✅ Start verification” in any group message the bot posts.\n• Lookup commands (/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs) also work in direct messages. Direct messages are limited to %[1]d queries per minute; group chats are not rate-limited.\n• Review and administration commands only work in the group."
   },
   "registration": {
     "owner_claimed": "Deployer ownership is now bound to this account. You can add groups.",

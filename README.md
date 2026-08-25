@@ -12,7 +12,9 @@ Releases are static Linux binaries for `amd64` and `arm64`. With Telegram's host
 
 ## Verification flow
 
-Each join request is handled independently for its group. By default, the bot first tries to send the challenge in a private message. If Telegram definitively rejects private delivery, the bot posts a group prompt whose `verify_<groupID>` deep link opens only the pending request for that group. A transport error can occur after Telegram has accepted a message, so the bot suppresses the group copy when delivery is uncertain. Administrators can disable DM-first delivery per group in `/settings`.
+Each join request is handled independently for its group. The per-group `delivery_mode` defaults to `both`: the bot posts the group challenge first, with a `verify_<groupID>` deep link that opens only that pending request, and then attempts the private challenge. Either confirmed send starts the full answer window.
+
+`group` sends only the group challenge. `dm` attempts private delivery and posts the group challenge only after a definite Telegram rejection. A transport or 5xx error may follow an accepted private send, so `dm` suppresses fallback when delivery is uncertain; `both` never posts a second group copy.
 
 | Mode | Applicant action | Behavior |
 | --- | --- | --- |
@@ -73,7 +75,7 @@ On first start, the service writes a private, one-use owner claim link to the jo
 sudo journalctl -u gentoo-zh-verify-bot
 ```
 
-After claiming ownership, add the bot to a group and promote it to administrator. The bot registers an owner-authorized group and stores the registration in `settings.json`. Run `/settings` in the group to review its verification mode, question banks, and required channel.
+After claiming ownership, the private command menu is refreshed immediately and shows the member commands plus `/enroll` and `/unregister`. Add the bot to a group and promote it to administrator. The bot registers an owner-authorized group and stores the registration in `settings.json`. Run `/settings` in the group to review its verification mode, delivery mode, question banks, and required channel.
 
 For delegated registration, the owner sends `/enroll` in a private chat and gives the resulting one-use group link to an administrator of that group. The link remains valid for 10 minutes. The bot automatically leaves unknown groups that have neither owner authorization nor a valid enrollment link.
 
@@ -93,7 +95,7 @@ Administrators normally need only these application environment variables:
 
 A group administrator runs `/settings` in the group and then uses the private settings panel to change:
 
-- verification enablement, DM-first delivery, `kernel`, `quiz`, or `mixed` mode, applicant-name hiding, ban duration, lookup cleanup policy, and `lang`;
+- verification enablement, `group`, `dm`, or `both` challenge delivery, `kernel`, `quiz`, or `mixed` mode, applicant-name hiding, ban duration, lookup cleanup policy, and `lang`;
 - sender-channel whitelist, trusted groups, and known chats;
 - verification timeout, maximum failures, and retry cooldown;
 - the `questions` quiz bank, a custom `fallback_questions` short-answer bank, the built-in short questions, and the required channel and invite link.
@@ -124,7 +126,7 @@ The supplied unit uses `StateDirectory=gentoo-zh-verify-bot` to create `/var/lib
 | File | State preserved across restarts |
 | --- | --- |
 | `settings.json` | Owner identity, group registrations, control group, one-use enrollment capabilities, and per-group and bot-wide runtime overrides, including `/bc` state and sender-channel whitelists. |
-| `pending.json` | In-progress verification, mode, language, question, attempts, nonce, and deadline. |
+| `pending.json` | In-progress verification, delivery status, group/private challenge message IDs, mode, language, question, attempts, nonce, and deadline. |
 | `verifyfail.json`, `agents.json`, `heartbeat.json` | Verification failures and cooldowns, the cumulative LLM-tripwire tally, and the last successful Telegram contact. |
 | `warns.json` | Per-group, per-user `/warn` counts. |
 | `feed-<chat_id>.json` | Feed cursors and tracked Bugzilla messages. |

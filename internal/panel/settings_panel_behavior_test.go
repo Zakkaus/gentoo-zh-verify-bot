@@ -406,36 +406,36 @@ func TestVerificationStartPayloadSelectsOnePendingGroupAndBarePayloadStillFansOu
 	})
 }
 
-func TestPanelDMFirstTogglePersistsAndRejectsStaleRevision(t *testing.T) {
+func TestPanelDeliveryModePersistsAndRejectsStaleRevision(t *testing.T) {
 	path := t.TempDir() + "/settings.json"
 	panel, settings, caller, bot := newSettingsPanelTest(t, path)
 	session := addPanelSession(t, panel, settings, panelTestGroupA, "rt")
 
-	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "df", "_")
-	readOverride := func() *bool {
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "df", "d")
+	readOverride := func() *string {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var state struct {
 			Groups map[string]struct {
-				DMFirst *bool `json:"dm_first"`
+				DeliveryMode *string `json:"delivery_mode"`
 			} `json:"groups"`
 		}
 		if err := json.Unmarshal(data, &state); err != nil {
 			t.Fatal(err)
 		}
-		return state.Groups[strconv.FormatInt(panelTestGroupA, 10)].DMFirst
+		return state.Groups[strconv.FormatInt(panelTestGroupA, 10)].DeliveryMode
 	}
-	if value := readOverride(); value == nil || *value {
-		t.Fatalf("DM-first override after panel toggle = %v, want persisted false", value)
+	if value := readOverride(); value == nil || *value != config.DeliveryDM {
+		t.Fatalf("delivery-mode override after panel selection = %v, want persisted dm", value)
 	}
 	setting, ok := settings.Group(panelTestGroupA)
 	if !ok {
-		t.Fatal("panel group disappeared after DM-first toggle")
+		t.Fatal("panel group disappeared after delivery-mode selection")
 	}
-	if got := setting.DMFirst(); got.Value || got.Source != store.SourceRuntime {
-		t.Fatalf("effective DM-first setting after panel toggle = %+v", got)
+	if got := setting.DeliveryMode(); got.Value != config.DeliveryDM || got.Source != store.SourceRuntime {
+		t.Fatalf("effective delivery mode after panel selection = %+v", got)
 	}
 
 	group, _ := settings.Group(panelTestGroupA)
@@ -445,12 +445,12 @@ func TestPanelDMFirstTogglePersistsAndRejectsStaleRevision(t *testing.T) {
 	if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), next); err != nil {
 		t.Fatal(err)
 	}
-	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "df", "_")
-	if value := readOverride(); value == nil || *value {
-		t.Fatalf("stale callback changed persisted DM-first override to %v", value)
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "df", "g")
+	if value := readOverride(); value == nil || *value != config.DeliveryDM {
+		t.Fatalf("stale callback changed persisted delivery mode to %v", value)
 	}
 	if caller.lastEditText != i18n.Messages.Panel.Settings.Error.ConcurrentChange.For(i18n.LangEN) {
-		t.Fatalf("stale DM-first callback message = %q, want catalogue conflict text %q",
+		t.Fatalf("stale delivery-mode callback message = %q, want catalogue conflict text %q",
 			caller.lastEditText, i18n.Messages.Panel.Settings.Error.ConcurrentChange.For(i18n.LangEN))
 	}
 }
@@ -489,6 +489,21 @@ func TestPanelCallbackCodecWorstCase(t *testing.T) {
 	} {
 		if _, err := parseCallback(malformed); err == nil {
 			t.Errorf("parseCallback(%q) succeeded", malformed)
+		}
+	}
+}
+
+func TestPanelCallbackCodecAcceptsDeliveryModes(t *testing.T) {
+	for _, value := range []string{"g", "d", "b"} {
+		encoded, err := encodeCallback(callbackData{
+			token: "0123456789abcdef", screen: "rt", group: math.MinInt64, field: "df", value: value,
+		})
+		if err != nil {
+			t.Errorf("encode delivery mode %q: %v", value, err)
+			continue
+		}
+		if len(encoded) > telegramCallbackDataLimit {
+			t.Errorf("delivery callback is %d bytes, limit %d", len(encoded), telegramCallbackDataLimit)
 		}
 	}
 }

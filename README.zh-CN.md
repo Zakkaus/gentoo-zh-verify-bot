@@ -12,7 +12,9 @@
 
 ## 验证流程
 
-每项入群申请都按群组独立处理。机器人默认先尝试通过私聊发送验证题；Telegram 明确拒绝私聊投递时，机器人改为在群内发送提示，其中的 `verify_<groupID>` deep link 只打开该群组的待验证申请。因为传输错误可能发生在 Telegram 已接收消息之后，所以投递结果不确定时不会再发送群内副本。管理员可以在 `/settings` 中按群关闭优先私聊。
+每项入群申请都按群组独立处理。按群设置 `delivery_mode` 默认为 `both`：机器人先发送群内验证消息，其中的 `verify_<groupID>` deep link 只打开该群组的待验证申请，再尝试发送私聊验证题。任一消息确认送达后，程序开始完整答题时限。
+
+`group` 只发送群内验证消息。`dm` 先尝试私聊，仅在 Telegram 明确拒绝时发送群内验证消息。传输错误或 5xx 可能发生在 Telegram 已接收私聊消息之后，因此 `dm` 在投递状态不确定时不会回退；`both` 不会发送第二条群内消息。
 
 | 模式 | 申请人操作 | 行为 |
 | --- | --- | --- |
@@ -73,7 +75,7 @@ sudo systemctl enable --now gentoo-zh-verify-bot
 sudo journalctl -u gentoo-zh-verify-bot
 ```
 
-Owner 打开链接后，将机器人添加到群组并提升为管理员。机器人会登记 owner 授权的群组，并将登记状态写入 `settings.json`。随后在群组中执行 `/settings`，检查验证方式、题库和必需频道。
+Owner 认领成功后，程序立即刷新私聊命令菜单，其中包含成员命令以及 `/enroll` 和 `/unregister`。随后将机器人添加到群组并提升为管理员。机器人会登记 owner 授权的群组，并将登记状态写入 `settings.json`。在群组中执行 `/settings`，检查验证方式、验证题发送方式、题库和必需频道。
 
 需要委托登记时，owner 在私聊中执行 `/enroll`，再将生成的一次性群组链接交给该群组的管理员。链接有效期为 10 分钟。没有 owner 或有效登记链接授权的未知群组会被机器人自动退出。
 
@@ -93,7 +95,7 @@ Owner 可以在私聊中执行 `/unregister <group-id>`。该命令只接受运�
 
 群组管理员从群内执行 `/settings`，再通过私聊面板修改以下有效设置：
 
-- 验证开关、优先私聊、`kernel`、`quiz` 或 `mixed` 模式、申请人姓名遮盖、封禁时长、查询结果清理策略和 `lang`；
+- 验证开关、`group`、`dm` 或 `both` 验证题发送方式、`kernel`、`quiz` 或 `mixed` 模式、申请人姓名遮盖、封禁时长、查询结果清理策略和 `lang`；
 - 频道身份白名单、可信群组和已知聊天；
 - 验证时限、最多失败次数和重试冷却时间；
 - `questions` 选择题库、自定义 `fallback_questions` 简答题库、内置简答题，以及必需频道和加入链接。
@@ -124,7 +126,7 @@ Feed 目标、overlay、新闻源、`stats_timezone` 和 `user_agent` 只能在 
 | 文件 | 跨重启保留的内容 |
 | --- | --- |
 | `settings.json` | Owner、群组登记、控制群组、一次性登记凭据，以及按群和机器人级运行时覆盖值，包括 `/bc` 状态和频道白名单。 |
-| `pending.json` | 进行中的验证、模式、语言、题目、尝试次数、nonce 和截止时间。 |
+| `pending.json` | 进行中的验证、送达状态、群内与私聊验证消息 ID、模式、语言、题目、尝试次数、nonce 和截止时间。 |
 | `verifyfail.json`、`agents.json`、`heartbeat.json` | 验证失败与冷却、LLM 代答陷阱累计统计，以及最近一次成功连接 Telegram 的时间。 |
 | `warns.json` | 按群和用户保存的 `/warn` 计数。 |
 | `feed-<chat_id>.json` | Feed 游标和已跟踪 Bugzilla 消息。 |

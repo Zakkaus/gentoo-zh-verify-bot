@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	botapp "github.com/Zakkaus/gentoo-zh-verify-bot/internal/bot"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
@@ -512,6 +513,43 @@ func TestStartupConfigRemainsRegistrationBaseline(t *testing.T) {
 	}
 	if cfg.IsGroup(groupID) {
 		t.Fatal("runtime group leaked into the immutable config baseline")
+	}
+}
+
+func TestOwnerClaimRefreshesCommandMenus(t *testing.T) {
+	cfg, settings := registrationFixture(t)
+	now := time.Unix(2_000_000_000, 0)
+	caller := &registrationCaller{members: make(map[[2]int64]telego.ChatMember)}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(
+		context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil, nil,
+	)
+	application := botapp.New(cfg, settings, nil, nil, nil, nil, nil)
+	service.onOwnerClaimed = func(ctx context.Context) {
+		application.SetupCommands(ctx, bot)
+	}
+	service.now = func() time.Time { return now }
+	if err := service.EnsureOwnerClaim(); err != nil {
+		t.Fatal(err)
+	}
+	claim := settings.Registrations().OwnerClaimNonce
+
+	runRegistrationUpdate(t, bot, service, telego.Update{Message: &telego.Message{
+		Chat: telego.Chat{ID: testOwner, Type: telego.ChatTypePrivate},
+		From: &telego.User{ID: testOwner, LanguageCode: "en"},
+		Text: "/start owner_" + claim,
+	}})
+
+	caller.mu.Lock()
+	scopeIDs := append([]int64(nil), caller.commandScopeIDs...)
+	caller.mu.Unlock()
+	if len(scopeIDs) != 3 {
+		t.Fatalf("owner command-menu refresh scopes = %v, want three owner chat scopes", scopeIDs)
+	}
+	for _, chatID := range scopeIDs {
+		if chatID != testOwner {
+			t.Fatalf("owner command-menu refresh targeted chat %d, want %d", chatID, testOwner)
+		}
 	}
 }
 

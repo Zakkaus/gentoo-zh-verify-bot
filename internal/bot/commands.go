@@ -30,6 +30,14 @@ func memberCommands(l i18n.Lang) []telego.BotCommand {
 	}
 }
 
+func ownerCommands(l i18n.Lang) []telego.BotCommand {
+	menu := i18n.Messages.Bot.Menu.Owner
+	return append([]telego.BotCommand{
+		{Command: "enroll", Description: menu.Enroll.For(l)},
+		{Command: "unregister", Description: menu.Unregister.For(l)},
+	}, memberCommands(l)...)
+}
+
 func adminCommands(l i18n.Lang, warnLimit int) []telego.BotCommand {
 	menu := i18n.Messages.Bot.Menu.Admin
 	return append([]telego.BotCommand{
@@ -51,7 +59,7 @@ func adminCommands(l i18n.Lang, warnLimit int) []telego.BotCommand {
 	}, memberCommands(l)...)
 }
 
-// SetupCommands registers the member and administrator Telegram command menus.
+// SetupCommands registers member, administrator, and claimed-owner Telegram command menus.
 func (s *Service) SetupCommands(ctx context.Context, bot *telego.Bot) {
 	type commandMenu struct {
 		name         string
@@ -60,10 +68,16 @@ func (s *Service) SetupCommands(ctx context.Context, bot *telego.Bot) {
 		languageCode string
 	}
 	groupIDs := []int64(nil)
+	ownerID := int64(0)
 	if s.settings != nil {
 		groupIDs = s.settings.GroupIDs()
+		ownerID = s.settings.Registrations().OwnerID
 	}
-	menus := make([]commandMenu, 0, 6+2*len(groupIDs))
+	menuCapacity := 6 + 2*len(groupIDs)
+	if ownerID != 0 {
+		menuCapacity += 3
+	}
+	menus := make([]commandMenu, 0, menuCapacity)
 	for _, language := range []struct {
 		name string
 		lang i18n.Lang
@@ -81,6 +95,12 @@ func (s *Service) SetupCommands(ctx context.Context, bot *telego.Bot) {
 			commandMenu{name: "admins/" + language.name, commands: admin,
 				scope: &telego.BotCommandScopeAllChatAdministrators{Type: "all_chat_administrators"}, languageCode: language.code},
 		)
+		if ownerID != 0 {
+			menus = append(menus, commandMenu{
+				name: "owner/" + language.name, commands: ownerCommands(language.lang),
+				scope: &telego.BotCommandScopeChat{Type: "chat", ChatID: tu.ID(ownerID)}, languageCode: language.code,
+			})
+		}
 	}
 	for _, groupID := range groupIDs {
 		if s.groupLanguage(groupID) != i18n.LangZHHant {

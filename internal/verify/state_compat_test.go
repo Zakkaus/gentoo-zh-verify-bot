@@ -33,6 +33,7 @@ type stateCompatPendingWant struct {
 	userID          int64
 	groupID         int64
 	groupMsgID      int
+	privateMsgID    int
 	mode            string
 	lang            string
 	fbAnswers       []string
@@ -72,14 +73,14 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 	pendingV := newTestService(stateCompatConfig())
 	pendingV.statePath = filepath.Join(dir, "pending.json")
 	pendingV.pend[pkey{stateCompatGroupA, 7001}] = &pending{
-		groupMsgID: 501, mode: config.ModeKernel, lang: i18n.LangEN,
+		groupMsgID: 501, privateMsgID: 601, mode: config.ModeKernel, lang: i18n.LangEN,
 		fbAnswers: []string{"gentoozh.org", "gentoozh"}, prompted: true,
 		hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true, tries: 2,
 		qText: "Name the Gentoo Chinese community website", correctIdx: -1,
 		nonce: "kernel-compat-nonce", name: "Kernel Applicant", deadline: stateCompatKernelDeadline,
 	}
 	pendingV.pend[pkey{stateCompatGroupB, 7002}] = &pending{
-		groupMsgID: 502, mode: config.ModeQuiz, lang: i18n.LangZHHant, prompted: true,
+		groupMsgID: 502, privateMsgID: 602, mode: config.ModeQuiz, lang: i18n.LangZHHant, prompted: true,
 		qText: "Select the package manager", qOpts: []string{"apt", "Portage", "dnf"}, correctIdx: 1,
 		nonce: "quiz-compat-nonce", name: "Quiz Applicant", deadline: stateCompatQuizDeadline,
 	}
@@ -111,14 +112,14 @@ func TestStateCompatPending(t *testing.T) {
 	current := stateCompatFixture(t, "pending.json")
 	currentWant := []stateCompatPendingWant{
 		{
-			userID: 7001, groupID: stateCompatGroupA, groupMsgID: 501, mode: "kernel", lang: "en",
+			userID: 7001, groupID: stateCompatGroupA, groupMsgID: 501, privateMsgID: 601, mode: "kernel", lang: "en",
 			fbAnswers: []string{"gentoozh.org", "gentoozh"}, prompted: true,
 			hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true, tries: 2,
 			qText: "Name the Gentoo Chinese community website", correctIdx: -1,
 			nonce: "kernel-compat-nonce", name: "Kernel Applicant", deadline: stateCompatKernelDeadline,
 		},
 		{
-			userID: 7002, groupID: stateCompatGroupB, groupMsgID: 502, mode: "quiz", lang: "zh-hant",
+			userID: 7002, groupID: stateCompatGroupB, groupMsgID: 502, privateMsgID: 602, mode: "quiz", lang: "zh-hant",
 			prompted: true, qText: "Select the package manager",
 			qOpts: []string{"apt", "Portage", "dnf"}, correctIdx: 1,
 			nonce: "quiz-compat-nonce", name: "Quiz Applicant", deadline: stateCompatQuizDeadline,
@@ -309,7 +310,8 @@ func stateCompatAssertPending(t *testing.T, v *Service, want []stateCompatPendin
 			t.Errorf("missing pending group=%d user=%d", expected.groupID, expected.userID)
 			continue
 		}
-		if got.groupMsgID != expected.groupMsgID || got.mode != expected.mode || got.persistedLang() != expected.lang ||
+		if got.groupMsgID != expected.groupMsgID || got.privateMsgID != expected.privateMsgID ||
+			got.mode != expected.mode || got.persistedLang() != expected.lang ||
 			!reflect.DeepEqual(got.fbAnswers, expected.fbAnswers) || got.prompted != expected.prompted ||
 			got.hinted != expected.hinted || got.sampleBounced != expected.sampleBounced ||
 			got.noLinuxReminded != expected.noLinuxReminded || got.osClarified != expected.osClarified ||
