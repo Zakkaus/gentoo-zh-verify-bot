@@ -96,9 +96,34 @@ func (v *Panel) groupLanguage(groupID int64) i18n.Lang {
 	return i18n.FromStored(v.cfg.LangForGroup(groupID))
 }
 
+func (v *Panel) isGroup(groupID int64) bool {
+	if v.settings != nil {
+		return v.settings.IsGroup(groupID)
+	}
+	return v.cfg.IsGroup(groupID)
+}
+
+func (v *Panel) privateQueryPerMin() int {
+	if v.settings != nil {
+		return v.settings.Global().PrivateQueryPerMin().Value
+	}
+	return v.cfg.PrivateQueryPerMin
+}
+
+func (v *Panel) controlGroupAllowed(groupID int64, l i18n.Lang) (bool, string) {
+	controlGroupID := v.cfg.ControlGroupID
+	if v.settings != nil {
+		controlGroupID = v.settings.ControlGroupID()
+	}
+	if controlGroupID == 0 || groupID == controlGroupID {
+		return true, ""
+	}
+	return false, i18n.Messages.Feed.Config.ControlGroupOnly.Render(l, controlGroupID)
+}
+
 func (v *Panel) requesterLanguage(msg *telego.Message) i18n.Lang {
 	fallback := i18n.LangEN
-	if v.settings != nil && v.settings.IsGroup(msg.Chat.ID) {
+	if v.isGroup(msg.Chat.ID) {
 		fallback = v.groupLanguage(msg.Chat.ID)
 	}
 	return i18n.FromRequester(msg.From.LanguageCode, fallback)
@@ -316,7 +341,7 @@ func (v *Panel) OnHelp(ctx *th.Context, update telego.Update) error {
 	bot := ctx.Bot()
 	c := ctx.Context()
 	chatID := msg.Chat.ID
-	inGroup := v.cfg.IsGroup(chatID)
+	inGroup := v.isGroup(chatID)
 	l := v.requesterLanguage(msg)
 	help := memberHelpText(l)
 	if inGroup {
@@ -330,7 +355,7 @@ func (v *Panel) OnHelp(ctx *th.Context, update telego.Update) error {
 		v.notify(c, bot, chatID, help)
 		return nil
 	}
-	help += "\n\n" + i18n.Messages.Panel.Help.DirectMessageNote.Render(l, v.cfg.PrivateQueryPerMin)
+	help += "\n\n" + i18n.Messages.Panel.Help.DirectMessageNote.Render(l, v.privateQueryPerMin())
 	// Plain text keeps angle-bracket placeholders from being parsed as Telegram HTML.
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(chatID), help))
 	return nil
@@ -346,7 +371,7 @@ func (v *Panel) memberCmd(ctx *th.Context, update telego.Update, fn func(groupID
 	c := ctx.Context()
 	groupID := msg.Chat.ID
 	l := v.requesterLanguage(msg)
-	if v.cfg.IsGroup(groupID) {
+	if v.isGroup(groupID) {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(groupID), MessageID: msg.MessageID})
 		v.notify(c, bot, groupID, fn(groupID, l))
 		return nil
@@ -370,7 +395,7 @@ func (v *Panel) globalSettingsAdminCmd(ctx *th.Context, update telego.Update, fn
 
 func (v *Panel) runSettingsAdminCmd(ctx *th.Context, update telego.Update, controlGroupOnly bool, fn func(groupID int64, l i18n.Lang) (string, error)) error {
 	msg := update.Message
-	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
+	if msg == nil || msg.From == nil || !v.isGroup(msg.Chat.ID) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -381,7 +406,7 @@ func (v *Panel) runSettingsAdminCmd(ctx *th.Context, update telego.Update, contr
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(groupID), MessageID: msg.MessageID})
 	}()
 	if controlGroupOnly {
-		if allowed, refusal := v.cfg.ControlGroupAllowed(groupID); !allowed {
+		if allowed, refusal := v.controlGroupAllowed(groupID, l); !allowed {
 			v.notify(c, bot, groupID, refusal)
 			return nil
 		}

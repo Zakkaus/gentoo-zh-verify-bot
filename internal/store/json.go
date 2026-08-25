@@ -22,22 +22,28 @@ func (e *readError) Unwrap() error { return e.cause }
 
 // Load decodes one JSON state file while preserving unreadable or corrupt data for recovery.
 func Load(path string, dst any) error {
+	_, err := loadWithSource(path, dst)
+	return err
+}
+
+func loadWithSource(path string, dst any) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
 		log.Printf("ERROR state load %s: %v; writes disabled until restart", path, err)
-		return &readError{cause: err}
+		return nil, &readError{cause: err}
 	}
 	if err := json.Unmarshal(data, dst); err != nil {
 		log.Printf("state load %s: %v — backing up to %s.corrupt and starting fresh", path, err, path)
 		if rerr := os.Rename(path, path+".corrupt"); rerr != nil {
 			log.Printf("state load: could not back up corrupt %s: %v", path, rerr)
+			return data, &readError{cause: err}
 		}
-		return err
+		return data, err
 	}
-	return nil
+	return data, nil
 }
 
 // Save serializes snapshot creation and its atomic commit with every other state write.
@@ -54,7 +60,13 @@ func Write(path string, value any) error {
 	return writeLocked(path, value)
 }
 
-// ReadFailed reports whether Load failed to read an existing path rather than decode it.
+func writeBytes(path string, data []byte) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return writeBytesLocked(path, data)
+}
+
+// ReadFailed reports whether Load could not safely preserve an existing path for later writes.
 func ReadFailed(err error) bool {
 	_, ok := err.(*readError)
 	return ok
@@ -77,6 +89,11 @@ func writeLocked(path string, value any) error {
 		log.Printf("state: marshal %s: %v", path, err)
 		return err
 	}
+	return writeBytesLocked(path, data)
+}
+
+// The caller holds writeMu; fsync precedes same-directory atomic rename.
+func writeBytesLocked(path string, data []byte) error {
 	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*") // mode 0600
 	if err != nil {
 		log.Printf("state: temp for %s: %v", path, err)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -16,6 +17,7 @@ import (
 
 type dmHandler struct {
 	cfg            *config.Config
+	settings       *store.Settings
 	telegram       *tg.Client
 	mu             sync.Mutex
 	last           map[int64]time.Time
@@ -75,7 +77,11 @@ func (v *dmHandler) privateReply(l i18n.Lang) string {
 	if !v.catalogueReply {
 		return v.cfg.PrivateReply
 	}
-	return i18n.Messages.Bot.DirectMessage.AutoReply.Render(l, v.cfg.PrivateQueryPerMin)
+	rate := v.cfg.PrivateQueryPerMin
+	if v.settings != nil {
+		rate = v.settings.Global().PrivateQueryPerMin().Value
+	}
+	return i18n.Messages.Bot.DirectMessage.AutoReply.Render(l, rate)
 }
 
 func (v *dmHandler) onPrivateDM(ctx *th.Context, update telego.Update) error {

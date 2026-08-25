@@ -2,19 +2,29 @@
 Description=Gentoo zh Telegram join-verification bot
 After=network-online.target
 Wants=network-online.target
+# Retry forever: a 30-second backoff avoids a hot crash loop, while interval 0
+# disables the start-limit latch (the explicit burst is therefore informational).
+StartLimitIntervalSec=0
+StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+# A quiet poll completes within 30 seconds; a stuck call is cut off after 45 seconds
+# and retried after 5 seconds. 120 seconds is over twice that 50-second worst case.
+WatchdogSec=120s
 ExecStart=/usr/bin/env -- /usr/local/bin/gentoo-zh-verify-bot --config /etc/gentoo-zh-verify-bot/config.json
 EnvironmentFile=/etc/gentoo-zh-verify-bot/bot.env
 # persistent state dir (/var/lib/gentoo-zh-verify-bot) so in-progress verifications survive restarts
 StateDirectory=gentoo-zh-verify-bot
 StateDirectoryMode=0700
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=30s
+# main bounds handler and background flush waits at 20 seconds.
+TimeoutStopSec=30s
 
-# resource cap: the bot is light (~50 MiB steady, brief peak while building the /pkg
-# cache); cap it so a runaway can't pressure anything else on the host.
+# 512M is a safety boundary; explicit queue, cache, and handler caps bound join floods.
+# If the cgroup still reaches it, the OOM-killed process is restarted after 30 seconds.
 MemoryMax=512M
 
 # hardening — the bot only needs outbound HTTPS + its StateDirectory, nothing else.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -66,11 +67,12 @@ func waitForLog(t *testing.T, output *synchronizedLog, text string) {
 }
 
 type registrationCaller struct {
-	mu      sync.Mutex
-	members map[[2]int64]telego.ChatMember
-	sent    []telego.SendMessageParams
-	left    []int64
-	events  chan string
+	mu              sync.Mutex
+	members         map[[2]int64]telego.ChatMember
+	sent            []telego.SendMessageParams
+	left            []int64
+	commandScopeIDs []int64
+	events          chan string
 }
 
 func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.RequestData) (*ta.Response, error) {
@@ -95,11 +97,17 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 		}
 		return registrationAPIResponse(member)
 	case "sendMessage":
-		var params telego.SendMessageParams
-		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+		var wire struct {
+			ChatID int64  `json:"chat_id"`
+			Text   string `json:"text"`
+		}
+		if err := json.Unmarshal(data.BodyRaw, &wire); err != nil {
 			return nil, err
 		}
-		c.sent = append(c.sent, params)
+		c.sent = append(c.sent, telego.SendMessageParams{
+			ChatID: telego.ChatID{ID: wire.ChatID},
+			Text:   wire.Text,
+		})
 		if c.events != nil {
 			c.events <- method
 		}
@@ -116,6 +124,21 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 			c.events <- method
 		}
 		return registrationAPIResponse(true)
+	case "deleteMessage":
+		return registrationAPIResponse(true)
+	case "setMyCommands":
+		var params struct {
+			Scope struct {
+				ChatID int64 `json:"chat_id"`
+			} `json:"scope"`
+		}
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		if params.Scope.ChatID != 0 {
+			c.commandScopeIDs = append(c.commandScopeIDs, params.Scope.ChatID)
+		}
+		return registrationAPIResponse(true)
 	default:
 		return nil, fmt.Errorf("unexpected Telegram method %q", method)
 	}
@@ -125,6 +148,29 @@ func (c *registrationCaller) leftChats() []int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]int64(nil), c.left...)
+}
+
+func (c *registrationCaller) sentTo(chatID int64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, message := range c.sent {
+		if message.ChatID.ID == chatID {
+			count++
+		}
+	}
+	return count
+}
+
+func (c *registrationCaller) hasCommandScope(groupID int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, chatID := range c.commandScopeIDs {
+		if chatID == groupID {
+			return true
+		}
+	}
+	return false
 }
 
 func registrationAPIResponse(value any) (*ta.Response, error) {
@@ -226,6 +272,31 @@ func TestStartupStateAllowsMissingConfigAndNoGroups(t *testing.T) {
 	}
 	if nonce, created, err := settings.EnsureOwnerClaim(time.Now(), ownerClaimLifetime); err != nil || !created || nonce == "" {
 		t.Fatalf("owner claim on zero-group startup = nonce %q, created %t, error %v", nonce, created, err)
+	}
+}
+
+func TestStartupConfigRemainsRegistrationBaseline(t *testing.T) {
+	const groupID int64 = -1009000000601
+	configPath := t.TempDir() + "/missing-config.json"
+	stateDirectory := t.TempDir()
+	_, settings, err := loadRuntimeState(configPath, stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := settings.Registrations()
+	registration.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: 42}}
+	if _, err := settings.CommitRegistrations(registration.Revision, registration); err != nil {
+		t.Fatal(err)
+	}
+	cfg, reloaded, err := loadRuntimeState(configPath, stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.IsGroup(groupID) {
+		t.Fatal("runtime group was not restored into live settings")
+	}
+	if cfg.IsGroup(groupID) {
+		t.Fatal("runtime group leaked into the immutable config baseline")
 	}
 }
 
@@ -367,9 +438,52 @@ func TestOwnerPromotionRegistersFirstControlGroup(t *testing.T) {
 	if !settings.IsGroup(groupID) || state.ControlGroupID != groupID || len(state.RegisteredGroups) != 1 {
 		t.Fatalf("owner registration = %+v, groups=%v", state, settings.GroupIDs())
 	}
-	if len(caller.left) != 0 || len(caller.sent) != 1 ||
-		!strings.Contains(caller.sent[0].Text, "configure_-1901") {
+	if len(caller.left) != 0 || len(caller.sent) != 1 {
 		t.Fatalf("owner registration Telegram calls: sent=%+v left=%v", caller.sent, caller.left)
+	}
+	want := i18n.Messages.Bot.Registration.GroupRegistered.Render(i18n.LangEN, "Owner Group")
+	if caller.sent[0].Text != want {
+		t.Fatalf("owner registration message = %q, want catalogue text %q", caller.sent[0].Text, want)
+	}
+	if strings.Contains(caller.sent[0].Text, "?start=") {
+		t.Fatalf("owner registration returned an unroutable start payload: %q", caller.sent[0].Text)
+	}
+}
+
+func TestRegistrationCompletedMessageLocales(t *testing.T) {
+	const (
+		groupID = int64(-1902)
+		title   = "Runtime Group"
+	)
+	for _, test := range []struct {
+		name string
+		code string
+		lang i18n.Lang
+	}{
+		{name: "zh", code: "zh-CN", lang: i18n.LangZH},
+		{name: "zh-Hant", code: "zh-TW", lang: i18n.LangZHHant},
+		{name: "en", code: "en", lang: i18n.LangEN},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, settings := registrationFixture(t)
+			caller := &registrationCaller{members: make(map[[2]int64]telego.ChatMember)}
+			bot := newRegistrationBot(t, caller)
+			service := newRegistrationService(
+				context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil)
+			service.registrationCompleted(context.Background(),
+				telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: title},
+				telego.User{ID: testOwner, LanguageCode: test.code})
+			if len(caller.sent) != 1 {
+				t.Fatalf("registration messages = %d, want 1", len(caller.sent))
+			}
+			want := i18n.Messages.Bot.Registration.GroupRegistered.Render(test.lang, title)
+			if caller.sent[0].Text != want {
+				t.Errorf("registration message = %q, want catalogue text %q", caller.sent[0].Text, want)
+			}
+			if strings.Contains(caller.sent[0].Text, "?start=") {
+				t.Errorf("registration message returned an unroutable start payload: %q", caller.sent[0].Text)
+			}
+		})
 	}
 }
 

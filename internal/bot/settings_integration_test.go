@@ -134,3 +134,24 @@ func TestBuiltInPrivateReplyUsesCatalogue(t *testing.T) {
 		t.Errorf("custom private reply = %q, want %q", got, customReply)
 	}
 }
+
+func TestBuiltInPrivateReplyUsesLiveQueryRate(t *testing.T) {
+	cfg := &config.Config{PrivateQueryPerMin: 3}
+	settings, err := store.NewSettings("", botTestSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(cfg, settings, nil, nil, nil, nil, nil)
+	global := settings.Global()
+	overrides := global.Overrides()
+	rate := 5
+	overrides.PrivateQueryPerMin = &rate
+	if _, err := settings.CommitGlobal(global.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
+	got := service.dm.privateReply(i18n.LangEN)
+	want := i18n.Messages.Bot.DirectMessage.AutoReply.Render(i18n.LangEN, rate)
+	if got != want {
+		t.Errorf("private reply = %q, want catalogue text %q", got, want)
+	}
+}

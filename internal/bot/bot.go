@@ -51,6 +51,7 @@ func New(
 		lookups:        lookups,
 		dm: &dmHandler{
 			cfg:            cfg,
+			settings:       settings,
 			telegram:       telegram,
 			last:           make(map[int64]time.Time),
 			catalogueReply: isBuiltInPrivateReply(cfg.PrivateReply),

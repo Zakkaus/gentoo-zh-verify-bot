@@ -440,44 +440,30 @@ func TestMuteSurfacesTelegramError(t *testing.T) {
 	}
 }
 
-func TestUnmuteFallsBackToFullPermissions(t *testing.T) {
+func TestUnmuteRejectsUnavailableDefaults(t *testing.T) {
+	getChatErr := errors.New("temporary failure")
 	var nilChat *telego.ChatFullInfo
 	tests := []struct {
-		name   string
-		result scriptedResult
+		name    string
+		result  scriptedResult
+		wantErr error
 	}{
-		{name: "GetChat failure", result: scriptedResult{err: errors.New("temporary failure")}},
+		{name: "GetChat failure", result: scriptedResult{err: getChatErr}, wantErr: getChatErr},
 		{name: "nil chat", result: scriptedResult{value: nilChat}},
 		{name: "missing defaults", result: scriptedResult{value: &telego.ChatFullInfo{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			caller := &scriptedCaller{responses: map[string][]scriptedResult{"getChat": {tt.result}}}
-			if err := newTestClient(t, caller).Unmute(context.Background(), -100, 5); err != nil {
-				t.Fatal(err)
+			err := newTestClient(t, caller).Unmute(context.Background(), -100, 5)
+			if err == nil {
+				t.Fatal("Unmute returned nil without group default permissions")
 			}
-			calls := caller.methodCalls("restrictChatMember")
-			if len(calls) != 1 {
-				t.Fatalf("restrictChatMember calls = %d, want 1", len(calls))
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Unmute error = %v, want %v", err, tt.wantErr)
 			}
-			var params telego.RestrictChatMemberParams
-			if err := json.Unmarshal(calls[0].body, &params); err != nil {
-				t.Fatal(err)
-			}
-			permissions := []*bool{
-				params.Permissions.CanSendMessages, params.Permissions.CanSendAudios,
-				params.Permissions.CanSendDocuments, params.Permissions.CanSendPhotos,
-				params.Permissions.CanSendVideos, params.Permissions.CanSendVideoNotes,
-				params.Permissions.CanSendVoiceNotes, params.Permissions.CanSendPolls,
-				params.Permissions.CanSendOtherMessages, params.Permissions.CanAddWebPagePreviews,
-				params.Permissions.CanReactToMessages, params.Permissions.CanEditTag,
-				params.Permissions.CanChangeInfo, params.Permissions.CanInviteUsers,
-				params.Permissions.CanPinMessages, params.Permissions.CanManageTopics,
-			}
-			for i, allowed := range permissions {
-				if allowed == nil || !*allowed {
-					t.Errorf("fallback permission field %d = %v, want true", i, allowed)
-				}
+			if calls := caller.methodCalls("restrictChatMember"); len(calls) != 0 {
+				t.Fatalf("restrictChatMember calls = %d, want 0", len(calls))
 			}
 		})
 	}

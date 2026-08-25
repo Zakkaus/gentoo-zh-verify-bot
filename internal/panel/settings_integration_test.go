@@ -3,6 +3,7 @@ package panel
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/verify"
 	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
 )
 
 func newAdminTestApplication(cfg *config.Config, settings *store.Settings, bot *telego.Bot) (*Panel, *verify.Service) {
@@ -51,6 +53,123 @@ func TestStopCommandWritesInvokingGroup(t *testing.T) {
 	}})
 	if !verification.IsEnabled(groupA) || verification.IsEnabled(groupB) {
 		t.Fatalf("/stop state = group A:%v group B:%v, want true/false", verification.IsEnabled(groupA), verification.IsEnabled(groupB))
+	}
+}
+
+func TestRuntimeRegisteredGroupUsesLiveCommandGuards(t *testing.T) {
+	const groupID int64 = -1009000000303
+	cfg := &config.Config{Lang: "en", NotifyTTLSeconds: -1}
+	settings, err := store.NewSettings(filepath.Join(t.TempDir(), "settings.json"), testSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeAdminBot()
+	fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+	bot := newAPITestBot(t, fake)
+	administration, verification := newAdminTestApplication(cfg, settings, bot)
+	defer verification.Shutdown()
+	registration := settings.Registrations()
+	registration.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: 42}}
+	if _, err := settings.CommitRegistrations(registration.Revision, registration); err != nil {
+		t.Fatal(err)
+	}
+	message := &telego.Message{
+		MessageID: 1,
+		Chat:      telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 7, LanguageCode: "fr"},
+	}
+	if !verification.DMOrGroup(message) {
+		t.Error("runtime group was rejected by the shared message guard")
+	}
+
+	fake.lastSendText = ""
+	runFakeHandler(t, bot, administration.OnHelp, telego.Update{Message: message})
+	groupState := i18n.Messages.Panel.Help.GroupState.Render(
+		i18n.LangEN, i18n.Messages.Panel.State.Enabled.For(i18n.LangEN))
+	if !strings.Contains(fake.lastSendText, groupState) {
+		t.Errorf("runtime group help = %q, want catalogue group state %q", fake.lastSendText, groupState)
+	}
+
+	const memberResult = "runtime member command handled"
+	fake.lastSendText = ""
+	runFakeHandler(t, bot, func(ctx *th.Context, update telego.Update) error {
+		return administration.memberCmd(ctx, update, func(int64, i18n.Lang) string {
+			return memberResult
+		})
+	}, telego.Update{Message: message})
+	if fake.lastSendText != memberResult {
+		t.Errorf("runtime member command result = %q, want %q", fake.lastSendText, memberResult)
+	}
+
+	runFakeHandler(t, bot, administration.OnStop, telego.Update{Message: message})
+	if verification.IsEnabled(groupID) {
+		t.Error("runtime group settings command did not change verification state")
+	}
+}
+
+func TestRuntimeControlGroupRestrictsGlobalCommands(t *testing.T) {
+	const (
+		controlGroup = int64(-1009000000304)
+		otherGroup   = int64(-1009000000305)
+	)
+	cfg := &config.Config{Lang: "en", NotifyTTLSeconds: -1}
+	settings, err := store.NewSettings(filepath.Join(t.TempDir(), "settings.json"), testSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeAdminBot()
+	fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+	bot := newAPITestBot(t, fake)
+	administration, verification := newAdminTestApplication(cfg, settings, bot)
+	defer verification.Shutdown()
+	registration := settings.Registrations()
+	registration.ControlGroupID = controlGroup
+	registration.RegisteredGroups = []store.RegisteredGroup{
+		{ID: controlGroup, RegisteredBy: 42},
+		{ID: otherGroup, RegisteredBy: 42},
+	}
+	if _, err := settings.CommitRegistrations(registration.Revision, registration); err != nil {
+		t.Fatal(err)
+	}
+	runFakeHandler(t, bot, administration.OnRich, telego.Update{Message: &telego.Message{
+		MessageID: 1,
+		Chat:      telego.Chat{ID: otherGroup, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 7, LanguageCode: "en"},
+	}})
+	if settings.Global().RichMessages().Value {
+		t.Error("non-control runtime group changed a global setting")
+	}
+	want := i18n.Messages.Feed.Config.ControlGroupOnly.Render(i18n.LangEN, controlGroup)
+	if fake.lastSendText != want {
+		t.Errorf("control-group refusal = %q, want catalogue text %q", fake.lastSendText, want)
+	}
+}
+
+func TestHelpUsesLivePrivateQueryRate(t *testing.T) {
+	cfg := &config.Config{PrivateQueryPerMin: 3}
+	settings, err := store.NewSettings("", testSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeAdminBot()
+	bot := newAPITestBot(t, fake)
+	administration, verification := newAdminTestApplication(cfg, settings, bot)
+	defer verification.Shutdown()
+	global := settings.Global()
+	overrides := global.Overrides()
+	rate := 5
+	overrides.PrivateQueryPerMin = &rate
+	if _, err := settings.CommitGlobal(global.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
+	runFakeHandler(t, bot, administration.OnHelp, telego.Update{Message: &telego.Message{
+		Chat: telego.Chat{ID: 7, Type: telego.ChatTypePrivate},
+		From: &telego.User{ID: 7, LanguageCode: "en"},
+	}})
+	want := memberHelpText(i18n.LangEN) + "\n\n" +
+		i18n.Messages.Panel.Help.DirectMessageNote.Render(i18n.LangEN, rate)
+	if fake.lastSendText != want {
+		t.Errorf("private help = %q, want catalogue text %q", fake.lastSendText, want)
 	}
 }
 

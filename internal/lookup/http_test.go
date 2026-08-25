@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 )
 
@@ -38,6 +40,38 @@ func TestRequesterLanguageFallbackChain(t *testing.T) {
 				t.Fatalf("requester language = %s, want %s", got, test.expected)
 			}
 		})
+	}
+}
+
+func TestRuntimeRegisteredGroupUsesLiveMembership(t *testing.T) {
+	const groupID int64 = -1009000000401
+	cfg := &config.Config{Lang: "zh-Hant"}
+	baseline, err := store.LoadBaseline(filepath.Join(t.TempDir(), "missing-config.json"), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := store.NewSettings(filepath.Join(t.TempDir(), "settings.json"), baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(settings, nil, cfg, "")
+	registration := settings.Registrations()
+	registration.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: 42}}
+	if _, err := settings.CommitRegistrations(registration.Revision, registration); err != nil {
+		t.Fatal(err)
+	}
+	msg := &telego.Message{
+		Chat: telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+		From: &telego.User{ID: 7, LanguageCode: "fr"},
+	}
+	if got := service.requesterLanguage(msg); got != i18n.LangZHHant {
+		t.Errorf("runtime group requester language = %s, want %s", got, i18n.LangZHHant)
+	}
+	if !service.queryAllowed(nil, msg, i18n.LangZHHant) {
+		t.Error("runtime group lookup was not exempted from the private-query rate limit")
+	}
+	if got := service.controlGroupID(); got != groupID {
+		t.Errorf("runtime control group = %d, want %d", got, groupID)
 	}
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -126,6 +127,31 @@ func TestLoadCorruptBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(badPath); !os.IsNotExist(err) {
 		t.Error("the corrupt file must be renamed away from the live path")
+	}
+}
+
+func TestLoadCorruptBackupFailureDisablesWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	original := []byte("{not json")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path+".corrupt", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var dst any
+	err := Load(path, &dst)
+	if !ReadFailed(err) {
+		t.Fatalf("Load error = %v, want a write-disabling classified failure", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read original after failed backup: %v", readErr)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("original changed after failed backup: got %q, want %q", after, original)
 	}
 }
 

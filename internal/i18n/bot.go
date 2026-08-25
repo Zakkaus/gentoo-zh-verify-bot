@@ -108,7 +108,7 @@ type BotRegistrationCatalog struct {
 	EnrollmentRefused Text
 	// RegistrationPending formats an authorized add awaiting promotion.
 	RegistrationPending Format
-	// GroupRegistered formats a completed group registration and settings link.
+	// GroupRegistered formats a completed group registration and its settings instruction.
 	GroupRegistered Format
 	// RegistrationSaveFailed reports a registration that could not be made durable.
 	RegistrationSaveFailed Text

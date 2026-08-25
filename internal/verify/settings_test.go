@@ -230,7 +230,7 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 	}
 }
 
-func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
+func TestRuntimeOnlyGroupPendingSurvivesRestartWithoutRebuiltConfig(t *testing.T) {
 	const runtimeGroup int64 = -1009000000099
 	cfg := runtimeSettingsTestConfig()
 	dir := t.TempDir()
@@ -246,8 +246,7 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	effective := testConfigWithEffectiveGroups(cfg, settings)
-	before := newService(settings, nil, effective, &i18n.Messages)
+	before := newService(settings, nil, cfg, &i18n.Messages)
 	before.statePath = filepath.Join(dir, "pending.json")
 	key := pkey{gid: runtimeGroup, uid: 7001}
 	before.pend[key] = &pending{
@@ -266,7 +265,7 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := newService(reloaded, nil, testConfigWithEffectiveGroups(cfg, reloaded), &i18n.Messages)
+	after := newService(reloaded, nil, cfg, &i18n.Messages)
 	after.statePath = before.statePath
 	after.load(nil)
 	t.Cleanup(after.stopForShutdown)
@@ -315,31 +314,6 @@ func testSettingsBaselineFromConfig(t *testing.T, cfg *config.Config, configured
 		t.Fatal(err)
 	}
 	return baseline
-}
-
-func testConfigWithEffectiveGroups(cfg *config.Config, settings *store.Settings) *config.Config {
-	effective := *cfg
-	effective.Groups = append([]config.GroupConfig(nil), cfg.Groups...)
-	effective.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
-	groupSeen := make(map[int64]bool, len(effective.Groups))
-	for _, group := range effective.Groups {
-		groupSeen[group.ID] = true
-	}
-	idSeen := make(map[int64]bool, len(effective.GroupIDs))
-	for _, groupID := range effective.GroupIDs {
-		idSeen[groupID] = true
-	}
-	for _, groupID := range settings.GroupIDs() {
-		if !groupSeen[groupID] {
-			effective.Groups = append(effective.Groups, config.GroupConfig{ID: groupID})
-			groupSeen[groupID] = true
-		}
-		if !idSeen[groupID] {
-			effective.GroupIDs = append(effective.GroupIDs, groupID)
-			idSeen[groupID] = true
-		}
-	}
-	return &effective
 }
 
 func testLookupService(v *Service) *lookup.Service {

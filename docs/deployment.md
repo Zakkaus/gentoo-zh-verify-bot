@@ -51,20 +51,172 @@ A ready group is logged but not messaged. A missing-rights report is logged and 
 
 Feed destinations have a separate nonfatal startup probe. A channel requires administrator status and `can_post_messages`; a group/supergroup must not have the bot left, banned, or unable to send. Probe failure only warns, and the feed loop still runs.
 
-## systemd unit and state directory
+## systemd operations and restart recovery
 
-**Implementation:** package `main`, `main` in `cmd/gentoo-zh-verify-bot/main.go`; deployment definition `deploy/gentoo-zh-verify-bot.service`.
+**Implementation:** package `main`, `main`, `prepareUpdateHandler`, `pollingProgressCaller`, and
+`systemdNotifier` in `cmd/gentoo-zh-verify-bot`; deployment definition
+`deploy/gentoo-zh-verify-bot.service`.
 
-The supplied unit:
+### Supervision policy
 
-- runs `/usr/local/bin/gentoo-zh-verify-bot --config /etc/gentoo-zh-verify-bot/config.json`;
-- reads `/etc/gentoo-zh-verify-bot/bot.env`;
-- uses `DynamicUser=yes`;
-- creates `/var/lib/gentoo-zh-verify-bot` as `STATE_DIRECTORY` with mode `0700`;
-- restarts only on failure, after five seconds;
-- allows outbound `AF_UNIX`, IPv4, and IPv6 but opens no listener;
-- applies `MemoryMax=512M`, `UMask=0077`, an empty capability set, filesystem/kernel/process hardening, and the `@system-service` syscall filter.
+The supplied unit runs `/usr/local/bin/gentoo-zh-verify-bot --config
+/etc/gentoo-zh-verify-bot/config.json`, reads `/etc/gentoo-zh-verify-bot/bot.env`, uses
+`DynamicUser=yes`, and creates `/var/lib/gentoo-zh-verify-bot` as `STATE_DIRECTORY` with mode
+`0700`.
 
-Normal SIGINT/SIGTERM cancellation stops the handler, freezes verification timers, persists verification state, and gives the feed goroutine up to five seconds to flush. Fatal startup/handler exits use `log.Fatal`/`log.Fatalf`, so deferred graceful shutdown does not run; recovery then uses the latest state already written during operation.
+`Restart=always` covers crashes, watchdog termination, and an unexpected clean exit. An explicit
+30-second delay prevents a hot crash loop. `StartLimitIntervalSec=0` disables systemd's start-rate
+latch, so a persistent startup failure keeps retrying every 30 seconds instead of stopping after
+five attempts. An operator-requested `systemctl stop` remains stopped.
 
-The unit creates the state directory before execution. Manual launches must set `STATE_DIRECTORY` to a private writable directory if state and owner registration must survive restart. Detailed file semantics are in [State and persistence](state-persistence.md).
+The service is `Type=notify`. It sends `READY=1` after identity lookup, state restoration, and
+handler registration. A completed `getUpdates` attempt sends `WATCHDOG=1`; no independent ticker
+can hide a stalled poll loop. A quiet successful long poll completes within 30 seconds. Each API
+call is bounded at 45 seconds and a failed call retries after five seconds, so the longest expected
+gap between progress signals is 50 seconds. `WatchdogSec=120s` is more than twice that gap. Network,
+DNS, and Telegram failures still complete an attempt and therefore keep the watchdog alive while
+the retry and verification-outage paths recover. A poll loop that stops completing attempts for
+120 seconds is terminated by systemd and restarted after 30 seconds.
+
+SIGINT or SIGTERM sends `STOPPING=1`, stops accepting updates, and gives in-flight handlers, the
+Telegram heartbeat, and the feed state flush one shared 20-second deadline. Verification timers
+then freeze and the verification files are saved synchronously. `TimeoutStopSec=30s` leaves systemd
+ten additional seconds before forced termination. Shutdown logs name each component being waited
+for.
+
+All state commits use one process-wide mutex. A commit writes a mode-`0600` temporary file in the
+target directory, `fsync`s and closes it, atomically renames it over the state file, then `fsync`s
+the parent directory. Termination before rename leaves the previous file intact; startup removes
+orphan `.<name>.tmp-*` files. A storage error can still leave the newest in-memory change absent
+from the last successful snapshot.
+
+### Restart state
+
+| State | Restart behavior |
+| --- | --- |
+| Pending verifications and deadlines | `pending.json` restores the challenge, nonce, attempts, question state, and deadline. Long outages receive the recovery rules described below. |
+| Required-channel gate | The configured/runtime gate survives in `settings.json` or `config.json`. Channel membership is checked live; no cached membership decision is trusted after restart. |
+| Verification strikes and retry cooldowns | `verifyfail.json` restores the count and last-failure time. |
+| Warning counters | `warns.json` restores positive per-group, per-user counters. |
+| Mute expiry | Telegram stores `until_date`; the server lifts the restriction even while the bot is stopped. The bot has no local mute timer to reconstruct. |
+| Feed cursors and tracked messages | Each `feed-<chat_id>.json` restores the bug/news cursor and tracked bug-message state. Only the last successful atomic save is available. |
+| Owner claim, registered groups, enrollment nonces, and pending promotions | `settings.json` restores them and reconstructs the leave deadline for a persisted pending promotion. |
+| Settings-panel sessions and drafts | Discarded. They are uncommitted, capped at 256, and expire after 30 minutes; reopen `/settings`. |
+| Daily approval/decline counters, positive admin cache entries, DM/lookup rate windows, lookup caches, cleanup timers, and alert throttles | Discarded. They are bounded operational caches or same-day observability, not promised durable state. |
+
+One registration grace path is not durable: when the bot already has an owner and is added as an
+ordinary member without an enrollment payload, the ten-minute leave deadline exists only in
+`registrationService.waiting`. A crash or restart before expiry drops that deadline, so the bot may
+remain in the unauthorized group. Remove it manually or repeat the enrollment flow. Persisting and
+restoring that deadline requires a change in `cmd/gentoo-zh-verify-bot/registration.go`.
+
+A delivered kernel prompt has another crash window: `markPrompted` changes the in-memory
+`prompted` flag without immediately saving `pending.json`. A crash before the next state event or
+graceful shutdown restores the request as unprompted, so the applicant's reply is not graded.
+Closing that window requires a change in `internal/verify/service.go`.
+
+Manual launches with no `STATE_DIRECTORY` keep all file-backed state in memory. Durable owner claim,
+enrollment capability, and runtime group registration fail rather than report a non-durable
+success. Detailed file semantics are in [State and persistence](state-persistence.md).
+
+### Telegram outage and backlog recovery
+
+Handlers are fully registered before `UpdatesViaLongPolling` starts, so a startup backlog cannot be
+consumed before its route exists. The initial offset is zero. Telego copies that value into its
+private polling parameters, advances it to `update_id + 1` only after receiving an update, and
+leaves it unchanged when `GetUpdates` fails. A nonzero
+`WithLongPollingRetryTimeout(5s)` retries indefinitely instead of closing the update channel.
+Restarting the process starts from zero again, which asks Telegram for the oldest update it has not
+already confirmed; no application path resets the live offset or advances it across a failed poll.
+
+After a one-hour network loss, polling is still retrying, verification deadlines are paused by the
+heartbeat logic, and Telegram's queued updates are delivered when connectivity returns. Pending
+verifications receive fresh windows and bounded re-notification. An update-stream closure while the
+process context is still live exits nonzero; `Restart=always` then starts a new process.
+
+A token rejected during startup makes the required `GetMe` call fail, so the process exits and
+systemd retries every 30 seconds. A token that becomes invalid after startup makes both polling and
+heartbeat calls fail. Those completed failures prove that the loops are still progressing, so they
+do not trip the watchdog; polling continues to retry until an operator replaces the token and
+restarts the service.
+
+Telegram retains disconnected-bot updates for about 24 hours. Older join-request updates can be
+lost permanently, and the Bot API cannot enumerate the requests still pending in a group. On the
+first successful heartbeat after a longer outage, the bot compares the existing
+`heartbeat.json` timestamp with the retention window and sends one localized alert per guarded
+group to `admin_log_chat_id`, or to the guarded group when no admin log is configured. Administrators
+must then review Telegram's pending join-request queue manually.
+
+### Memory limit
+
+`MemoryMax=512M` is a safety boundary, not a steady-state target. Steady state is dominated by the
+Go runtime, Telego buffers, the package/news caches, configuration and i18n data, and the bounded
+state maps. The update channel holds at most 100 updates, no more than 64 update handlers run
+concurrently, pending verification is capped at 2,000 globally and 500 per group, and the warning,
+strike, panel, admin-cache, lookup-rate, cleanup-timer, and feed-tracking structures have explicit
+bounds.
+
+A join flood therefore leaves excess requests in Telegram for manual review instead of growing the
+pending map or handler goroutine count without limit. Concurrent external lookups and their bounded
+response bodies can create the largest transient allocation. If the cgroup reaches 512 MiB, the
+kernel OOM-kills the service; systemd records an OOM failure and restarts it after 30 seconds.
+
+### Live verification
+
+After installing the unit, reload and inspect the effective values:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl restart gentoo-zh-verify-bot.service
+systemctl show gentoo-zh-verify-bot.service \
+  -p Type -p NotifyAccess -p Restart -p RestartUSec \
+  -p StartLimitIntervalUSec -p StartLimitBurst \
+  -p WatchdogUSec -p TimeoutStopUSec -p MemoryMax
+```
+
+Expected values include `Type=notify`, `NotifyAccess=main`, `Restart=always`,
+`RestartUSec=30s`, `StartLimitIntervalUSec=0`, `StartLimitBurst=5`,
+`WatchdogUSec=2min`, `TimeoutStopUSec=30s`, and `MemoryMax=536870912`.
+
+Inspect the state driven by `sd_notify` and the last completed watchdog keepalive:
+
+```sh
+systemctl show gentoo-zh-verify-bot.service \
+  -p ActiveState -p SubState -p Result -p MainPID -p NRestarts \
+  -p WatchdogTimestamp -p WatchdogTimestampMonotonic
+```
+
+Before `READY=1`, the unit remains `ActiveState=activating`; afterward it is
+`ActiveState=active` and `SubState=running`. Repeating the command after 30–50 seconds must show a
+newer `WatchdogTimestampMonotonic`.
+
+In a maintenance window, exercise clean-exit and crash recovery without stopping the unit:
+
+```sh
+sudo systemctl kill --kill-whom=main --signal=SIGTERM gentoo-zh-verify-bot.service
+sleep 35
+systemctl show gentoo-zh-verify-bot.service -p ActiveState -p SubState -p MainPID -p NRestarts
+
+sudo systemctl kill --kill-whom=main --signal=SIGKILL gentoo-zh-verify-bot.service
+sleep 35
+systemctl show gentoo-zh-verify-bot.service -p ActiveState -p SubState -p MainPID -p NRestarts -p Result
+```
+
+`MainPID` changes and `NRestarts` increases in both cases. Repeating the SIGKILL cycle more than five
+times must still return to `active/running`; `StartLimitIntervalUSec=0` prevents a `start-limit-hit`
+latch. To exercise the watchdog, stop the main process from making progress and inspect the
+journal after 120 seconds; systemd must record a watchdog failure, increment `NRestarts`, and return
+the unit to `active/running`.
+
+```sh
+sudo systemctl kill --kill-whom=main --signal=SIGSTOP gentoo-zh-verify-bot.service
+journalctl -fu gentoo-zh-verify-bot.service
+```
+
+After any SIGTERM test, verify the bounded shutdown and state flush in the journal:
+
+```sh
+journalctl -u gentoo-zh-verify-bot.service -b --grep='shutdown:'
+systemctl show gentoo-zh-verify-bot.service \
+  -p MemoryCurrent -p MemoryPeak -p MemoryMax -p OOMPolicy -p Result
+```

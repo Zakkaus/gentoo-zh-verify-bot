@@ -69,11 +69,13 @@ func TestStateCompatAntispamMigration(t *testing.T) {
 
 func TestStateCompatSettings(t *testing.T) {
 	tests := []struct {
-		name string
-		data []byte
+		name            string
+		data            []byte
+		stableRoundTrip bool
 	}{
 		{name: "existing legacy fixture", data: stateCompatFixture(t, "settings.json")},
 		{name: "legacy v0 golden", data: stateCompatFixture(t, "settings-legacy-v0.json")},
+		{name: "schema v2 golden", data: stateCompatFixture(t, "settings-v2.json"), stableRoundTrip: true},
 		{name: "unknown legacy key", data: stateCompatWithUnknown(t, stateCompatFixture(t, "settings.json"))},
 	}
 	for _, tt := range tests {
@@ -82,6 +84,17 @@ func TestStateCompatSettings(t *testing.T) {
 			settings, err := NewSettings(path, settingsBaselineFromConfig(stateCompatConfig(), configPresence{}))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tt.stableRoundTrip {
+				out := filepath.Join(t.TempDir(), "settings.json")
+				settings.path = out
+				if err := settings.writeState(&settings.state); err != nil {
+					t.Fatal(err)
+				}
+				if got := stateCompatRead(t, out); !bytes.Equal(got, tt.data) {
+					t.Fatalf("schema-v2 settings changed after load/write round trip:\nwant %s\n got %s", tt.data, got)
+				}
+				return
 			}
 			for _, groupID := range []int64{stateCompatGroupA, stateCompatGroupB} {
 				group, ok := settings.Group(groupID)

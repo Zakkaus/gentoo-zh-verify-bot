@@ -196,6 +196,39 @@ func TestSetupCommandsLanguageScopes(t *testing.T) {
 	}
 }
 
+func TestSetupCommandsRereadsRuntimeGroups(t *testing.T) {
+	const groupID int64 = -1009000000501
+	cfg := &config.Config{Lang: "zh-Hant", WarnLimit: 3}
+	settings, err := store.NewSettings(t.TempDir()+"/settings.json", botTestSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := &commandRecordingCaller{}
+	service := &Service{cfg: cfg, settings: settings}
+	bot := testBot(t, caller)
+	service.SetupCommands(context.Background(), bot)
+	registration := settings.Registrations()
+	registration.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: 42}}
+	if _, err := settings.CommitRegistrations(registration.Revision, registration); err != nil {
+		t.Fatal(err)
+	}
+	service.SetupCommands(context.Background(), bot)
+
+	if len(caller.requests) != 14 {
+		t.Fatalf("command menu requests after runtime registration = %d, want 14", len(caller.requests))
+	}
+	runtimeScopes := 0
+	for _, request := range caller.requests[6:] {
+		if (request.Scope.Type == "chat" || request.Scope.Type == "chat_administrators") &&
+			strings.Contains(string(request.Scope.ChatID), "-1009000000501") {
+			runtimeScopes++
+		}
+	}
+	if runtimeScopes != 2 {
+		t.Errorf("runtime group command scopes = %d, want 2", runtimeScopes)
+	}
+}
+
 func TestDMReplyThrottle(t *testing.T) {
 	caller := &recordingCaller{}
 	telegramBot := testBot(t, caller)

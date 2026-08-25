@@ -534,15 +534,29 @@ func TestFailureCopyNamesDecisionAndRetry(t *testing.T) {
 		}
 	}
 	banned := v.wrongAnswerText(gid, i18n.LangZH, true)
-	for _, want := range []string{"连续 3 次", "入群申请已被拒绝", "1 天", "封禁到期后"} {
-		if !strings.Contains(banned, want) {
-			t.Errorf("ban result omits %q: %s", want, banned)
-		}
+	duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
+	wantBanned := i18n.Messages.Verification.Result.WrongBanned.Render(i18n.LangZH, duration)
+	if banned != wantBanned {
+		t.Errorf("ban result = %q, want catalogue result %q", banned, wantBanned)
 	}
 	agent := v.agentCaughtText(gid, i18n.LangEN, false)
 	for _, want := range []string{"automated-answer check", "join request was declined", "600 seconds"} {
 		if !strings.Contains(agent, want) {
 			t.Errorf("automated-answer result omits %q: %s", want, agent)
+		}
+	}
+}
+
+func TestBannedResultTextIgnoresConfiguredThreshold(t *testing.T) {
+	const gid = int64(-100)
+	lowerThreshold := newTestService(&config.Config{BanSeconds: 86400, VerifyMaxFails: 3})
+	higherThreshold := newTestService(&config.Config{BanSeconds: 86400, VerifyMaxFails: 4})
+
+	for _, l := range i18n.Languages() {
+		got := lowerThreshold.wrongAnswerText(gid, l, true)
+		want := higherThreshold.wrongAnswerText(gid, l, true)
+		if got != want {
+			t.Errorf("%s banned result changed with threshold: got %q, want %q", l, got, want)
 		}
 	}
 }

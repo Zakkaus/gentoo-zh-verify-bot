@@ -18,6 +18,7 @@
       "channel_fail_open": "applicants who answered correctly will be approved (fail-open)",
       "decline_failed": "⚠️ Could not decline user %[1]d's request to join group %[2]d, possibly because the bot lacks permission: %[3]v. An administrator must handle the request manually.",
       "only_group_admin": "⛔ Only group administrators can use this control.",
+      "outage_backlog": "Telegram retains disconnected-bot updates for about 24 hours. The bot was offline longer than that for group %[1]d, so some join requests may be missing. Review the group's pending join-request queue manually.",
       "pending_cap": "⚠️ The verification queue is full (global limit %[1]d, per-group limit %[2]d). New requests for group %[3]d will remain for manual review.",
       "trusted_bypass_failed": "⚠️ User %[1]d belongs to trusted group %[2]d, but bypass approval in group %[3]d failed: %[4]v. Normal verification will be used."
     },
@@ -120,7 +121,7 @@
       "approved": "✅ Verification passed. Your join request was approved. Welcome.",
       "not_yours": "This is not your join request. Open the verification link for your own request.",
       "stale_question": "This question has expired. Reopen the verification link to receive a new question.",
-      "wrong_banned": "❌ You failed verification %[1]d consecutive times, so the join request was declined and you received a %[2]s ban. Reapply after the ban expires; for a permanent ban, contact a group administrator.",
+      "wrong_banned": "❌ The configured verification failure limit was reached, so the join request was declined and you received a %[1]s ban. Reapply after the ban expires; for a permanent ban, contact a group administrator.",
       "wrong_no_wait": "❌ The answer was incorrect, so the join request was declined. Reapply now.",
       "wrong_retry": "❌ The answer was incorrect, so the join request was declined. Reapply in %[1]d seconds."
     }

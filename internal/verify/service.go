@@ -324,7 +324,7 @@ func msgID(m *telego.Message) int {
 
 // DMOrGroup reports whether a message belongs to a guarded group or a private chat.
 func (v *Service) DMOrGroup(msg *telego.Message) bool {
-	return v.cfg.IsGroup(msg.Chat.ID) || msg.Chat.Type == "private"
+	return v.settings.IsGroup(msg.Chat.ID) || msg.Chat.Type == "private"
 }
 
 // IsEnabled reports whether automated join verification is enabled for one group.
@@ -619,7 +619,7 @@ func (v *Service) alertPendingCap(c context.Context, bot verifyBot, gid int64) {
 // OnJoinRequest starts verification for one eligible group join request.
 func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	jr := update.ChatJoinRequest
-	if jr == nil || !v.cfg.IsGroup(jr.Chat.ID) {
+	if jr == nil || !v.settings.IsGroup(jr.Chat.ID) {
 		return nil
 	}
 	if !v.IsEnabled(jr.Chat.ID) {
@@ -1255,7 +1255,7 @@ func (v *Service) agentCaughtText(groupID int64, l i18n.Lang, banned bool) strin
 
 func (v *Service) bannedResultText(groupID int64, l i18n.Lang) string {
 	duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(groupID))
-	return v.messages.Verification.Result.WrongBanned.Render(l, v.verifyMaxFails(groupID), duration)
+	return v.messages.Verification.Result.WrongBanned.Render(l, duration)
 }
 
 // Bot-caused failures receive a meaningful strike-free retry window.

@@ -161,29 +161,3 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 	}
 	return baseline
 }
-
-// EffectiveConfig returns a detached config containing every configured and runtime group.
-func EffectiveConfig(cfg *config.Config, settings *Settings) *config.Config {
-	effective := *cfg
-	effective.Groups = append([]config.GroupConfig(nil), cfg.Groups...)
-	effective.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
-	groupSeen := make(map[int64]bool, len(effective.Groups))
-	for _, group := range effective.Groups {
-		groupSeen[group.ID] = true
-	}
-	idSeen := make(map[int64]bool, len(effective.GroupIDs))
-	for _, groupID := range effective.GroupIDs {
-		idSeen[groupID] = true
-	}
-	for _, groupID := range settings.GroupIDs() {
-		if !groupSeen[groupID] {
-			effective.Groups = append(effective.Groups, config.GroupConfig{ID: groupID})
-			groupSeen[groupID] = true
-		}
-		if !idSeen[groupID] {
-			effective.GroupIDs = append(effective.GroupIDs, groupID)
-			idSeen[groupID] = true
-		}
-	}
-	return &effective
-}

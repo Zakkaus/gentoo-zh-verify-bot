@@ -182,6 +182,8 @@ type VerificationAdminCatalog struct {
 	AgentStats Format
 	// TrustedBypassFailed formats a failed trusted-member approval.
 	TrustedBypassFailed Format
+	// OutageBacklog asks administrators to inspect requests older than Telegram's retention window.
+	OutageBacklog Format
 	// PendingCap formats a pending-queue capacity alert.
 	PendingCap Format
 	// OnlyGroupAdmin rejects an unauthorized callback.

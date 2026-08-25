@@ -39,6 +39,23 @@ All notable changes to this project are documented here. The format is based on
   govulncheck v1.7.0, and gosec v2.28.0.
 
 ### Fixed
+- **Runtime-registered groups now activate without a service restart.** Verification, lookup
+  authorization, pending restoration, panel command guards, control-group policy, locale selection,
+  and command menus read the live settings owner. Registration completion now directs the
+  administrator to run `/settings` in the group instead of emitting an unroutable deep link.
+- **Schema-v2 migration now preserves the version-0 source and documents unsafe rollback.** Before
+  the first version-0-to-v2 write, the application atomically copies the original to
+  `settings.json.v0.bak` on a best-effort basis. Running a release without schema-v2 support still
+  erases every group/global override and revision, owner identity and claim, enrollment nonce,
+  pending registration, and registered group on its next settings write; it also reads the frozen
+  pre-migration antispam toggles and channel whitelist. Stop the service and back up the current
+  `settings.json` and `antispam.json` before rollback. The antispam migration remains one-way.
+- **The bot now remains supervised through clean exits, crash loops, stalled polling, and reboot.**
+  The systemd unit retries every 30 seconds without a start-limit latch, uses a 120-second
+  progress-based watchdog, and allows 30 seconds for a bounded state-preserving shutdown. Poll
+  handlers are registered before Telegram backlog consumption begins, active update handlers are
+  capped at 64, and outages beyond Telegram's approximate 24-hour retention window produce a
+  localized administrator alert to review pending join requests manually.
 - **Bot-side delivery failures no longer misclassify applicants.** A group challenge that Telegram
   never confirmed used to expire as a normal strike. A failed kernel-question DM used to mark the
   applicant as prompted, so a later unrelated message could count as an answer. The first path is

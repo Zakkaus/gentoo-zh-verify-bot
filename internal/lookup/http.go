@@ -108,6 +108,13 @@ func (s *Service) AutoDelete(groupID int64) (time.Duration, bool) {
 	return time.Duration(seconds) * time.Second, seconds > 0
 }
 
+func (s *Service) isGroup(groupID int64) bool {
+	if s.settings != nil {
+		return s.settings.IsGroup(groupID)
+	}
+	return s.cfg.IsGroup(groupID)
+}
+
 func (s *Service) controlGroupID() int64 {
 	if s.settings != nil {
 		return s.settings.ControlGroupID()
@@ -189,7 +196,7 @@ func (s *Service) groupLanguage(groupID int64) i18n.Lang {
 
 func (s *Service) requesterLanguage(msg *telego.Message) i18n.Lang {
 	fallback := i18n.LangEN
-	if s.cfg.IsGroup(msg.Chat.ID) {
+	if s.isGroup(msg.Chat.ID) {
 		fallback = s.groupLanguage(msg.Chat.ID)
 	}
 	return i18n.FromRequester(msg.From.LanguageCode, fallback)
@@ -227,7 +234,7 @@ func (s *Service) queryRateOK(userID int64) bool {
 
 // External lookups are unlimited in guarded groups and rate-limited per user in private chats.
 func (s *Service) queryAllowed(ctx *th.Context, msg *telego.Message, l i18n.Lang) bool {
-	if s.cfg.IsGroup(msg.Chat.ID) {
+	if s.isGroup(msg.Chat.ID) {
 		return true
 	}
 	if msg.Chat.Type == "private" && msg.From != nil {

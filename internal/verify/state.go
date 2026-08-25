@@ -362,6 +362,7 @@ func (v *Service) load(bot verifyBot) {
 	if v.statePath == "" {
 		return
 	}
+	lastOnline := v.loadHeartbeat()
 	var recs []pendingRec
 	if err := store.Load(v.statePath, &recs); err != nil {
 		if store.ReadFailed(err) {
@@ -371,8 +372,8 @@ func (v *Service) load(bot verifyBot) {
 	}
 	// Long downtime gets fresh windows and re-notification; quick restarts stay quiet.
 	var downtime time.Duration
-	if last := v.loadHeartbeat(); !last.IsZero() {
-		if d := time.Since(last); d > 0 {
+	if !lastOnline.IsZero() {
+		if d := time.Since(lastOnline); d > 0 {
 			downtime = d
 		}
 	}
@@ -381,9 +382,9 @@ func (v *Service) load(bot verifyBot) {
 	var refresh []renotifyItem
 	for _, r := range recs {
 		gid, uid := r.GroupID, r.UserID
-		// Never restore pendings for unguarded chats or unwinnable quiz payloads.
-		if !v.cfg.IsGroup(gid) {
-			log.Printf("state load: skip pending for unconfigured group %d (user %d)", gid, uid)
+		// Never restore pendings for unknown chats or unwinnable quiz payloads.
+		if !v.settings.IsGroup(gid) {
+			log.Printf("state load: skip pending for unknown group %d (user %d)", gid, uid)
 			continue
 		}
 		mode := r.Mode

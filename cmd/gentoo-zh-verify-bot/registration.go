@@ -435,8 +435,7 @@ func (s *registrationService) mutateRegistrations(mutate func(*store.Registratio
 
 func (s *registrationService) registrationCompleted(ctx context.Context, chat telego.Chat, actor telego.User) {
 	l := i18n.FromRequester(actor.LanguageCode, s.groupLanguage(chat.ID))
-	link := fmt.Sprintf("https://t.me/%s?start=configure_%d", s.username, chat.ID)
-	text := i18n.Messages.Bot.Registration.GroupRegistered.Render(l, groupTitle(chat), link)
+	text := i18n.Messages.Bot.Registration.GroupRegistered.Render(l, groupTitle(chat))
 	if _, err := s.bot.SendMessage(ctx, tu.Message(tu.ID(actor.ID), text)); err != nil {
 		_, _ = s.bot.SendMessage(ctx, tu.Message(tu.ID(chat.ID), text))
 	}

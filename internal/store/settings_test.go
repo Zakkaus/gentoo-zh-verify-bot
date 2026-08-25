@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -377,6 +378,64 @@ func TestSettingsMigratesLegacyGoldenToEveryConfiguredGroup(t *testing.T) {
 	}
 	if migrated.Enabled == nil || *migrated.Enabled || migrated.NameSpoiler == nil || *migrated.NameSpoiler || migrated.VerifyMode != config.ModeMixed {
 		t.Fatalf("legacy mirrors changed during migration: %#v", migrated)
+	}
+}
+
+func TestSettingsVersionZeroMigrationBacksUpOriginal(t *testing.T) {
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "state", "settings-legacy-v0.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := NewSettings(path, testSettingsBaseline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.Persistence().Writable {
+		t.Fatalf("settings became unwritable after migration: %v", settings.Persistence().LastError)
+	}
+	backup, err := os.ReadFile(path + ".v0.bak")
+	if err != nil {
+		t.Fatalf("read version-zero backup: %v", err)
+	}
+	if !bytes.Equal(backup, original) {
+		t.Fatalf("version-zero backup changed the original bytes:\nwant %q\n got %q", original, backup)
+	}
+	var migrated settingsFile
+	decodeFile(t, path, &migrated)
+	if migrated.Version != SettingsSchemaVersion {
+		t.Fatalf("migrated schema version = %d, want %d", migrated.Version, SettingsSchemaVersion)
+	}
+}
+
+func TestSettingsVersionZeroBackupFailureDoesNotBlockMigration(t *testing.T) {
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "state", "settings-legacy-v0.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path+".v0.bak", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := NewSettings(path, testSettingsBaseline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := settings.Persistence(); !status.Writable || status.LastError != nil {
+		t.Fatalf("backup failure blocked migration: %+v", status)
+	}
+	var migrated settingsFile
+	decodeFile(t, path, &migrated)
+	if migrated.Version != SettingsSchemaVersion {
+		t.Fatalf("migrated schema version = %d, want %d", migrated.Version, SettingsSchemaVersion)
 	}
 }
 

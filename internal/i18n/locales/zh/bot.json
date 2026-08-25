@@ -45,7 +45,7 @@
     "enrollment_link": "群组登记链接（%[1]d 分钟内有效且只能使用一次）：\n%[2]s",
     "enrollment_refused": "此群组登记链接无效、已使用或已过期。机器人将离开该群组。",
     "registration_pending": "已授权登记群组“%[1]s”。请将机器人提升为管理员并授予所需权限。提升后会自动完成登记。",
-    "group_registered": "已登记群组“%[1]s”。打开设置：%[2]s",
+    "group_registered": "已登记群组“%[1]s”。请在该群组中运行 /settings。",
     "registration_save_failed": "无法持久保存群组登记。机器人将离开该群组；请检查服务状态目录。"
   }
 }

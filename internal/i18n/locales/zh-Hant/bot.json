@@ -45,7 +45,7 @@
     "enrollment_link": "群組登記連結（%[1]d 分鐘內有效且只能使用一次）：\n%[2]s",
     "enrollment_refused": "這個群組登記連結無效、已使用或已過期。機器人將退出該群組。",
     "registration_pending": "已授權登記群組「%[1]s」。請將機器人提升為管理員並授予所需權限。提升後會自動完成登記。",
-    "group_registered": "已登記群組「%[1]s」。開啟設定：%[2]s",
+    "group_registered": "已登記群組「%[1]s」。請在該群組中執行 /settings。",
     "registration_save_failed": "無法持久儲存群組登記。機器人將退出該群組；請檢查服務狀態目錄。"
   }
 }

@@ -2,6 +2,7 @@ package tg
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -246,16 +247,22 @@ func (c *Client) Mute(ctx context.Context, chatID, userID int64, seconds int) er
 	})
 }
 
-// Unmute restores group defaults or the explicit full permission set when defaults are unavailable.
+// Unmute restores the group's default member permissions.
 func (c *Client) Unmute(ctx context.Context, chatID, userID int64) error {
-	permissions := unrestrictedChatPermissions()
-	if chat, err := c.bot.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(chatID)}); err == nil && chat != nil && chat.Permissions != nil {
-		permissions = *chat.Permissions
+	chat, err := c.bot.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(chatID)})
+	if err != nil {
+		return err
+	}
+	if chat == nil {
+		return errors.New("get chat returned no result")
+	}
+	if chat.Permissions == nil {
+		return errors.New("chat default permissions are unavailable")
 	}
 	return c.bot.RestrictChatMember(ctx, &telego.RestrictChatMemberParams{
 		ChatID:      tu.ID(chatID),
 		UserID:      userID,
-		Permissions: permissions,
+		Permissions: *chat.Permissions,
 	})
 }
 
@@ -332,28 +339,6 @@ func (c *Client) reserveCleanupTimer() bool {
 		if c.cleanupTimers.CompareAndSwap(count, count+1) {
 			return true
 		}
-	}
-}
-
-func unrestrictedChatPermissions() telego.ChatPermissions {
-	allowed := true
-	return telego.ChatPermissions{
-		CanSendMessages:       &allowed,
-		CanSendAudios:         &allowed,
-		CanSendDocuments:      &allowed,
-		CanSendPhotos:         &allowed,
-		CanSendVideos:         &allowed,
-		CanSendVideoNotes:     &allowed,
-		CanSendVoiceNotes:     &allowed,
-		CanSendPolls:          &allowed,
-		CanSendOtherMessages:  &allowed,
-		CanAddWebPagePreviews: &allowed,
-		CanReactToMessages:    &allowed,
-		CanEditTag:            &allowed,
-		CanChangeInfo:         &allowed,
-		CanInviteUsers:        &allowed,
-		CanPinMessages:        &allowed,
-		CanManageTopics:       &allowed,
 	}
 }
 

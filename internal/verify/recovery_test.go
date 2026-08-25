@@ -270,6 +270,21 @@ func TestOnRecoveryShuttingDown(t *testing.T) {
 	}
 }
 
+func TestLoadPendingFailureStillProtectsHeartbeat(t *testing.T) {
+	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	v.statePath = t.TempDir()
+	v.hbPath = t.TempDir()
+
+	v.load(nil)
+
+	if v.statePath != "" {
+		t.Fatalf("pending path remained writable after load failure: %q", v.statePath)
+	}
+	if v.hbPath != "" {
+		t.Fatalf("heartbeat path remained writable after load failure: %q", v.hbPath)
+	}
+}
+
 func TestLoadRefreshesAfterOutage(t *testing.T) {
 	dir := t.TempDir()
 	seed := newTestService(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})

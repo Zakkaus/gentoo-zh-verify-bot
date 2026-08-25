@@ -45,7 +45,7 @@
     "enrollment_link": "Group-enrollment link (valid for %[1]d minutes and one use):\n%[2]s",
     "enrollment_refused": "This group-enrollment link is invalid, used, or expired. The bot will leave this group.",
     "registration_pending": "Registration is authorized for group “%[1]s”. Promote the bot to administrator and grant the required permissions. Registration finishes automatically after promotion.",
-    "group_registered": "Registered group “%[1]s”. Open settings: %[2]s",
+    "group_registered": "Registered group “%[1]s”. Run /settings in that group.",
     "registration_save_failed": "Could not persist group registration. The bot will leave this group; check the service state directory."
   }
 }

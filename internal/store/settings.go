@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -332,9 +333,11 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 	}
 	migrateAntispam := path != ""
 	writeMigration := false
+	var versionZeroSource []byte
 	if exists {
 		var loaded settingsFile
-		if err := Load(path, &loaded); err != nil {
+		source, err := loadWithSource(path, &loaded)
+		if err != nil {
 			s.setLastError(err)
 			if ReadFailed(err) {
 				s.writable = false
@@ -343,6 +346,7 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 		} else {
 			switch {
 			case loaded.Version == 0:
+				versionZeroSource = source
 				s.state = s.migrateLegacy(loaded)
 				writeMigration = true
 			case loaded.Version == 1:
@@ -374,6 +378,12 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 		}
 	}
 	if s.writable && writeMigration {
+		if versionZeroSource != nil {
+			backupPath := path + ".v0.bak"
+			if err := writeBytes(backupPath, versionZeroSource); err != nil {
+				log.Printf("ERROR settings migration: could not back up schema-v0 state %s to %s: %v", path, backupPath, err)
+			}
+		}
 		if err := s.writeState(&s.state); err != nil {
 			s.setLastError(err)
 		} else {
