@@ -91,21 +91,23 @@ func TestCatalogComplete(t *testing.T) {
 		switch value.Type() {
 		case textType, formatType:
 			for locale, text := range localizedValues(value) {
+				location := catalogEntry(path, locale)
 				if text == "" {
-					t.Errorf("%s is empty for %s", path, locale)
+					t.Errorf("%s is empty", location)
 				}
 				if value.Type() == textType && looksFormatted(text) {
-					t.Errorf("%s is Text but contains a format directive for %s", path, locale)
+					t.Errorf("%s is Text but contains a format directive", location)
 				}
 			}
 		case stringListType:
 			for locale, entries := range localizedStringValues(value) {
+				location := catalogEntry(path, locale)
 				if len(entries) == 0 {
-					t.Errorf("%s is empty for %s", path, locale)
+					t.Errorf("%s is empty", location)
 				}
 				for i, entry := range entries {
 					if entry == "" {
-						t.Errorf("%s[%d] is empty for %s", path, i, locale)
+						t.Errorf("%s[%d] is empty", location, i)
 					}
 				}
 			}
@@ -117,7 +119,8 @@ func TestCatalogComplete(t *testing.T) {
 			prompt, answers := question.For(locale)
 			for _, answer := range answers {
 				if strings.EqualFold(strings.TrimSpace(prompt), strings.TrimSpace(answer)) {
-					t.Errorf("FallbackQuestions[%d] exposes its answer for %s", i, locale)
+					path := fmt.Sprintf("Messages.Verification.Challenge.FallbackQuestions[%d].Prompt", i)
+					t.Errorf("%s exposes its answer", catalogEntry(path, locale))
 				}
 			}
 		}
@@ -132,11 +135,11 @@ func TestFormatPlaceholdersMatchLocales(t *testing.T) {
 		values := localizedValues(value)
 		want, err := indexedPlaceholders(values[LangZH])
 		if err != nil {
-			t.Errorf("%s has an invalid zh format: %v", path, err)
+			t.Errorf("%s has an invalid format: %v", catalogEntry(path, LangZH), err)
 			return
 		}
 		if len(want) == 0 {
-			t.Errorf("%s is Format but has no placeholders", path)
+			t.Errorf("%s is Format but has no placeholders", catalogEntry(path, LangZH))
 		}
 		for _, locale := range Languages() {
 			if locale == LangZH {
@@ -144,11 +147,11 @@ func TestFormatPlaceholdersMatchLocales(t *testing.T) {
 			}
 			got, err := indexedPlaceholders(values[locale])
 			if err != nil {
-				t.Errorf("%s has an invalid %s format: %v", path, locale, err)
+				t.Errorf("%s has an invalid format: %v", catalogEntry(path, locale), err)
 				continue
 			}
 			if !slices.Equal(got, want) {
-				t.Errorf("%s placeholders for %s = %v, want %v", path, locale, got, want)
+				t.Errorf("%s placeholders = %v, want %v", catalogEntry(path, locale), got, want)
 			}
 		}
 	})
@@ -170,6 +173,28 @@ func visitCatalog(value reflect.Value, path string, visit func(string, reflect.V
 			visitCatalog(value.Index(i), fmt.Sprintf("%s[%d]", path, i), visit)
 		}
 	}
+}
+
+func catalogEntry(path string, locale Lang) string {
+	parts := strings.Split(strings.TrimPrefix(path, "Messages."), ".")
+	subsystem := fieldKey(parts[0])
+	for i := 1; i < len(parts); i++ {
+		parts[i-1] = catalogJSONSegment(parts[i])
+	}
+	key := strings.Join(parts[:len(parts)-1], ".")
+	return fmt.Sprintf(
+		"subsystem %s file %s key %s",
+		subsystem,
+		localeFilePath(locale.String(), subsystem),
+		key,
+	)
+}
+
+func catalogJSONSegment(segment string) string {
+	if bracket := strings.IndexByte(segment, '['); bracket >= 0 {
+		return fieldKey(segment[:bracket]) + segment[bracket:]
+	}
+	return fieldKey(segment)
 }
 
 func localizedValues(value reflect.Value) map[Lang]string {

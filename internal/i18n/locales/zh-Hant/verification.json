@@ -1,5 +1,4 @@
 {
-  "verification": {
     "challenge": {
       "fallback_intro": "還沒安裝 Linux 也可以,換一個問題:\n\n❓ %[1]s\n\n直接把答案傳到這裡即可。還有 %[2]d 次機會。",
       "fallback_questions": [
@@ -56,4 +55,3 @@
       "wrong_retry": "❌ 答錯了,已拒絕。請 %[1]d 秒後重新申請。"
     }
   }
-}

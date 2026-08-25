@@ -306,6 +306,10 @@ func TestRepologyQuery(t *testing.T) {
 }
 
 func TestFetchRepologyAvailability(t *testing.T) {
+	const lookupName = "vim"
+	messages := i18n.Messages.LookupDistros.Pkgs
+	notFound := messages.RepologyNotFound.Render(i18n.LangZH, lookupName)
+	unavailable := messages.RepologyUnavailable.Render(i18n.LangZH, lookupName)
 	for _, tc := range []struct {
 		name       string
 		exactRows  []repologyPkg
@@ -327,46 +331,46 @@ func TestFetchRepologyAvailability(t *testing.T) {
 			name:      "answered miss",
 			exactErr:  &httpStatusError{url: "u", code: 404},
 			available: true,
-			wantText:  "没找到",
-			notWant:   "暂时无法查询",
+			wantText:  notFound,
+			notWant:   unavailable,
 		},
 		{
 			name:     "rate limited",
 			exactErr: &httpStatusError{url: "u", code: 429},
-			wantText: "暂时无法查询",
-			notWant:  "没找到",
+			wantText: unavailable,
+			notWant:  notFound,
 		},
 		{
 			name:     "server failure",
 			exactErr: &httpStatusError{url: "u", code: 503},
-			wantText: "暂时无法查询",
-			notWant:  "没找到",
+			wantText: unavailable,
+			notWant:  notFound,
 		},
 		{
 			name:     "network failure",
 			exactErr: errors.New("connection reset"),
-			wantText: "暂时无法查询",
-			notWant:  "没找到",
+			wantText: unavailable,
+			notWant:  notFound,
 		},
 		{
 			name:     "outbound busy",
 			exactErr: &httpBusyError{url: "u"},
-			wantText: "暂时无法查询",
-			notWant:  "没找到",
+			wantText: unavailable,
+			notWant:  notFound,
 		},
 		{
 			name:       "search failure",
 			exactErr:   &httpStatusError{url: "u", code: 404},
 			searchErr:  &httpStatusError{url: "u", code: 503},
-			wantText:   "暂时无法查询",
-			notWant:    "没找到",
+			wantText:   unavailable,
+			notWant:    notFound,
 			searchRows: map[string][]repologyPkg{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, gotPkgs, _, _, available := fetchRepologyWith(
 				context.Background(),
-				"vim",
+				lookupName,
 				func(_ context.Context, url string, dst any) error {
 					if strings.Contains(url, "/project/") {
 						*dst.(*[]repologyPkg) = tc.exactRows
@@ -381,9 +385,9 @@ func TestFetchRepologyAvailability(t *testing.T) {
 					len(gotPkgs), available, tc.wantPkgs, tc.available)
 			}
 			if tc.wantText != "" {
-				got := renderRepologyLookupMiss(i18n.LangZH, "vim", available)
-				if !strings.Contains(got, tc.wantText) {
-					t.Errorf("renderRepologyLookupMiss() = %q, want substring %q", got, tc.wantText)
+				got := renderRepologyLookupMiss(i18n.LangZH, lookupName, available)
+				if got != tc.wantText {
+					t.Errorf("renderRepologyLookupMiss() = %q, want %q", got, tc.wantText)
 				}
 				if strings.Contains(got, tc.notWant) {
 					t.Errorf("renderRepologyLookupMiss() = %q, unwanted substring %q", got, tc.notWant)

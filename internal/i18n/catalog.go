@@ -112,41 +112,27 @@ func (f Format) Render(l Lang, args ...any) string {
 	return fmt.Sprintf(f.value(l), args...)
 }
 
-type localizedStrings [langCount][]string
-
-func (s localizedStrings) value(l Lang) []string {
-	if l >= langCount {
-		l = LangZH
-	}
-	return s[l]
-}
-
-// StringList is a localized list of plain values.
-type StringList struct{ localizedStrings }
-
-// For returns the list for l.
-func (s StringList) For(l Lang) []string { return s.value(l) }
-
-// Question is one localized answer-hidden verification question.
-type Question struct {
-	// Prompt contains the localized question text.
-	Prompt Text
-	// Answers contains the localized accepted answers.
-	Answers StringList
-}
-
-// For returns the localized prompt and accepted answers.
-func (q Question) For(l Lang) (string, []string) {
-	return q.Prompt.For(l), q.Answers.For(l)
-}
-
 // Catalog contains every localized subsystem.
 type Catalog struct {
 	// Verification contains applicant join-verification text.
 	Verification VerificationCatalog
+	// Moderate contains moderation text.
+	Moderate ModerateCatalog
+	// LookupPackages contains package-lookup text.
+	LookupPackages LookupPackagesCatalog
+	// LookupDistros contains distribution-lookup text.
+	LookupDistros LookupDistrosCatalog
+	// LookupContent contains content-lookup text.
+	LookupContent LookupContentCatalog
+	// Panel contains control-panel text.
+	Panel PanelCatalog
+	// Bot contains bot lifecycle and command text.
+	Bot BotCatalog
+	// Feed contains feed publication text.
+	Feed FeedCatalog
 }
 
-//go:embed locales/*.json
+//go:embed locales/*/*.json
 var localeFiles embed.FS
 
 var (
@@ -160,20 +146,29 @@ var Messages = mustLoadCatalog()
 
 func mustLoadCatalog() Catalog {
 	var catalog Catalog
+	destination := reflect.ValueOf(&catalog).Elem()
+	catalogType := destination.Type()
 	for index, definition := range localeDefinitions {
 		if definition.language != Lang(index) {
 			panic("i18n: locale definitions are not in Lang order")
 		}
-		path := "locales/" + definition.tag + ".json"
-		data, err := localeFiles.ReadFile(path)
-		if err != nil {
-			panic(fmt.Errorf("i18n: read %s: %w", path, err))
-		}
-		if err := loadLocaleValue(reflect.ValueOf(&catalog).Elem(), data, definition.language, ""); err != nil {
-			panic(fmt.Errorf("i18n: load %s: %w", path, err))
+		for fieldIndex := range destination.NumField() {
+			subsystem := fieldKey(catalogType.Field(fieldIndex).Name)
+			path := localeFilePath(definition.tag, subsystem)
+			data, err := localeFiles.ReadFile(path)
+			if err != nil {
+				panic(fmt.Errorf("i18n: read %s: %w", path, err))
+			}
+			if err := loadLocaleValue(destination.Field(fieldIndex), data, definition.language, subsystem); err != nil {
+				panic(fmt.Errorf("i18n: load %s: %w", path, err))
+			}
 		}
 	}
 	return catalog
+}
+
+func localeFilePath(tag, subsystem string) string {
+	return "locales/" + tag + "/" + subsystem + ".json"
 }
 
 func loadLocaleValue(destination reflect.Value, raw json.RawMessage, language Lang, path string) error {

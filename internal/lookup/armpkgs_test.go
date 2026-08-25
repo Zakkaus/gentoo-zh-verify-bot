@@ -76,21 +76,24 @@ func TestPickMadison(t *testing.T) {
 }
 
 func TestAurArchLabel(t *testing.T) {
-	for _, c := range []struct{ pkgbuild, wantSub string }{
-		{"pkgname=x\narch=('any')\n", "any"},
-		{"arch=('i686' 'x86_64' 'aarch64' 'armv7h')", "aarch64"},
-		{"arch=(x86_64 aarch64)", "aarch64"},
-		{"arch=('armv7h' 'armv6h')", "32"},  // 32-bit ARM only, no aarch64
-		{"arch=('x86_64')", "x86"},          // x86-only
-		{"pkgname=x\nno arch here", "无法解析"}, // missing arch=()
+	messages := i18n.Messages.LookupDistros.Armpkgs
+	for _, c := range []struct{ pkgbuild, want string }{
+		{"pkgname=x\narch=('any')\n", messages.AnyArchitecture.For(i18n.LangZH)},
+		{"arch=('i686' 'x86_64' 'aarch64' 'armv7h')", messages.DeclaresAarch64.For(i18n.LangZH)},
+		{"arch=(x86_64 aarch64)", messages.DeclaresAarch64.For(i18n.LangZH)},
+		{"arch=('armv7h' 'armv6h')", messages.Arm32Only.For(i18n.LangZH)},
+		{"arch=('x86_64')", messages.X86Only.For(i18n.LangZH)},
+		{"pkgname=x\nno arch here", messages.PKGBUILDParseFailed.For(i18n.LangZH)},
 	} {
-		if got := aurArchLabel(i18n.LangZH, c.pkgbuild); !strings.Contains(got, c.wantSub) {
-			t.Errorf("aurArchLabel(%q) = %q, want substring %q", c.pkgbuild, got, c.wantSub)
+		if got := aurArchLabel(i18n.LangZH, c.pkgbuild); got != c.want {
+			t.Errorf("aurArchLabel(%q) = %q, want %q", c.pkgbuild, got, c.want)
 		}
 	}
 }
 
 func TestFedoraArmStatusAvailability(t *testing.T) {
+	messages := i18n.Messages.LookupDistros.Armpkgs
+	const foundVersion = "3.4.1-2.fc44"
 	for _, tc := range []struct {
 		name    string
 		version string
@@ -98,19 +101,19 @@ func TestFedoraArmStatusAvailability(t *testing.T) {
 		want    string
 		notWant string
 	}{
-		{name: "found", version: "3.4.1-2.fc44", want: "rawhide 3.4.1-2.fc44"},
-		{name: "404", err: &httpStatusError{url: "u", code: 404}, want: "不在 Fedora"},
-		{name: "429", err: &httpStatusError{url: "u", code: 429}, want: "查询失败", notWant: "不在 Fedora"},
-		{name: "503", err: &httpStatusError{url: "u", code: 503}, want: "查询失败", notWant: "不在 Fedora"},
-		{name: "network", err: errors.New("connection reset"), want: "查询失败", notWant: "不在 Fedora"},
-		{name: "busy", err: &httpBusyError{url: "u", wait: time.Millisecond}, want: "查询失败", notWant: "不在 Fedora"},
-		{name: "oversized", err: &httpBodyTooLargeError{url: "u", limit: 3}, want: "查询失败", notWant: "不在 Fedora"},
-		{name: "missing version", want: "查询失败", notWant: "不在 Fedora"},
+		{name: "found", version: foundVersion, want: messages.FedoraRawhide.Render(i18n.LangZH, foundVersion)},
+		{name: "404", err: &httpStatusError{url: "u", code: 404}, want: messages.NotInFedora.For(i18n.LangZH)},
+		{name: "429", err: &httpStatusError{url: "u", code: 429}, want: messages.FedoraQueryFailed.For(i18n.LangZH), notWant: messages.NotInFedora.For(i18n.LangZH)},
+		{name: "503", err: &httpStatusError{url: "u", code: 503}, want: messages.FedoraQueryFailed.For(i18n.LangZH), notWant: messages.NotInFedora.For(i18n.LangZH)},
+		{name: "network", err: errors.New("connection reset"), want: messages.FedoraQueryFailed.For(i18n.LangZH), notWant: messages.NotInFedora.For(i18n.LangZH)},
+		{name: "busy", err: &httpBusyError{url: "u", wait: time.Millisecond}, want: messages.FedoraQueryFailed.For(i18n.LangZH), notWant: messages.NotInFedora.For(i18n.LangZH)},
+		{name: "oversized", err: &httpBodyTooLargeError{url: "u", limit: 3}, want: messages.FedoraQueryFailed.For(i18n.LangZH), notWant: messages.NotInFedora.For(i18n.LangZH)},
+		{name: "missing version", want: messages.FedoraQueryFailed.For(i18n.LangZH), notWant: messages.NotInFedora.For(i18n.LangZH)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := fedoraArmStatusWith(context.Background(), i18n.LangZH, "htop", func(context.Context, string) (string, error) { return tc.version, tc.err })
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("fedoraArmStatusWith() = %q, want substring %q", got, tc.want)
+			if got != tc.want {
+				t.Errorf("fedoraArmStatusWith() = %q, want %q", got, tc.want)
 			}
 			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
 				t.Errorf("fedoraArmStatusWith() = %q, unwanted substring %q", got, tc.notWant)
@@ -120,6 +123,8 @@ func TestFedoraArmStatusAvailability(t *testing.T) {
 }
 
 func TestGentooArmStatusAvailability(t *testing.T) {
+	messages := i18n.Messages.LookupDistros.Armpkgs
+	const foundVersion = "3.4.1"
 	for _, tc := range []struct {
 		name      string
 		atoms     []string
@@ -127,14 +132,14 @@ func TestGentooArmStatusAvailability(t *testing.T) {
 		want      string
 		notWant   string
 	}{
-		{name: "search unavailable", want: "查询失败", notWant: "不在官方树"},
-		{name: "answered miss", available: true, want: "不在官方树", notWant: "查询失败"},
-		{name: "found", atoms: []string{"sys-process/htop"}, available: true, want: "稳定 3.4.1"},
+		{name: "search unavailable", want: messages.QueryFailed.For(i18n.LangZH), notWant: messages.NotInOfficialTree.For(i18n.LangZH)},
+		{name: "answered miss", available: true, want: messages.NotInOfficialTree.For(i18n.LangZH), notWant: messages.QueryFailed.For(i18n.LangZH)},
+		{name: "found", atoms: []string{"sys-process/htop"}, available: true, want: messages.StableOnly.Render(i18n.LangZH, foundVersion)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := gentooArmStatusWith(context.Background(), i18n.LangZH, "htop", func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available }, func(context.Context, string) (string, string, bool) { return "3.4.1", "", true })
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("gentooArmStatusWith() = %q, want substring %q", got, tc.want)
+			got, _ := gentooArmStatusWith(context.Background(), i18n.LangZH, "htop", func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available }, func(context.Context, string) (string, string, bool) { return foundVersion, "", true })
+			if got != tc.want {
+				t.Errorf("gentooArmStatusWith() = %q, want %q", got, tc.want)
 			}
 			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
 				t.Errorf("gentooArmStatusWith() = %q, unwanted substring %q", got, tc.notWant)

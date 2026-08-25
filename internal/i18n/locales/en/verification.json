@@ -1,5 +1,4 @@
 {
-  "verification": {
     "challenge": {
       "fallback_intro": "No Linux installed? Then answer this instead:\n\n❓ %[1]s\n\nSend the answer here. %[2]d attempts left.",
       "fallback_questions": [
@@ -56,4 +55,3 @@
       "wrong_retry": "❌ Wrong answer, request declined. You can apply again in %[1]d seconds."
     }
   }
-}

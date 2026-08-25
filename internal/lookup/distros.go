@@ -321,11 +321,11 @@ func gentooDistroLines(stable, latest, url string) []distroLine {
 	return nil
 }
 
-func renderRepologyLookupMiss(_ i18n.Lang, name string, available bool) string {
+func renderRepologyLookupMiss(l i18n.Lang, name string, available bool) string {
 	if !available {
-		return fmt.Sprintf("暂时无法查询 Repology 中「%s」的跨发行版信息，请稍后重试。", name)
+		return i18n.Messages.LookupDistros.Pkgs.RepologyUnavailable.Render(l, name)
 	}
-	return fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name)
+	return i18n.Messages.LookupDistros.Pkgs.RepologyNotFound.Render(l, name)
 }
 
 // OnPkgs handles cross-distribution package version lookups.
@@ -342,7 +342,7 @@ func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/pkgs <包名>,例如 /pkgs firefox。跨发行版查版本(Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / CentOS Stream / openSUSE 等),Debian 等标注稳定/测试通道,RHEL 取自 AlmaLinux/Rocky 重建。")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupDistros.Pkgs.Usage.For(l))
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
@@ -404,25 +404,25 @@ func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if len(lines) == 0 {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("「%s」在 Gentoo / AUR / Arch / Alpine / Debian / Ubuntu / Nix / Fedora / RHEL / CentOS Stream / EPEL / openSUSE 等里都没有打包(可能是某发行版专属)。", proj))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupDistros.Pkgs.NoSupportedDistro.Render(l, proj))
 		return nil
 	}
 
-	head := fmt.Sprintf("📦 <a href=\"%s\">%s</a> 跨发行版版本", esc(repologyVersionsURL(proj)), esc(proj))
+	head := i18n.Messages.LookupDistros.Pkgs.Heading.Render(l, esc(repologyVersionsURL(proj)), esc(proj))
 	if !exact {
-		head += fmt.Sprintf(" <i>(「%s」最接近的匹配)</i>", esc(name))
+		head += i18n.Messages.LookupDistros.Pkgs.ClosestMatch.Render(l, esc(name))
 	}
 	var plain, rich strings.Builder
-	plain.WriteString(head + ":")
+	plain.WriteString(i18n.Messages.LookupDistros.Pkgs.PlainHeading.Render(l, head))
 	rich.WriteString("<h3>" + head + "</h3><ul>")
 	for _, ln := range lines {
 		famLink := fmt.Sprintf("<a href=\"%s\">%s</a>", esc(ln.url), esc(ln.label))
 		rel := ""
 		if ln.rel != "" {
-			rel = fmt.Sprintf(" <i>(%s)</i>", esc(ln.rel))
+			rel = i18n.Messages.LookupDistros.Pkgs.ReleaseRole.Render(l, esc(ln.rel))
 		}
-		fmt.Fprintf(&plain, "\n • <b>%s</b>:%s%s", famLink, esc(displayVer(ln.ver)), rel)
-		fmt.Fprintf(&rich, "<li><b>%s</b>:%s%s</li>", famLink, esc(displayVer(ln.ver)), rel)
+		plain.WriteString(i18n.Messages.LookupDistros.Pkgs.PlainRow.Render(l, famLink, esc(displayVer(ln.ver)), rel))
+		rich.WriteString(i18n.Messages.LookupDistros.Pkgs.RichRow.Render(l, famLink, esc(displayVer(ln.ver)), rel))
 	}
 	rich.WriteString("</ul>")
 	if len(alts) > 0 {
@@ -433,9 +433,9 @@ func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 			}
 			fmt.Fprintf(&al, "<a href=\"%s\">%s</a>", esc(repologyVersionsURL(a)), esc(a))
 		}
-		fmt.Fprintf(&plain, "\n其它匹配:%s", al.String())
+		plain.WriteString(i18n.Messages.LookupDistros.Pkgs.Alternatives.Render(l, al.String()))
 		// Collapse alternatives so the main table stays compact.
-		fmt.Fprintf(&rich, "<details><summary>其它匹配 (%d)</summary>%s</details>", len(alts), al.String())
+		rich.WriteString(i18n.Messages.LookupDistros.Pkgs.RichAlternatives.Render(l, len(alts), al.String()))
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, rich.String(), plain.String())
 	return nil
@@ -449,7 +449,7 @@ func (v *Service) gentooArmStatus(ctx context.Context, l i18n.Lang, name string)
 
 func gentooArmStatusWith(
 	ctx context.Context,
-	_ i18n.Lang,
+	l i18n.Lang,
 	name string,
 	search func(context.Context, string) ([]string, bool),
 	status func(context.Context, string) (string, string, bool),
@@ -457,24 +457,24 @@ func gentooArmStatusWith(
 	searchURL := "https://packages.gentoo.org/packages/search?q=" + neturl.QueryEscape(name)
 	atoms, available := search(ctx, name)
 	if !available {
-		return "⚠️ 查询失败", searchURL
+		return i18n.Messages.LookupDistros.Armpkgs.QueryFailed.For(l), searchURL
 	}
 	if len(atoms) == 0 {
-		return "❌ 不在官方树", searchURL
+		return i18n.Messages.LookupDistros.Armpkgs.NotInOfficialTree.For(l), searchURL
 	}
 	url := "https://packages.gentoo.org/packages/" + atoms[0]
 	stable, testing, ok := status(ctx, atoms[0])
 	switch {
 	case !ok:
-		return "⚠️ 查询失败", url
+		return i18n.Messages.LookupDistros.Armpkgs.QueryFailed.For(l), url
 	case stable != "" && testing != "":
-		return fmt.Sprintf("✅ 稳定 %s · 🧪 ~%s", stable, testing), url
+		return i18n.Messages.LookupDistros.Armpkgs.StableTesting.Render(l, stable, testing), url
 	case stable != "":
-		return "✅ 稳定 " + stable, url
+		return i18n.Messages.LookupDistros.Armpkgs.StableOnly.Render(l, stable), url
 	case testing != "":
-		return "🧪 仅 ~arm64 " + testing, url
+		return i18n.Messages.LookupDistros.Armpkgs.TestingOnly.Render(l, testing), url
 	default:
-		return "❌ 未设置 arm64 keyword", url
+		return i18n.Messages.LookupDistros.Armpkgs.NoArm64Keyword.For(l), url
 	}
 }
 
@@ -519,20 +519,20 @@ func pickMadison(entries []madEntry, devSuite func(string) bool) (suite, ver str
 }
 
 // Development suites are never presented as current releases.
-func madisonArmStatus(ctx context.Context, _ i18n.Lang, madisonURL, pkg string, devSuite func(string) bool) string {
+func madisonArmStatus(ctx context.Context, l i18n.Lang, madisonURL, pkg string, devSuite func(string) bool) string {
 	body, err := httpGetBody(ctx, madisonURL+neturl.QueryEscape(pkg)+"&text=on&a=arm64", 1<<20)
 	if err != nil {
-		return "⚠️ 查询失败"
+		return i18n.Messages.LookupDistros.Armpkgs.QueryFailed.For(l)
 	}
 	entries := parseMadison(string(body))
 	if len(entries) == 0 {
-		return "❌ 无 arm64 包"
+		return i18n.Messages.LookupDistros.Armpkgs.NoArm64Package.For(l)
 	}
 	suite, ver, dev := pickMadison(entries, devSuite)
 	if dev {
-		suite += "(开发版)"
+		suite = i18n.Messages.LookupDistros.Armpkgs.DevelopmentSuite.Render(l, suite)
 	}
-	return fmt.Sprintf("✅ %s %s", suite, displayVer(ver))
+	return i18n.Messages.LookupDistros.Armpkgs.Available.Render(l, suite, displayVer(ver))
 }
 
 // Only an authoritative 404 proves absence; all other failures remain unknown.
@@ -548,41 +548,41 @@ func fedoraArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
 
 func fedoraArmStatusWith(
 	ctx context.Context,
-	_ i18n.Lang,
+	l i18n.Lang,
 	pkg string,
 	fetch func(context.Context, string) (string, error),
 ) string {
 	version, err := fetch(ctx, "https://mdapi.fedoraproject.org/rawhide/pkg/"+neturl.PathEscape(pkg))
 	if err != nil {
 		if httpStatusCode(err) == 404 {
-			return "❌ 不在 Fedora"
+			return i18n.Messages.LookupDistros.Armpkgs.NotInFedora.For(l)
 		}
-		return "⚠️ Fedora 查询失败"
+		return i18n.Messages.LookupDistros.Armpkgs.FedoraQueryFailed.For(l)
 	}
 	if version == "" {
-		return "⚠️ Fedora 查询失败"
+		return i18n.Messages.LookupDistros.Armpkgs.FedoraQueryFailed.For(l)
 	}
-	return "✅ rawhide " + version
+	return i18n.Messages.LookupDistros.Armpkgs.FedoraRawhide.Render(l, version)
 }
 
 var aurArchRe = regexp.MustCompile(`(?i)arch=\(([^)]*)\)`)
 
 // AUR support follows the PKGBUILD arch declaration, not buildability in practice.
-func aurArchLabel(_ i18n.Lang, pkgbuild string) string {
+func aurArchLabel(l i18n.Lang, pkgbuild string) string {
 	m := aurArchRe.FindStringSubmatch(pkgbuild)
 	if m == nil {
-		return "⚠️ 无法解析 PKGBUILD"
+		return i18n.Messages.LookupDistros.Armpkgs.PKGBUILDParseFailed.For(l)
 	}
 	arch := strings.ToLower(m[1])
 	switch {
 	case strings.Contains(arch, "any"):
-		return "✅ any(架构无关)"
+		return i18n.Messages.LookupDistros.Armpkgs.AnyArchitecture.For(l)
 	case strings.Contains(arch, "aarch64"):
-		return "✅ 声明 aarch64"
+		return i18n.Messages.LookupDistros.Armpkgs.DeclaresAarch64.For(l)
 	case strings.Contains(arch, "arm"):
-		return "🟡 仅 32 位 ARM(无 aarch64)"
+		return i18n.Messages.LookupDistros.Armpkgs.Arm32Only.For(l)
 	default:
-		return "❌ 仅 x86(PKGBUILD 未声明 aarch64;源码构建有时仍可)"
+		return i18n.Messages.LookupDistros.Armpkgs.X86Only.For(l)
 	}
 }
 
@@ -591,22 +591,22 @@ func (v *Service) aurArmStatus(ctx context.Context, l i18n.Lang, pkg string) str
 	body, err := httpGetBody(ctx, "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h="+neturl.QueryEscape(pkg), 64<<10)
 	if err != nil {
 		if httpStatusCode(err) == 404 {
-			return "❌ 不在 AUR"
+			return i18n.Messages.LookupDistros.Armpkgs.NotInAUR.For(l)
 		}
-		return "⚠️ AUR 查询失败"
+		return i18n.Messages.LookupDistros.Armpkgs.AURQueryFailed.For(l)
 	}
 	return aurArchLabel(l, string(body))
 }
 
 // Only an Arch Linux ARM 404 proves absence.
-func alarmArmStatus(ctx context.Context, _ i18n.Lang, pkg string) string {
+func alarmArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
 	if _, err := httpGetBody(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), 1<<10); err != nil {
 		if httpStatusCode(err) == 404 {
-			return "❌ 未打包"
+			return i18n.Messages.LookupDistros.Armpkgs.NotPackaged.For(l)
 		}
-		return "⚠️ 查询失败"
+		return i18n.Messages.LookupDistros.Armpkgs.QueryFailed.For(l)
 	}
-	return "✅ 已打包"
+	return i18n.Messages.LookupDistros.Armpkgs.Packaged.For(l)
 }
 
 // OnArmpkgs handles cross-distribution arm64 support lookups.
@@ -623,7 +623,7 @@ func (v *Service) OnArmpkgs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/armpkgs <包名>,例如 /armpkgs htop。查该包在各发行版 arm64 (aarch64) 上的支持(Gentoo / Debian / Ubuntu / Fedora / Arch Linux ARM / AUR)。")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupDistros.Armpkgs.Usage.For(l))
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
@@ -667,11 +667,12 @@ func (v *Service) OnArmpkgs(ctx *th.Context, update telego.Update) error {
 
 	esc := html.EscapeString
 	var b strings.Builder
-	fmt.Fprintf(&b, "🦾 <b>%s</b> · arm64 (aarch64) 跨发行版支持", esc(name))
+	b.WriteString(i18n.Messages.LookupDistros.Armpkgs.Heading.Render(l, esc(name)))
 	for _, r := range results {
-		fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>:%s", esc(r.url), esc(r.label), esc(r.status))
+		b.WriteString(i18n.Messages.LookupDistros.Armpkgs.Row.Render(l, esc(r.url), esc(r.label), esc(r.status)))
 	}
-	b.WriteString("\n<i>Gentoo 未设置 arm64 keyword;其它发行版有包不等于该 ebuild 可用,需自行测试(必要时在 package.accept_keywords 中写 ** 强制)。</i>")
+	b.WriteByte('\n')
+	b.WriteString(i18n.Messages.LookupDistros.Armpkgs.Footer.For(l))
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }
@@ -873,7 +874,7 @@ func debianRelabel(_ i18n.Lang, raw string) string {
 	return raw
 }
 
-func ubuntuRelabel(_ i18n.Lang, raw string) string {
+func ubuntuRelabel(l i18n.Lang, raw string) string {
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
 	out := raw
@@ -881,7 +882,7 @@ func ubuntuRelabel(_ i18n.Lang, raw string) string {
 		out += " LTS"
 	}
 	if relInfo.ubuntuEOL[raw] { // the upstream EOL column marks the end of standard support
-		out += " · 标准支持已结束"
+		out += i18n.Messages.LookupDistros.Release.StandardSupportEnded.For(l)
 	}
 	return out
 }
