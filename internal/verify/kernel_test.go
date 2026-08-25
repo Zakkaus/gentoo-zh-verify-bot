@@ -1,4 +1,4 @@
-package main
+package verify
 
 import (
 	"bytes"
@@ -162,45 +162,45 @@ func TestKernelDistributionContext(t *testing.T) {
 func TestVerifyModeResolution(t *testing.T) {
 	cfg := &config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200, VerifyMode: config.ModeQuiz}}, GroupIDs: []int64{-100, -200},
 		Questions: []config.Question{{Q: "q", Options: []string{"a", "b"}, Answer: 0}}}
-	v := NewVerifier(cfg)
-	if got := v.effectiveMode(-100); got != (config.ModeKernel) {
+	v := newTestService(cfg)
+	if got := v.EffectiveMode(-100); got != (config.ModeKernel) {
 		t.Errorf("default mode = %q, want %q", got, config.ModeKernel)
 	}
-	if got := v.effectiveMode(-200); got != (config.ModeQuiz) {
+	if got := v.EffectiveMode(-200); got != (config.ModeQuiz) {
 		t.Errorf("per-group override = %q, want %q", got, config.ModeQuiz)
 	}
 	cfg.VerifyMode = (config.ModeQuiz)
-	v = NewVerifier(cfg)
-	if got := v.effectiveMode(-100); got != (config.ModeQuiz) {
+	v = newTestService(cfg)
+	if got := v.EffectiveMode(-100); got != (config.ModeQuiz) {
 		t.Errorf("global verify_mode = %q, want %q", got, config.ModeQuiz)
 	}
-	if err := v.setVerifyMode(-200, config.ModeKernel); err != nil {
+	if err := v.SetVerifyMode(-200, config.ModeKernel); err != nil {
 		t.Fatal(err)
 	}
-	if got := v.effectiveMode(-200); got != (config.ModeKernel) {
+	if got := v.EffectiveMode(-200); got != (config.ModeKernel) {
 		t.Errorf("/vmode group override = %q, want %q", got, config.ModeKernel)
 	}
-	if err := v.setVerifyMode(-200, ""); err != nil {
+	if err := v.SetVerifyMode(-200, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := v.effectiveMode(-200); got != (config.ModeQuiz) {
+	if got := v.EffectiveMode(-200); got != (config.ModeQuiz) {
 		t.Errorf("after clearing the override = %q, want %q", got, config.ModeQuiz)
 	}
 }
 
 func TestPickModeQuizWithoutQuestions(t *testing.T) {
-	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMode: config.ModeQuiz})
+	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMode: config.ModeQuiz})
 	if got := v.pickMode(-100); got != (config.ModeKernel) {
 		t.Errorf("quiz mode with no questions should fall back to %q, got %q", config.ModeKernel, got)
 	}
 	mode, text, opts, idx := v.newChallenge(-100, i18n.LangZH)
-	if mode != (config.ModeKernel) || text != kernelQuestion(i18n.LangZH) || opts != nil || idx != -1 {
+	if mode != (config.ModeKernel) || text != kernelQuestion(&i18n.Messages, i18n.LangZH) || opts != nil || idx != -1 {
 		t.Errorf("kernel challenge = (%q, %q, %v, %d), want the kernel question with no options and idx -1", mode, text, opts, idx)
 	}
 }
 
 func TestPickModeMixed(t *testing.T) {
-	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMode: config.ModeMixed,
+	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMode: config.ModeMixed,
 		Questions: []config.Question{{Q: "q", Options: []string{"a", "b"}, Answer: 0}}})
 	oldReader := cryptorand.Reader
 	cryptorand.Reader = bytes.NewReader([]byte{0, 1})
@@ -214,29 +214,29 @@ func TestPickModeMixed(t *testing.T) {
 }
 
 func TestKernelAnswerDMPredicate(t *testing.T) {
-	v := NewVerifier(&config.Config{})
+	v := newTestService(&config.Config{})
 	dm := func(uid int64, text string) telego.Update {
 		return telego.Update{Message: &telego.Message{Chat: telego.Chat{Type: "private", ID: uid},
 			From: &telego.User{ID: uid}, Text: text}}
 	}
-	if v.kernelAnswerDM(context.TODO(), dm(5, "6.12.3")) {
+	if v.KernelAnswerDM(context.TODO(), dm(5, "6.12.3")) {
 		t.Error("no pending: must not capture the message")
 	}
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "n", prompted: true, deadline: time.Now().Add(time.Hour)}
-	if !v.kernelAnswerDM(context.TODO(), dm(5, "6.12.3")) {
+	if !v.KernelAnswerDM(context.TODO(), dm(5, "6.12.3")) {
 		t.Error("a plain DM during a kernel verification must be treated as the answer")
 	}
-	if v.kernelAnswerDM(context.TODO(), dm(5, "/start")) {
+	if v.KernelAnswerDM(context.TODO(), dm(5, "/start")) {
 		t.Error("a command must not be swallowed as an answer")
 	}
-	if v.kernelAnswerDM(context.TODO(), dm(5, "   ")) {
+	if v.KernelAnswerDM(context.TODO(), dm(5, "   ")) {
 		t.Error("an empty message must not count as an answer")
 	}
-	if v.kernelAnswerDM(context.TODO(), dm(6, "6.12.3")) {
+	if v.KernelAnswerDM(context.TODO(), dm(6, "6.12.3")) {
 		t.Error("another user's DM must not match")
 	}
 	v.pend[pkey{-100, 7}] = &pending{mode: config.ModeQuiz, nonce: "n", prompted: true, deadline: time.Now().Add(time.Hour)}
-	if v.kernelAnswerDM(context.TODO(), dm(7, "6.12.3")) {
+	if v.KernelAnswerDM(context.TODO(), dm(7, "6.12.3")) {
 		t.Error("a quiz applicant's DM must fall through to the auto-reply")
 	}
 }
@@ -247,9 +247,9 @@ func noLinuxNow(prefix string) string {
 	return fmt.Sprintf("%s %d", prefix, time.Now().Minute())
 }
 
-// kernelTestV builds a Verifier with one kernel pending for user 5 in group -100.
-func kernelTestV() (*Verifier, *fakeVerifyBot) {
-	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMaxFails: 3})
+// kernelTestV builds a Service with one kernel pending for user 5 in group -100.
+func kernelTestV() (*Service, *fakeVerifyBot) {
+	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMaxFails: 3})
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "n", prompted: true, groupMsgID: 42, deadline: time.Now().Add(time.Hour)}
 	return v, newFakeVerifyBot()
 }
@@ -281,7 +281,7 @@ func TestFinishKernelPassUsesValidatedNonce(t *testing.T) {
 			v, fb := kernelTestV()
 			key := pkey{-100, 5}
 			v.pend[key].nonce = tt.currentNonce
-			v.finishKernelPass(context.Background(), fb, key.gid, key.uid, tt.validatedNonce, i18n.LangZH)
+			v.finishKernelPass(context.Background(), fb, key.gid, key.uid, tt.validatedNonce, i18n.LangZH, i18n.LangZH)
 			if fb.approves != tt.wantApproves {
 				t.Errorf("approves = %d, want %d", fb.approves, tt.wantApproves)
 			}
@@ -390,15 +390,15 @@ func TestGradeKernelAnswerChannelGate(t *testing.T) {
 
 func TestKernelPendingSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
-	seed := NewVerifier(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	seed := newTestService(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
 	seed.statePath = dir + "/pending.json"
 	seed.pend[pkey{-100, 7}] = &pending{mode: config.ModeKernel, tries: 1, nonce: "x", name: "Carol",
-		qText: kernelQuestion(i18n.LangZH), correctIdx: -1, deadline: time.Now().Add(time.Minute), groupMsgID: 5}
+		qText: kernelQuestion(&i18n.Messages, i18n.LangZH), correctIdx: -1, deadline: time.Now().Add(time.Minute), groupMsgID: 5}
 	seed.pend[pkey{-100, 8}] = &pending{mode: config.ModeQuiz, nonce: "y", correctIdx: 0,
 		qOpts: []string{"a", "b"}, deadline: time.Now().Add(time.Minute)}
 	seed.save()
 
-	v := NewVerifier(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	v := newTestService(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
 	v.statePath = dir + "/pending.json"
 	v.load(&fakeVerifyBot{})
 	p, ok := v.pend[pkey{-100, 7}]
@@ -423,7 +423,7 @@ func TestKernelPendingSurvivesRestart(t *testing.T) {
 	if err := os.WriteFile(dir+"/legacy.json", []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	vl := NewVerifier(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	vl := newTestService(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
 	vl.statePath = dir + "/legacy.json"
 	vl.load(&fakeVerifyBot{})
 	lp, ok := vl.pend[pkey{-100, 9}]
@@ -521,7 +521,7 @@ func TestNoLinuxFallback(t *testing.T) {
 }
 
 func TestFallbackAnswerMatching(t *testing.T) {
-	v := NewVerifier(&config.Config{FallbackQuestions: []config.ShortQuestion{{
+	v := newTestService(&config.Config{FallbackQuestions: []config.ShortQuestion{{
 		Q:       "Which package manager?",
 		Answers: []string{"emerge", "Portage"},
 	}}})
@@ -581,26 +581,26 @@ func TestCopiedSampleBounced(t *testing.T) {
 }
 
 func TestKernelPromptLocalised(t *testing.T) {
-	zh := kernelPromptHTML(i18n.LangZH, kernelQuestion(i18n.LangZH), 3, "abc123", true)
+	zh := kernelPromptHTML(&i18n.Messages, i18n.LangZH, kernelQuestion(&i18n.Messages, i18n.LangZH), 3, "abc123", true)
 	if !strings.Contains(zh, "剩余 3 次机会") || !strings.Contains(zh, "AGENT-ABC123") {
 		t.Errorf("zh prompt missing its wording or token: %s", zh)
 	}
-	if !strings.Contains(kernelPromptHTML(i18n.LangZHHant, kernelQuestion(i18n.LangZHHant), 3, "n", true), "剩餘 3 次機會") {
+	if !strings.Contains(kernelPromptHTML(&i18n.Messages, i18n.LangZHHant, kernelQuestion(&i18n.Messages, i18n.LangZHHant), 3, "n", true), "剩餘 3 次機會") {
 		t.Error("zh-hant prompt should use Traditional wording")
 	}
-	en := kernelPromptHTML(i18n.LangEN, kernelQuestion(i18n.LangEN), 2, "n", true)
+	en := kernelPromptHTML(&i18n.Messages, i18n.LangEN, kernelQuestion(&i18n.Messages, i18n.LangEN), 2, "n", true)
 	if !strings.Contains(en, "2 attempts left") || !strings.Contains(en, "uname -r") {
 		t.Errorf("en prompt missing its wording: %s", en)
 	}
 	for _, locale := range i18n.Languages() {
-		prompt := kernelPromptHTML(locale, kernelQuestion(locale), 3, "n", true)
+		prompt := kernelPromptHTML(&i18n.Messages, locale, kernelQuestion(&i18n.Messages, locale), 3, "n", true)
 		if !strings.Contains(prompt, samplePrompt) || strings.Contains(prompt, "7.1.30") {
 			t.Errorf("catalog %q must print only the impossible placeholder: %s", locale, prompt)
 		}
 	}
 	// The collapsed quote is Bot API 7.4; the fallback rendering drops it but must keep every word,
 	// so an old self-hosted API server that rejects the entity still gets a complete question.
-	plain := kernelPromptHTML(i18n.LangZH, kernelQuestion(i18n.LangZH), 3, "abc123", false)
+	plain := kernelPromptHTML(&i18n.Messages, i18n.LangZH, kernelQuestion(&i18n.Messages, i18n.LangZH), 3, "abc123", false)
 	if strings.Contains(plain, "<blockquote") {
 		t.Error("the fallback rendering must not use the blockquote entity")
 	}
@@ -658,15 +658,15 @@ func TestCopiedSampleGuardCoversFallback(t *testing.T) {
 }
 
 func TestUnpromptedDMIsNotAnAnswer(t *testing.T) {
-	v := NewVerifier(&config.Config{})
+	v := newTestService(&config.Config{})
 	dm := telego.Update{Message: &telego.Message{Chat: telego.Chat{Type: "private", ID: 5},
 		From: &telego.User{ID: 5}, Text: "已关注"}}
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "n", deadline: time.Now().Add(time.Hour)}
-	if v.kernelAnswerDM(context.TODO(), dm) {
+	if v.KernelAnswerDM(context.TODO(), dm) {
 		t.Error("a DM must not be graded before the question has been sent")
 	}
 	v.markPrompted(-100, 5)
-	if !v.kernelAnswerDM(context.TODO(), dm) {
+	if !v.KernelAnswerDM(context.TODO(), dm) {
 		t.Error("once the question has been sent, a DM is the answer")
 	}
 }
@@ -692,7 +692,7 @@ func TestOtherOSNotAcceptedAsKernel(t *testing.T) {
 }
 
 func TestTripwireCountsOncePerMessage(t *testing.T) {
-	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
+	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
 	v.pend[pkey{-200, 5}] = &pending{mode: config.ModeKernel, nonce: "bbb", prompted: true, deadline: time.Now().Add(time.Hour)}
 	fb := newFakeVerifyBot()
@@ -839,7 +839,7 @@ func TestRepliesCannotChargeAReplacedPending(t *testing.T) {
 }
 
 func TestReapplyKeepsAttempts(t *testing.T) {
-	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100},
+	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}}, GroupIDs: []int64{-100},
 		TimeoutSeconds: 240, VerifyMode: config.ModeKernel})
 	key := pkey{-100, 5}
 	old := &pending{mode: config.ModeKernel, nonce: "old", prompted: true, tries: 2, hinted: true,
@@ -852,7 +852,7 @@ func TestReapplyKeepsAttempts(t *testing.T) {
 		From: telego.User{ID: 5, FirstName: "Applicant"},
 	}}
 
-	runFakeHandler(t, newAPITestBot(t, bot), v.onJoinRequest, update)
+	runFakeHandler(t, newAPITestBot(t, bot), v.OnJoinRequest, update)
 
 	p := v.pend[key]
 	if p == nil || p == old {
@@ -893,7 +893,7 @@ func TestOSNameWithRealKernelIsClarified(t *testing.T) {
 }
 
 func TestAgentReplyDeclinesEveryPending(t *testing.T) {
-	v := NewVerifier(&config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
+	v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
 	v.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
 	v.pend[pkey{-200, 5}] = &pending{mode: config.ModeKernel, nonce: "bbb", prompted: true, deadline: time.Now().Add(time.Hour)}
 	fb := newFakeVerifyBot()
@@ -922,14 +922,14 @@ func TestAgentReplyDeclinesEveryPending(t *testing.T) {
 
 func TestFreeReplyGuardsSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
-	seed := NewVerifier(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	seed := newTestService(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
 	seed.statePath = dir + "/pending.json"
 	seed.pend[pkey{-100, 5}] = &pending{mode: config.ModeKernel, nonce: "n", prompted: true, tries: 1,
 		hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true,
-		qText: kernelQuestion(i18n.LangZH), correctIdx: -1, deadline: time.Now().Add(time.Minute)}
+		qText: kernelQuestion(&i18n.Messages, i18n.LangZH), correctIdx: -1, deadline: time.Now().Add(time.Minute)}
 	seed.save()
 
-	v := NewVerifier(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
+	v := newTestService(&config.Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
 	v.statePath = dir + "/pending.json"
 	v.load(&fakeVerifyBot{})
 	p, ok := v.pend[pkey{-100, 5}]

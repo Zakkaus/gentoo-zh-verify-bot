@@ -11,10 +11,20 @@ import (
 	"unicode/utf8"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
 )
+
+func TestFeedLanguageResolution(t *testing.T) {
+	if got := feedLanguage("zh-Hant"); got != i18n.LangZHHant {
+		t.Fatalf("feed language = %s, want zh-Hant", got)
+	}
+	if got := feedLanguage(""); got != i18n.LangZH {
+		t.Fatalf("default feed language = %s, want zh", got)
+	}
+}
 
 // TestBugSilent verifies status-aware notifications: UNCONFIRMED bugs post silently (a
 // fresh report may be a false alarm), confirmed bugs notify, and silent_bugs=true forces
@@ -45,15 +55,15 @@ func TestBugSilent(t *testing.T) {
 // sees it (filed + closed within one poll, e.g. RESOLVED/INVALID) must render ✅ (not 🐞) and be
 // posted silently; an open bug keeps 🐞 and the caller's status-aware silence.
 func TestFormatNewBug(t *testing.T) {
-	text, silent := formatNewBug(recentBug{ID: 1, Summary: "x", Status: "CONFIRMED"}, "en", false)
+	text, silent := formatNewBug(recentBug{ID: 1, Summary: "x", Status: "CONFIRMED"}, feedLanguage("en"), false)
 	if !strings.Contains(text, "🐞") || silent {
 		t.Errorf("an open new bug should be 🐞 and not forced silent (silent=%v)", silent)
 	}
-	text, silent = formatNewBug(recentBug{ID: 2, Summary: "x", Status: "RESOLVED", Resolution: "INVALID"}, "en", false)
+	text, silent = formatNewBug(recentBug{ID: 2, Summary: "x", Status: "RESOLVED", Resolution: "INVALID"}, feedLanguage("en"), false)
 	if strings.Contains(text, "🐞") || !strings.Contains(text, "❌") || !silent {
 		t.Errorf("a born-resolved INVALID (误报) bug should be ❌ and silent (silent=%v)", silent)
 	}
-	text, silent = formatNewBug(recentBug{ID: 3, Summary: "x", Status: "RESOLVED", Resolution: "FIXED"}, "en", false)
+	text, silent = formatNewBug(recentBug{ID: 3, Summary: "x", Status: "RESOLVED", Resolution: "FIXED"}, feedLanguage("en"), false)
 	if !strings.Contains(text, "✅") || strings.Contains(text, "🐞") || !silent {
 		t.Errorf("a born-resolved FIXED bug should be ✅ and silent (silent=%v)", silent)
 	}
@@ -102,7 +112,7 @@ func TestNewsCursorMonotonic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &feedState{LastNewsURL: tt.cursor}
 			fake := &fakeFeedBot{}
-			postFeedItems(context.Background(), newAPITestBot(t, fake), feed, state, nil, news)
+			postFeedItems(context.Background(), newAPITestBot(t, fake), feed, feedLanguage((feed).Lang), state, nil, news)
 
 			if state.LastNewsURL != tt.wantCursor {
 				t.Errorf("LastNewsURL = %q, want %q", state.LastNewsURL, tt.wantCursor)
@@ -157,7 +167,7 @@ func TestBugCursorForwardOnly(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &feedState{LastBugID: 100}
 			fake := &fakeFeedBot{}
-			postFeedItems(context.Background(), newAPITestBot(t, fake), feed, state, tt.bugs, nil)
+			postFeedItems(context.Background(), newAPITestBot(t, fake), feed, feedLanguage((feed).Lang), state, tt.bugs, nil)
 
 			if state.LastBugID != tt.wantCursor {
 				t.Errorf("LastBugID = %d, want %d", state.LastBugID, tt.wantCursor)
@@ -212,7 +222,7 @@ func TestBugTracking(t *testing.T) {
 		t.Error("resolved-first eviction: the open bug (100) must survive while a resolved one remains to evict")
 	}
 
-	got := formatBugResolved(recentBug{ID: 7, Summary: "x", Status: "RESOLVED", Resolution: "FIXED"}, "en")
+	got := formatBugResolved(recentBug{ID: 7, Summary: "x", Status: "RESOLVED", Resolution: "FIXED"}, feedLanguage("en"))
 	if !strings.HasPrefix(got, "✅") || strings.Contains(got, "🐞") {
 		t.Errorf("formatBugResolved should render ✅, got prefix %q", got[:12])
 	}
@@ -249,7 +259,7 @@ func TestBugStateKey(t *testing.T) {
 	}
 	// Unchanged state in the refresh batch => skipped before any edit (nil bot is safe only
 	// because no edit is attempted); the bug stays tracked.
-	refreshTracked(context.Background(), nil, &config.FeedConfig{ChatID: -1, Lang: "en"}, &st, map[int]recentBug{200: b}, true)
+	refreshTracked(context.Background(), nil, &config.FeedConfig{ChatID: -1, Lang: "en"}, feedLanguage((&config.FeedConfig{ChatID: -1, Lang: "en"}).Lang), &st, map[int]recentBug{200: b}, true)
 	if st.Tracked["200"] == nil {
 		t.Error("an unchanged bug must stay tracked (no edit, no drop)")
 	}
@@ -268,7 +278,7 @@ func TestCapRunesAndNilTracked(t *testing.T) {
 		t.Errorf("capRunes produced invalid UTF-8: %q", got)
 	}
 	st := &feedState{Tracked: map[string]*trackedBug{"100": nil}}
-	refreshTracked(context.Background(), nil, &config.FeedConfig{ChatID: -1, Lang: "en"}, st, map[int]recentBug{100: {Status: "CONFIRMED"}}, true)
+	refreshTracked(context.Background(), nil, &config.FeedConfig{ChatID: -1, Lang: "en"}, feedLanguage((&config.FeedConfig{ChatID: -1, Lang: "en"}).Lang), st, map[int]recentBug{100: {Status: "CONFIRMED"}}, true)
 	if _, ok := st.Tracked["100"]; ok {
 		t.Error("a nil tracked entry should be dropped (not panic)")
 	}
@@ -394,7 +404,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 		st := track("CONFIRMED|") // non-UNCONFIRMED origin: isolates edit-success without a confirm ping
 		fb := &fakeFeedBot{}
 		b := recentBug{ID: 500, Status: "IN_PROGRESS"}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: b}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{500: b}, true)
 		if fb.edits != 1 {
 			t.Fatalf("want 1 edit, got %d", fb.edits)
 		}
@@ -410,7 +420,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 		st := track("CONFIRMED|")
 		fb := &fakeFeedBot{editErr: errors.New("Bad Request: message is not modified")}
 		b := recentBug{ID: 500, Status: "IN_PROGRESS"}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: b}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{500: b}, true)
 		if tb := st.Tracked["500"]; tb == nil || tb.State != bugStateKey(b) {
 			t.Errorf("not-modified should sync state and keep tracking: %+v", tb)
 		}
@@ -419,7 +429,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 	t.Run("permanent error drops the bug", func(t *testing.T) {
 		st := track("UNCONFIRMED|")
 		fb := &fakeFeedBot{editErr: errors.New("Bad Request: message to edit not found")}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
 		if _, ok := st.Tracked["500"]; ok {
 			t.Error("a permanent edit error should drop the bug from tracking")
 		}
@@ -428,7 +438,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 	t.Run("non-rate-limit transient keeps tracking, old state, and no failure count", func(t *testing.T) {
 		st := track("UNCONFIRMED|")
 		fb := &fakeFeedBot{editErr: errors.New("Bad Gateway")}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
 		tb := st.Tracked["500"]
 		if tb == nil {
 			t.Fatal("a transient edit error must keep the bug tracked for retry")
@@ -444,7 +454,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 	t.Run("unclassified permanent 400 counts one failure", func(t *testing.T) {
 		st := track("UNCONFIRMED|")
 		fb := &fakeFeedBot{editErr: errors.New("Bad Request: can't parse entities")}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
 		tb := st.Tracked["500"]
 		if tb == nil {
 			t.Fatal("an unclassified permanent 400 should be retried up to the failure limit")
@@ -461,7 +471,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 		st := track("CONFIRMED|")
 		fb := &fakeFeedBot{}
 		b := recentBug{ID: 500, Status: "RESOLVED", Resolution: "FIXED"}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: b}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{500: b}, true)
 		if fb.edits != 1 {
 			t.Fatalf("want 1 edit for the resolution, got %d", fb.edits)
 		}
@@ -483,7 +493,7 @@ func TestRefreshTrackedRateLimitStops(t *testing.T) {
 	}}
 	fb := &fakeFeedBot{editErr: errors.New("Too Many Requests: retry after 30")}
 	byID := map[int]recentBug{800: {ID: 800, Status: "IN_PROGRESS"}, 801: {ID: 801, Status: "IN_PROGRESS"}}
-	refreshTracked(context.Background(), fb, f, st, byID, true)
+	refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, byID, true)
 	if fb.edits != 1 {
 		t.Errorf("a 429 must stop the cycle after one attempt, got %d edits", fb.edits)
 	}
@@ -507,7 +517,7 @@ func TestRefreshTrackedEditCap(t *testing.T) {
 		byID[id] = recentBug{ID: id, Status: "IN_PROGRESS"} // all changed (and not a ping transition)
 	}
 	fb := &fakeFeedBot{}
-	refreshTracked(context.Background(), fb, f, st, byID, true)
+	refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, byID, true)
 	if fb.edits != maxEditsPerCycle {
 		t.Errorf("edit cap: want exactly %d edits, got %d", maxEditsPerCycle, fb.edits)
 	}
@@ -522,7 +532,7 @@ func TestRefreshTrackedMissDrop(t *testing.T) {
 	fb := &fakeFeedBot{}
 	other := map[int]recentBug{12345: {ID: 12345, Status: "CONFIRMED"}} // non-empty, but 900 absent
 	for i := 1; i < maxTrackMisses; i++ {
-		refreshTracked(context.Background(), fb, f, st, other, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, other, true)
 		if st.Tracked["900"] == nil {
 			t.Fatalf("dropped too early after %d misses", i)
 		}
@@ -530,7 +540,7 @@ func TestRefreshTrackedMissDrop(t *testing.T) {
 			t.Errorf("after %d cycles Misses=%d, want %d", i, st.Tracked["900"].Misses, i)
 		}
 	}
-	refreshTracked(context.Background(), fb, f, st, other, true) // maxTrackMisses-th miss
+	refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, other, true) // maxTrackMisses-th miss
 	if st.Tracked["900"] != nil {
 		t.Errorf("bug 900 should be dropped after %d consecutive misses", maxTrackMisses)
 	}
@@ -567,7 +577,7 @@ func TestRefreshTrackedEditFailDrop(t *testing.T) {
 			st := &feedState{Tracked: map[string]*trackedBug{"950": {MsgID: 1, State: "CONFIRMED|"}}}
 			fb := &fakeFeedBot{editErr: tt.err}
 			for i := 1; i <= maxEditFails; i++ {
-				refreshTracked(context.Background(), fb, f, st, b, true)
+				refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, b, true)
 				if i < maxEditFails && st.Tracked["950"] == nil {
 					t.Fatalf("dropped too early after %d failures", i)
 				}
@@ -591,7 +601,7 @@ func TestRefreshTrackedReopenReRenders(t *testing.T) {
 	st := &feedState{Tracked: map[string]*trackedBug{"600": {MsgID: 1, State: "RESOLVED|INVALID"}}}
 	fb := &fakeFeedBot{}
 	b := recentBug{ID: 600, Status: "RESOLVED", Resolution: "FIXED"}
-	refreshTracked(context.Background(), fb, f, st, map[int]recentBug{600: b}, true)
+	refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{600: b}, true)
 	if fb.edits != 1 {
 		t.Fatalf("a resolution flip (INVALID->FIXED) must re-edit, got %d edits", fb.edits)
 	}
@@ -630,7 +640,7 @@ func TestRefreshTrackedPartialFetchNoMiss(t *testing.T) {
 	fb := &fakeFeedBot{}
 	other := map[int]recentBug{12345: {ID: 12345, Status: "CONFIRMED"}} // 900 absent
 	for i := 0; i < maxTrackMisses+3; i++ {
-		refreshTracked(context.Background(), fb, f, st, other, false) // fetchOK=false every cycle
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, other, false) // fetchOK=false every cycle
 	}
 	tb := st.Tracked["900"]
 	if tb == nil {
@@ -651,7 +661,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 	t.Run("UNCONFIRMED->CONFIRMED sends one non-silent ping", func(t *testing.T) {
 		st := &feedState{Tracked: map[string]*trackedBug{"700": {MsgID: 9, State: "UNCONFIRMED|"}}}
 		fb := &fakeFeedBot{}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{700: {ID: 700, Status: "CONFIRMED", Summary: "boom"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{700: {ID: 700, Status: "CONFIRMED", Summary: "boom"}}, true)
 		if fb.edits != 1 {
 			t.Fatalf("the in-place edit must still happen, got %d edits", fb.edits)
 		}
@@ -677,7 +687,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 		fs := &config.FeedConfig{ChatID: -100, Lang: "en", SilentBugs: &forced}
 		st := &feedState{Tracked: map[string]*trackedBug{"701": {MsgID: 9, State: "UNCONFIRMED|"}}}
 		fb := &fakeFeedBot{}
-		refreshTracked(context.Background(), fb, fs, st, map[int]recentBug{701: {ID: 701, Status: "CONFIRMED", Summary: "x"}}, true)
+		refreshTracked(context.Background(), fb, fs, feedLanguage((fs).Lang), st, map[int]recentBug{701: {ID: 701, Status: "CONFIRMED", Summary: "x"}}, true)
 		if fb.edits != 1 {
 			t.Fatalf("the edit must still happen under silent_bugs, got %d edits", fb.edits)
 		}
@@ -689,7 +699,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 	t.Run("CONFIRMED->IN_PROGRESS does not ping", func(t *testing.T) {
 		st := &feedState{Tracked: map[string]*trackedBug{"702": {MsgID: 9, State: "CONFIRMED|"}}}
 		fb := &fakeFeedBot{}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{702: {ID: 702, Status: "IN_PROGRESS", Summary: "x"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{702: {ID: 702, Status: "IN_PROGRESS", Summary: "x"}}, true)
 		if fb.edits != 1 {
 			t.Fatalf("want the edit, got %d", fb.edits)
 		}
@@ -701,7 +711,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 	t.Run("UNCONFIRMED->IN_PROGRESS pings (raced past CONFIRMED)", func(t *testing.T) {
 		st := &feedState{Tracked: map[string]*trackedBug{"704": {MsgID: 9, State: "UNCONFIRMED|"}}}
 		fb := &fakeFeedBot{}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{704: {ID: 704, Status: "IN_PROGRESS", Summary: "x"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{704: {ID: 704, Status: "IN_PROGRESS", Summary: "x"}}, true)
 		if fb.edits != 1 || fb.sends != 1 {
 			t.Fatalf("a bug leaving UNCONFIRMED (even straight to IN_PROGRESS) must ping once: edits=%d sends=%d", fb.edits, fb.sends)
 		}
@@ -713,7 +723,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 	t.Run("a failed confirm ping does not advance state (retries next cycle)", func(t *testing.T) {
 		st := &feedState{Tracked: map[string]*trackedBug{"703": {MsgID: 9, State: "UNCONFIRMED|"}}}
 		fb := &fakeFeedBot{sendErr: errors.New("Too Many Requests: retry after 5")}
-		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{703: {ID: 703, Status: "CONFIRMED", Summary: "x"}}, true)
+		refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, map[int]recentBug{703: {ID: 703, Status: "CONFIRMED", Summary: "x"}}, true)
 		if fb.edits != 1 || fb.sends != 1 {
 			t.Fatalf("want 1 edit + 1 attempted ping, got edits=%d sends=%d", fb.edits, fb.sends)
 		}
@@ -734,7 +744,7 @@ func TestRefreshTrackedConfirmRetry(t *testing.T) {
 	// rate-limited confirm send: edit lands, ping 429s -> state stays UNCONFIRMED|, ConfirmTries=1
 	st := &feedState{Tracked: map[string]*trackedBug{"700": {MsgID: 9, State: "UNCONFIRMED|"}}}
 	fb := &fakeFeedBot{sendErr: errors.New("Too Many Requests: retry after 5")}
-	refreshTracked(context.Background(), fb, f, st, b, true)
+	refreshTracked(context.Background(), fb, f, feedLanguage((f).Lang), st, b, true)
 	tb := st.Tracked["700"]
 	if tb == nil || tb.State != "UNCONFIRMED|" {
 		t.Fatalf("a failed confirm ping must NOT advance state (so it retries), got %+v", tb)
@@ -747,7 +757,7 @@ func TestRefreshTrackedConfirmRetry(t *testing.T) {
 	// send-only outage can't pin the bug into an endless re-edit loop.
 	st2 := &feedState{Tracked: map[string]*trackedBug{"700": {MsgID: 9, State: "UNCONFIRMED|", ConfirmTries: maxConfirmTries - 1}}}
 	fb2 := &fakeFeedBot{sendErr: errors.New("Bad Gateway")}
-	refreshTracked(context.Background(), fb2, f, st2, b, true)
+	refreshTracked(context.Background(), fb2, f, feedLanguage((f).Lang), st2, b, true)
 	if tb := st2.Tracked["700"]; tb == nil || tb.State != "CONFIRMED|" {
 		t.Errorf("after maxConfirmTries the ping is abandoned and state advances, got %+v", tb)
 	}
@@ -757,16 +767,16 @@ func TestRefreshTrackedConfirmRetry(t *testing.T) {
 // (localized in zh, raw in en), never always "confirmed", and falls back to the raw status for an
 // unmapped value.
 func TestConfirmNotice(t *testing.T) {
-	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, "en"); !strings.Contains(got, "IN_PROGRESS") {
+	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, feedLanguage("en")); !strings.Contains(got, "IN_PROGRESS") {
 		t.Errorf("en IN_PROGRESS notice should name the status, got %q", got)
 	}
-	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, "zh"); !strings.Contains(got, "处理中") {
+	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, feedLanguage("zh")); !strings.Contains(got, "处理中") {
 		t.Errorf("zh IN_PROGRESS notice should localize the status, got %q", got)
 	}
-	if got := confirmNotice(recentBug{ID: 5, Status: "CONFIRMED"}, "en"); !strings.Contains(got, "CONFIRMED") {
+	if got := confirmNotice(recentBug{ID: 5, Status: "CONFIRMED"}, feedLanguage("en")); !strings.Contains(got, "CONFIRMED") {
 		t.Errorf("en CONFIRMED notice should name the status, got %q", got)
 	}
-	if got := confirmNotice(recentBug{ID: 5, Status: "WEIRD_STATE"}, "en"); !strings.Contains(got, "WEIRD_STATE") {
+	if got := confirmNotice(recentBug{ID: 5, Status: "WEIRD_STATE"}, feedLanguage("en")); !strings.Contains(got, "WEIRD_STATE") {
 		t.Errorf("an unmapped status should fall back to the raw value, got %q", got)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestParseMadison(t *testing.T) {
@@ -82,7 +84,7 @@ func TestAurArchLabel(t *testing.T) {
 		{"arch=('x86_64')", "x86"},          // x86-only
 		{"pkgname=x\nno arch here", "无法解析"}, // missing arch=()
 	} {
-		if got := aurArchLabel(c.pkgbuild); !strings.Contains(got, c.wantSub) {
+		if got := aurArchLabel(i18n.LangZH, c.pkgbuild); !strings.Contains(got, c.wantSub) {
 			t.Errorf("aurArchLabel(%q) = %q, want substring %q", c.pkgbuild, got, c.wantSub)
 		}
 	}
@@ -106,11 +108,7 @@ func TestFedoraArmStatusAvailability(t *testing.T) {
 		{name: "missing version", want: "查询失败", notWant: "不在 Fedora"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := fedoraArmStatusWith(
-				context.Background(),
-				"htop",
-				func(context.Context, string) (string, error) { return tc.version, tc.err },
-			)
+			got := fedoraArmStatusWith(context.Background(), i18n.LangZH, "htop", func(context.Context, string) (string, error) { return tc.version, tc.err })
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("fedoraArmStatusWith() = %q, want substring %q", got, tc.want)
 			}
@@ -134,12 +132,7 @@ func TestGentooArmStatusAvailability(t *testing.T) {
 		{name: "found", atoms: []string{"sys-process/htop"}, available: true, want: "稳定 3.4.1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := gentooArmStatusWith(
-				context.Background(),
-				"htop",
-				func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available },
-				func(context.Context, string) (string, string, bool) { return "3.4.1", "", true },
-			)
+			got, _ := gentooArmStatusWith(context.Background(), i18n.LangZH, "htop", func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available }, func(context.Context, string) (string, string, bool) { return "3.4.1", "", true })
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("gentooArmStatusWith() = %q, want substring %q", got, tc.want)
 			}

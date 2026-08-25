@@ -32,6 +32,16 @@ func ValidMode(mode string) bool {
 	return false
 }
 
+// ValidLanguage reports whether lang is empty or a supported canonical language tag.
+func ValidLanguage(lang string) bool {
+	switch lang {
+	case "", "zh", "zh-Hant", "en":
+		return true
+	default:
+		return false
+	}
+}
+
 // Telegram treats until_date below 30 seconds or above 366 days as permanent.
 const telegramBanMax = 366 * 86400
 
@@ -111,13 +121,15 @@ type GroupConfig struct {
 	VerifyMode string `json:"verify_mode"`
 	// TrustedMemberGroupIDs overrides, disables, or inherits the global bypass list.
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
+	// Lang overrides the global language when non-empty.
+	Lang string `json:"lang"`
 }
 
 // FeedConfig configures one optional Bugzilla and news destination.
 type FeedConfig struct {
 	// ChatID is the channel or group receiving feed posts.
 	ChatID int64 `json:"chat_id"`
-	// Lang selects zh or en bug field labels and defaults to zh.
+	// Lang selects zh, zh-Hant, or en and defaults to zh.
 	Lang string `json:"lang"`
 	// IntervalSeconds is the polling interval with a 300-second default and 60-second minimum.
 	IntervalSeconds int `json:"interval_seconds"`
@@ -161,6 +173,8 @@ type Config struct {
 	GroupID int64 `json:"group_id"`
 	// ControlGroupID limits global commands and zero allows any guarded group.
 	ControlGroupID int64 `json:"control_group_id"`
+	// Lang is the default language for group-facing output and defaults to zh.
+	Lang string `json:"lang"`
 	// RequiredChannelID gates approval on channel membership and zero disables it.
 	RequiredChannelID int64 `json:"required_channel_id"`
 	// ChannelDisplay names the required channel for messages and public links.
@@ -340,13 +354,16 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	for i, q := range c.FallbackQuestions {
 		if strings.TrimSpace(q.Q) == "" || len(q.Answers) == 0 {
-			return nil, fmt.Errorf("fallback_questions %d:需要 q 和至少一个 answers 条目", i)
+			return nil, fmt.Errorf("fallback_questions %d requires q and at least one answers entry", i)
 		}
 		for _, a := range q.Answers {
 			if strings.TrimSpace(a) == "" {
-				return nil, fmt.Errorf("fallback_questions %d: answers 不能包含空字符串", i)
+				return nil, fmt.Errorf("fallback_questions %d: answers must not contain an empty string", i)
 			}
 		}
+	}
+	if !ValidLanguage(c.Lang) {
+		return nil, fmt.Errorf("lang %q is not one of %q, %q, %q", c.Lang, "zh", "zh-Hant", "en")
 	}
 	if c.VerifyMode != "" && !ValidMode(c.VerifyMode) {
 		return nil, fmt.Errorf("verify_mode %q is not one of %q, %q, %q", c.VerifyMode, ModeKernel, ModeQuiz, ModeMixed)
@@ -358,6 +375,9 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		if g.VerifyMode != "" && !ValidMode(g.VerifyMode) {
 			return nil, fmt.Errorf("group %d: verify_mode %q is not one of %q, %q, %q", g.ID, g.VerifyMode, ModeKernel, ModeQuiz, ModeMixed)
+		}
+		if !ValidLanguage(g.Lang) {
+			return nil, fmt.Errorf("group %d: lang %q is not one of %q, %q, %q", g.ID, g.Lang, "zh", "zh-Hant", "en")
 		}
 		// Kernel-only groups need no quiz pool; runtime quiz mode falls back to kernel.
 		if c.VerifyModeFor(g.ID) != ModeKernel && len(c.QuestionsFor(g.ID)) == 0 {
@@ -402,6 +422,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
 		c.Feeds = append(c.Feeds, *c.Feed)
+	}
+	for i := range c.Feeds {
+		if !ValidLanguage(c.Feeds[i].Lang) {
+			return nil, fmt.Errorf("feed %d: lang %q is not one of %q, %q, %q", i, c.Feeds[i].Lang, "zh", "zh-Hant", "en")
+		}
 	}
 	// Duplicate chat IDs share one cursor and would silently drop each other's items.
 	seenFeed := map[int64]bool{}
@@ -450,6 +475,17 @@ func (c *Config) group(id int64) *GroupConfig {
 		}
 	}
 	return nil
+}
+
+// LangForGroup returns the group override, global language, or zh by default.
+func (c *Config) LangForGroup(id int64) string {
+	if g := c.group(id); g != nil && g.Lang != "" {
+		return g.Lang
+	}
+	if c.Lang != "" {
+		return c.Lang
+	}
+	return "zh"
 }
 
 // RequiredChannel returns the effective required-channel ID for a group.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
@@ -177,6 +178,22 @@ func (s *Service) richEnabled() bool {
 	}
 	return s.cfg.RichMessages
 }
+func (s *Service) groupLanguage(groupID int64) i18n.Lang {
+	if s.settings != nil {
+		if group, ok := s.settings.Group(groupID); ok {
+			return i18n.FromStored(group.Lang().Value)
+		}
+	}
+	return i18n.FromStored(s.cfg.LangForGroup(groupID))
+}
+
+func (s *Service) requesterLanguage(msg *telego.Message) i18n.Lang {
+	fallback := i18n.LangEN
+	if s.cfg.IsGroup(msg.Chat.ID) {
+		fallback = s.groupLanguage(msg.Chat.ID)
+	}
+	return i18n.FromRequester(msg.From.LanguageCode, fallback)
+}
 
 // Sliding-window limits apply only to private-chat lookups.
 func (s *Service) queryRateOK(userID int64) bool {
@@ -209,7 +226,7 @@ func (s *Service) queryRateOK(userID int64) bool {
 }
 
 // External lookups are unlimited in guarded groups and rate-limited per user in private chats.
-func (s *Service) queryAllowed(ctx *th.Context, msg *telego.Message) bool {
+func (s *Service) queryAllowed(ctx *th.Context, msg *telego.Message, _ i18n.Lang) bool {
 	if s.cfg.IsGroup(msg.Chat.ID) {
 		return true
 	}

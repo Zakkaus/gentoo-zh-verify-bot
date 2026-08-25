@@ -1,4 +1,4 @@
-package main
+package verify
 
 import (
 	"context"
@@ -20,14 +20,15 @@ import (
 )
 
 // Persist the localized question so recovery renders the same challenge.
-func kernelQuestion(l i18n.Lang) string {
-	return i18n.Messages.Verification.Challenge.KernelQuestion.For(l)
+func kernelQuestion(messages *i18n.Catalog, l i18n.Lang) string {
+	return messages.Verification.Challenge.KernelQuestion.For(l)
 }
 
 // Three replies tolerate typos while bounding DM guess floods.
 const kernelMaxTries = 3
 
-func modeName(mode string) string {
+// ModeName returns the operator-facing label for a challenge mode.
+func ModeName(_ i18n.Lang, mode string) string {
 	switch mode {
 	case config.ModeKernel:
 		return "内核版本(需手动输入)"
@@ -194,7 +195,8 @@ func benignKernelContext(before, after, distribution string) bool {
 // kernelUnameTailRe matches the `#<build>` field that follows the release in `uname -a` output.
 var kernelUnameTailRe = regexp.MustCompile(`^\s*#\d+`)
 
-func (v *Verifier) setVerifyMode(groupID int64, mode string) error {
+// SetVerifyMode updates one group's challenge mode or restores its configured baseline.
+func (v *Service) SetVerifyMode(groupID int64, mode string) error {
 	return v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
 		if mode == "" {
 			overrides.VerifyMode = nil
@@ -204,14 +206,15 @@ func (v *Verifier) setVerifyMode(groupID int64, mode string) error {
 	})
 }
 
-func (v *Verifier) effectiveMode(groupID int64) string {
+// EffectiveMode returns one group's current challenge mode.
+func (v *Service) EffectiveMode(groupID int64) string {
 	if group, ok := v.groupSettings(groupID); ok {
 		return group.VerifyMode().Value
 	}
 	return v.fallbackGroupSettings(groupID).VerifyMode.Value
 }
 
-func (v *Verifier) questions(groupID int64) []config.Question {
+func (v *Service) questions(groupID int64) []config.Question {
 	if group, ok := v.groupSettings(groupID); ok {
 		return group.Questions().Value
 	}
@@ -219,8 +222,8 @@ func (v *Verifier) questions(groupID int64) []config.Question {
 }
 
 // Mixed mode uses a cryptographic coin flip; an empty quiz pool falls back to kernel.
-func (v *Verifier) pickMode(gid int64) string {
-	mode := v.effectiveMode(gid)
+func (v *Service) pickMode(gid int64) string {
+	mode := v.EffectiveMode(gid)
 	if mode == (config.ModeMixed) {
 		mode = (config.ModeQuiz)
 		if cryptoIntn(2) == 0 {
@@ -234,21 +237,21 @@ func (v *Verifier) pickMode(gid int64) string {
 }
 
 // Kernel challenges have no options and use correctIdx -1.
-func (v *Verifier) newChallenge(gid int64, ul i18n.Lang) (mode, text string, opts []string, correctIdx int) {
+func (v *Service) newChallenge(gid int64, ul i18n.Lang) (mode, text string, opts []string, correctIdx int) {
 	mode = v.pickMode(gid)
 	if mode == (config.ModeKernel) {
-		return mode, kernelQuestion(ul), nil, -1
+		return mode, kernelQuestion(v.messages, ul), nil, -1
 	}
 	text, opts, correctIdx = shuffledQuestion(randomQuestion(v.questions(gid)))
 	return mode, text, opts, correctIdx
 }
 
 // Render both expandable and legacy-compatible versions of the localized DM prompt.
-func kernelPromptHTML(l i18n.Lang, question string, left int, nonce string, expandable bool) string {
+func kernelPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, left int, nonce string, expandable bool) string {
 	if left < 1 {
 		left = 1 // a live pending always has at least one reply left; never advertise zero
 	}
-	prompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(l, html.EscapeString(question), left)
+	prompt := messages.Verification.Challenge.KernelPrompt.Render(l, html.EscapeString(question), left)
 	return prompt + "\n\n" + aiTrapLine(nonce, expandable)
 }
 
@@ -300,7 +303,7 @@ func copiedSample(text string) bool {
 }
 
 // Operator fallback questions override the localized built-in questions.
-func (v *Verifier) fallbackQuestion(groupID int64, l i18n.Lang) (string, []string) {
+func (v *Service) fallbackQuestion(groupID int64, l i18n.Lang) (string, []string) {
 	var questions []config.ShortQuestion
 	if group, ok := v.groupSettings(groupID); ok {
 		if !group.FallbackBuiltin().Value {
@@ -316,7 +319,7 @@ func (v *Verifier) fallbackQuestion(groupID int64, l i18n.Lang) (string, []strin
 		question := questions[cryptoIntn(len(questions))]
 		return question.Q, question.Answers
 	}
-	builtin := i18n.Messages.Verification.Challenge.FallbackQuestions
+	builtin := v.messages.Verification.Challenge.FallbackQuestions
 	return builtin[cryptoIntn(len(builtin))].For(l)
 }
 
@@ -438,16 +441,16 @@ func saysNoLinux(text string) bool {
 }
 
 // The fallback carries the same agent tripwire as the kernel prompt.
-func fallbackPromptHTML(l i18n.Lang, question string, left int, nonce string, expandable bool) string {
+func fallbackPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, left int, nonce string, expandable bool) string {
 	if left < 1 {
 		left = 1
 	}
-	prompt := i18n.Messages.Verification.Challenge.FallbackIntro.Render(l, html.EscapeString(question), left)
+	prompt := messages.Verification.Challenge.FallbackIntro.Render(l, html.EscapeString(question), left)
 	return prompt + "\n\n" + aiTrapLine(nonce, expandable)
 }
 
 // Route DMs only after the kernel question was delivered.
-func (v *Verifier) hasKernelPending(uid int64) bool {
+func (v *Service) hasKernelPending(uid int64) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
@@ -460,7 +463,7 @@ func (v *Verifier) hasKernelPending(uid int64) bool {
 }
 
 // One DM answer settles all simultaneously pending groups.
-func (v *Verifier) kernelPendingGroups(uid int64) []int64 {
+func (v *Service) kernelPendingGroups(uid int64) []int64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	var gids []int64
@@ -472,8 +475,8 @@ func (v *Verifier) kernelPendingGroups(uid int64) []int64 {
 	return gids
 }
 
-// Commands and non-text DMs must remain available during kernel verification.
-func (v *Verifier) kernelAnswerDM(_ context.Context, update telego.Update) bool {
+// KernelAnswerDM reports whether a private text message should be graded as a kernel answer.
+func (v *Service) KernelAnswerDM(_ context.Context, update telego.Update) bool {
 	m := update.Message
 	if m == nil || m.From == nil || m.Chat.Type != "private" {
 		return false
@@ -484,8 +487,8 @@ func (v *Verifier) kernelAnswerDM(_ context.Context, update telego.Update) bool 
 	return v.hasKernelPending(m.From.ID)
 }
 
-// Grade the typed answer against every live kernel challenge.
-func (v *Verifier) onKernelAnswer(ctx *th.Context, update telego.Update) error {
+// OnKernelAnswer grades one private kernel or fallback answer.
+func (v *Service) OnKernelAnswer(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil {
 		return nil
@@ -511,7 +514,7 @@ func (v *Verifier) onKernelAnswer(ctx *th.Context, update telego.Update) error {
 }
 
 // A nonce-derived tripwire can match at most one pending.
-func (v *Verifier) trippedPending(uid int64, text string) (gid int64, nonce string, ok bool) {
+func (v *Service) trippedPending(uid int64, text string) (gid int64, nonce string, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
@@ -523,12 +526,12 @@ func (v *Verifier) trippedPending(uid int64, text string) (gid int64, nonce stri
 }
 
 // Decline every affected group, but tally the one reply only once.
-func (v *Verifier) declineAgent(c context.Context, bot modBot, gid, uid int64, nonce, text string) {
+func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, nonce, text string) {
 	ul, cur, _, ok := v.kernelPendingInfo(gid, uid)
 	if !ok {
 		return
 	}
-	result := &i18n.Messages.Verification.Result
+	result := &v.messages.Verification.Result
 	if nonce != "" {
 		model, total := v.recordAgent(text)
 		log.Printf("verify: automated-agent tripwire triggered by %d in %d (model %q, %d total) — declining", uid, gid, model, total)
@@ -545,12 +548,13 @@ func (v *Verifier) declineAgent(c context.Context, bot modBot, gid, uid int64, n
 }
 
 // A plausible version passes after the channel gate; the final failed reply declines.
-func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int64, text string) {
+func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int64, text string) {
 	ul, nonce, fbAnswers, ok := v.kernelPendingInfo(gid, uid)
 	if !ok {
 		return // handled or replaced meanwhile
 	}
-	challenge := &i18n.Messages.Verification.Challenge
+	groupLang := v.groupLanguage(gid)
+	challenge := &v.messages.Verification.Challenge
 	// Tripwire compliance declines immediately and counts as a normal failed verification.
 	if aiTrapped(text, nonce) {
 		v.declineAgent(c, bot, gid, uid, nonce, text)
@@ -565,7 +569,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 	// Fallback answers are authoritative, but a real kernel remains acceptable.
 	if len(fbAnswers) > 0 {
 		if fallbackAnswerOK(text, fbAnswers) || (kernelAnswerOK(text) && !mentionsOtherOS(text)) {
-			v.finishKernelPass(c, bot, gid, uid, nonce, ul)
+			v.finishKernelPass(c, bot, gid, uid, nonce, ul, groupLang)
 			return
 		}
 		left, curNonce, ok := v.recordKernelTry(gid, uid, nonce)
@@ -605,8 +609,8 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 				if v.setKernelFallback(gid, uid, nonce, qText, answers) {
 					v.save()
 					v.sendVerifyDM(c, bot, uid,
-						fallbackPromptHTML(ul, qText, left, nonce, true),
-						fallbackPromptHTML(ul, qText, left, nonce, false))
+						fallbackPromptHTML(v.messages, ul, qText, left, nonce, true),
+						fallbackPromptHTML(v.messages, ul, qText, left, nonce, false))
 					return
 				}
 			}
@@ -624,14 +628,14 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(gid, ul, banned)))
 		return
 	}
-	v.finishKernelPass(c, bot, gid, uid, nonce, ul)
+	v.finishKernelPass(c, bot, gid, uid, nonce, ul, groupLang)
 }
 
 // Nonce-bind approval across the channel lookup so a stale answer cannot settle a replacement.
-func (v *Verifier) finishKernelPass(c context.Context, bot modBot, gid, uid int64, nonce string, ul i18n.Lang) {
-	channel := &i18n.Messages.Verification.Channel
-	result := &i18n.Messages.Verification.Result
-	if !v.isChannelMember(c, bot, gid, uid) {
+func (v *Service) finishKernelPass(c context.Context, bot modBot, gid, uid int64, nonce string, ul, groupLang i18n.Lang) {
+	channel := &v.messages.Verification.Channel
+	result := &v.messages.Verification.Result
+	if !v.isChannelMember(c, bot, gid, uid, groupLang) {
 		message := channel.First.Render(ul, v.channelLinkHTML(gid, ul))
 		_, _ = bot.SendMessage(c, htmlMessage(uid, message))
 		return
@@ -645,7 +649,7 @@ func (v *Verifier) finishKernelPass(c context.Context, bot modBot, gid, uid int6
 }
 
 // Return only live pending data needed for grading.
-func (v *Verifier) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string, fbAnswers []string, ok bool) {
+func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string, fbAnswers []string, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, exists := v.pend[pkey{gid, uid}]
@@ -655,7 +659,7 @@ func (v *Verifier) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string
 	return p.lang, p.nonce, p.fbAnswers, true
 }
 
-func (v *Verifier) kernelTriesUsed(gid, uid int64) int {
+func (v *Service) kernelTriesUsed(gid, uid int64) int {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if p, ok := v.pend[pkey{gid, uid}]; ok {
@@ -665,7 +669,7 @@ func (v *Verifier) kernelTriesUsed(gid, uid int64) int {
 }
 
 // Persist the selected fallback question for subsequent prompts and grading.
-func (v *Verifier) setKernelFallback(gid, uid int64, nonce, question string, answers []string) bool {
+func (v *Service) setKernelFallback(gid, uid int64, nonce, question string, answers []string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
@@ -678,7 +682,7 @@ func (v *Verifier) setKernelFallback(gid, uid int64, nonce, question string, ans
 }
 
 // A malformed no-Linux declaration receives only one free reminder.
-func (v *Verifier) markNoLinuxReminded(gid, uid int64, nonce string) bool {
+func (v *Service) markNoLinuxReminded(gid, uid int64, nonce string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
@@ -690,7 +694,7 @@ func (v *Verifier) markNoLinuxReminded(gid, uid int64, nonce string) bool {
 }
 
 // Clarify a mixed OS/kernel reply once rather than looping a valid WSL user toward a ban.
-func (v *Verifier) markOSClarified(gid, uid int64, nonce string) bool {
+func (v *Service) markOSClarified(gid, uid int64, nonce string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
@@ -702,7 +706,7 @@ func (v *Verifier) markOSClarified(gid, uid int64, nonce string) bool {
 }
 
 // The copied-example nudge is free only once.
-func (v *Verifier) markSampleBounced(gid, uid int64, nonce string) bool {
+func (v *Service) markSampleBounced(gid, uid int64, nonce string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
@@ -714,7 +718,7 @@ func (v *Verifier) markSampleBounced(gid, uid int64, nonce string) bool {
 }
 
 // Offer the no-Linux fallback only once per pending.
-func (v *Verifier) markKernelHinted(gid, uid int64, nonce string) bool {
+func (v *Service) markKernelHinted(gid, uid int64, nonce string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, exists := v.pend[pkey{gid, uid}]
@@ -726,7 +730,7 @@ func (v *Verifier) markKernelHinted(gid, uid int64, nonce string) bool {
 }
 
 // Return the nonce charged with the failed reply so decline cannot claim a replacement.
-func (v *Verifier) recordKernelTry(gid, uid int64, want string) (left int, nonce string, ok bool) {
+func (v *Service) recordKernelTry(gid, uid int64, want string) (left int, nonce string, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, exists := v.pend[pkey{gid, uid}]

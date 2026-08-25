@@ -9,7 +9,37 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/mymmrac/telego"
 )
+
+func TestRequesterLanguageFallbackChain(t *testing.T) {
+	const groupID int64 = -100
+	service := New(nil, nil, &config.Config{
+		Groups:   []config.GroupConfig{{ID: groupID, Lang: "zh-Hant"}},
+		GroupIDs: []int64{groupID},
+	}, "")
+	tests := []struct {
+		name     string
+		chat     telego.Chat
+		code     string
+		expected i18n.Lang
+	}{
+		{name: "requester overrides group", chat: telego.Chat{ID: groupID, Type: "supergroup"}, code: "en", expected: i18n.LangEN},
+		{name: "supported Chinese overrides group", chat: telego.Chat{ID: groupID, Type: "supergroup"}, code: "zh-CN", expected: i18n.LangZH},
+		{name: "unsupported falls back to group", chat: telego.Chat{ID: groupID, Type: "supergroup"}, code: "fr", expected: i18n.LangZHHant},
+		{name: "missing falls back to group", chat: telego.Chat{ID: groupID, Type: "supergroup"}, expected: i18n.LangZHHant},
+		{name: "unsupported DM falls back to English", chat: telego.Chat{ID: 7, Type: "private"}, code: "fr", expected: i18n.LangEN},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			msg := &telego.Message{Chat: test.chat, From: &telego.User{ID: 7, LanguageCode: test.code}}
+			if got := service.requesterLanguage(msg); got != test.expected {
+				t.Fatalf("requester language = %s, want %s", got, test.expected)
+			}
+		})
+	}
+}
 
 func TestHTTPStatusCode(t *testing.T) {
 	if got := httpStatusCode(&httpStatusError{url: "u", code: 404}); got != 404 {

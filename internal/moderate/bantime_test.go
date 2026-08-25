@@ -1,6 +1,10 @@
 package moderate
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+)
 
 func TestParseBanDuration(t *testing.T) {
 	valid := map[string]int{"0": 0, "perm": 0, "permanent": 0, "永久": 0, "30s": 30, "30m": 1800, "2h": 7200, "7d": 604800, "3600": 3600}
@@ -28,7 +32,7 @@ func TestParseBanDuration(t *testing.T) {
 
 func TestBanDurationText(t *testing.T) {
 	for seconds, want := range map[int]string{0: "永久", -1: "永久", 604800: "7 天", 43200: "12 小时", 1800: "30 分钟", 90: "90 秒"} {
-		if got := banDurationText(seconds); got != want {
+		if got := banDurationText(i18n.LangZH, seconds); got != want {
 			t.Errorf("banDurationText(%d) = %q, want %q", seconds, got, want)
 		}
 	}

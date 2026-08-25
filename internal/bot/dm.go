@@ -1,13 +1,24 @@
-package main
+package bot
 
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
+
+type dmHandler struct {
+	cfg      *config.Config
+	telegram *tg.Client
+	mu       sync.Mutex
+	last     map[int64]time.Time
+}
 
 // Per-user throttling prevents DMs from amplifying into Telegram send floods.
 const dmReplyCooldown = 30 * time.Second
@@ -43,22 +54,27 @@ func privateNonStart(_ context.Context, update telego.Update) bool {
 	return true
 }
 
-func (v *Verifier) onPrivateDM(ctx *th.Context, update telego.Update) error {
+func (v *dmHandler) privateReply(_ i18n.Lang) string {
+	return v.cfg.PrivateReply
+}
+
+func (v *dmHandler) onPrivateDM(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil {
 		return nil
 	}
 	v.mu.Lock()
-	if last, ok := v.dmLast[msg.From.ID]; ok && time.Since(last) < dmReplyCooldown {
+	if last, ok := v.last[msg.From.ID]; ok && time.Since(last) < dmReplyCooldown {
 		v.mu.Unlock()
 		return nil // within cooldown: stay silent rather than reply to every flooded message
 	}
-	if len(v.dmLast) >= dmMapMax {
-		v.dmLast = map[int64]time.Time{}
+	if len(v.last) >= dmMapMax {
+		v.last = map[int64]time.Time{}
 	}
-	v.dmLast[msg.From.ID] = time.Now()
+	v.last[msg.From.ID] = time.Now()
 	v.mu.Unlock()
 	// Invalid admin-supplied HTML falls back to plain text.
-	v.telegram(ctx.Bot()).SendPrivateHTMLFallback(ctx.Context(), msg.Chat.ID, v.cfg.PrivateReply)
+	l := i18n.FromTelegram(msg.From.LanguageCode)
+	v.telegram.SendPrivateHTMLFallback(ctx.Context(), msg.Chat.ID, v.privateReply(l))
 	return nil
 }

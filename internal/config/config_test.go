@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // writeConfig writes a temp config.json and returns its path (cleaned up by t).
@@ -102,6 +103,63 @@ func TestLoadConfigValidation(t *testing.T) {
 		"questions": sampleQ,
 	})); err == nil {
 		t.Errorf("expected error for an unknown per-group verify_mode")
+	}
+}
+func TestLoadConfigLanguages(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{
+			"group_ids":   []int{-100},
+			"verify_mode": ModeKernel,
+		}
+	}
+
+	defaultConfig, err := LoadConfig(writeConfig(t, base()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultConfig.LangForGroup(-100) != "zh" {
+		t.Fatalf("default language = %q, want zh", defaultConfig.LangForGroup(-100))
+	}
+
+	configured := base()
+	configured["lang"] = "en"
+	configured["groups"] = []map[string]any{{"id": -100, "lang": "zh-Hant"}, {"id": -200}}
+	configured["group_ids"] = nil
+	configured["feeds"] = []map[string]any{{"chat_id": -300, "lang": "zh-Hant"}}
+	loaded, err := LoadConfig(writeConfig(t, configured))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LangForGroup(-100) != "zh-Hant" || loaded.LangForGroup(-200) != "en" {
+		t.Fatalf("group languages = %q, %q", loaded.LangForGroup(-100), loaded.LangForGroup(-200))
+	}
+	if loaded.Feeds[0].Lang != "zh-Hant" {
+		t.Fatalf("feed language = %q, want zh-Hant", loaded.Feeds[0].Lang)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"global": func(value map[string]any) { value["lang"] = "fr" },
+		"group": func(value map[string]any) {
+			value["groups"] = []map[string]any{{"id": -100, "lang": "zh-hant"}}
+			value["group_ids"] = nil
+		},
+		"feed": func(value map[string]any) {
+			value["feeds"] = []map[string]any{{"chat_id": -300, "lang": "de"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := base()
+			mutate(value)
+			if _, err := LoadConfig(writeConfig(t, value)); err == nil {
+				t.Fatal("unsupported language was accepted")
+			} else {
+				for _, r := range err.Error() {
+					if unicode.Is(unicode.Han, r) {
+						t.Fatalf("config error contains Han text: %q", err)
+					}
+				}
+			}
+		})
 	}
 }
 

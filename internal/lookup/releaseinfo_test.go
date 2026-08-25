@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestEnsureReleaseInfoEmptyDoesNotOverwrite(t *testing.T) {
@@ -146,7 +148,7 @@ func TestUbuntuRelabelStandardSupportEnd(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
-			if got := ubuntuRelabel(tt.raw); got != tt.want {
+			if got := ubuntuRelabel(i18n.LangZH, tt.raw); got != tt.want {
 				t.Errorf("ubuntuRelabel(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
@@ -417,18 +418,21 @@ func flattenAtoms(s string) string {
 	}
 	return out
 }
+func feedLanguage(tag string) i18n.Lang {
+	return i18n.FromStored(tag)
+}
 
 // formatBug renders a Bugzilla bug for the feed behind the default open marker (🐞).
-func formatBug(b recentBug, lang string) string {
-	return formatBugMarked(b, lang, "🐞")
+func formatBug(b recentBug, l i18n.Lang) string {
+	return formatBugMarked(b, l, "🐞")
 }
 
 // formatBugMarked renders a Bugzilla bug for the feed behind the given leading marker (🐞 open,
 // ✅/❌ resolved — passed in rather than string-replaced, so a 🐞 inside a summary can't be hit and
-// the marker can't depend on byte ordering). lang "en" uses English field labels, otherwise (default)
-// Chinese. Optional fields appear only when present, so simple bugs stay short and rich ones rich.
-func formatBugMarked(b recentBug, lang, marker string) string {
-	en := strings.EqualFold(lang, "en")
+// English uses English field labels; other locales retain the existing Simplified Chinese copy
+// until the feed catalogue migration.
+func formatBugMarked(b recentBug, l i18n.Lang, marker string) string {
+	en := l == i18n.LangEN
 	sep := "："
 	if en {
 		sep = ": "
@@ -450,10 +454,9 @@ func formatBugMarked(b recentBug, lang, marker string) string {
 		}
 	}
 
-	zh := !en // zh feed: translate the enum values too (en feed keeps them English)
-	status := lookup.TranslateBugValue(b.Status, zh)
+	status := lookup.TranslateBugValue(l, b.Status)
 	if b.Resolution != "" {
-		status += " / " + lookup.TranslateBugValue(b.Resolution, zh)
+		status += " / " + lookup.TranslateBugValue(l, b.Resolution)
 	}
 	line(pick("状态", "Status"), status)
 
@@ -462,8 +465,8 @@ func formatBugMarked(b recentBug, lang, marker string) string {
 		comp += " › " + b.Component
 	}
 	line(pick("组件", "Component"), comp)
-	line(pick("优先级", "Priority"), lookup.TranslateBugValue(b.Priority, zh))
-	line(pick("严重性", "Severity"), lookup.TranslateBugValue(b.Severity, zh))
+	line(pick("优先级", "Priority"), lookup.TranslateBugValue(l, b.Priority))
+	line(pick("严重性", "Severity"), lookup.TranslateBugValue(l, b.Severity))
 	if len(b.Keywords) > 0 {
 		line(pick("关键词", "Keywords"), capRunes(strings.Join(b.Keywords, ", "), 400))
 	}
@@ -496,8 +499,8 @@ func resolvedMark(b recentBug) string {
 // formatBugResolved re-renders a now-closed bug for the edited message: the status line shows the
 // resolution, and the leading marker is ✅ (FIXED) or ❌ (closed without a fix) so the outcome is
 // obvious at a glance.
-func formatBugResolved(b recentBug, lang string) string {
-	return formatBugMarked(b, lang, resolvedMark(b))
+func formatBugResolved(b recentBug, l i18n.Lang) string {
+	return formatBugMarked(b, l, resolvedMark(b))
 }
 
 // formatNewBug renders a freshly-seen bug for the feed and whether to post it silently. A bug that
@@ -505,11 +508,11 @@ func formatBugResolved(b recentBug, lang string) string {
 // resolved INVALID) gets the resolved marker (✅ fixed / ❌ not), not 🐞, and is posted silently: it
 // is not an actionable new open bug, so it shouldn't look open or ping. An open bug keeps 🐞 and the
 // status-aware silence.
-func formatNewBug(b recentBug, lang string, baseSilent bool) (text string, silent bool) {
+func formatNewBug(b recentBug, l i18n.Lang, baseSilent bool) (text string, silent bool) {
 	if bugResolved(b) {
-		return formatBugResolved(b, lang), true
+		return formatBugResolved(b, l), true
 	}
-	return formatBug(b, lang), baseSilent
+	return formatBug(b, l), baseSilent
 }
 
 // refreshTracked edits the feed message of any tracked bug whose displayed state changed since it
@@ -522,7 +525,7 @@ func formatNewBug(b recentBug, lang string, baseSilent bool) (text string, silen
 // refetch for maxTrackMisses cycles, repeatedly receives a deterministic Telegram 400, or gets a
 // known permanent edit error is dropped so it cannot wedge a tracking slot. Transport, context,
 // and 5xx failures never age tracking out.
-func refreshTracked(ctx context.Context, bot feedBot, f *config.FeedConfig, st *feedState, byID map[int]recentBug, fetchOK bool) {
+func refreshTracked(ctx context.Context, bot feedBot, f *config.FeedConfig, l i18n.Lang, st *feedState, byID map[int]recentBug, fetchOK bool) {
 	edits := 0
 refresh:
 	for idStr, tb := range st.Tracked {
@@ -555,9 +558,9 @@ refresh:
 			break // backlog cap — the rest keep their old state and are picked up next cycle
 		}
 		wasUnconfirmed := strings.EqualFold(statusOf(tb.State), "UNCONFIRMED")
-		text := formatBug(b, f.Lang)
+		text := formatBug(b, l)
 		if bugResolved(b) {
-			text = formatBugResolved(b, f.Lang) // 🐞 -> ✅/❌
+			text = formatBugResolved(b, l) // 🐞 -> ✅/❌
 		}
 		edit := tg.HTMLMessage(f.ChatID, text)
 		opCtx, cancel := context.WithTimeout(ctx, feedTelegramTimeout)
@@ -578,7 +581,7 @@ refresh:
 				// owe the non-silent notice the silent original never gave. The edit already landed;
 				// retry the ping over a bounded number of cycles, then give up (best-effort) and advance
 				// state — so an edits-work-but-sends-fail outage can't pin this bug into an endless loop.
-				if _, ok, rl, _ := postFeed(ctx, bot, f.ChatID, confirmNotice(b, f.Lang), false, tb.MsgID); ok {
+				if _, ok, rl, _ := postFeed(ctx, bot, f.ChatID, confirmNotice(b, l), false, tb.MsgID); ok {
 					tb.ConfirmTries = 0
 					tb.State = cur
 				} else {
@@ -619,7 +622,7 @@ refresh:
 	}
 }
 
-func formatNews(n lookup.NewsItem) string {
+func formatNews(_ i18n.Lang, n lookup.NewsItem) string {
 	const prefix = "📰 "
 	label := n.Date + " — " + html.UnescapeString(n.Title)
 	label = tg.CapText(label, tg.MessageLimit-tg.TextUnits(prefix))
@@ -632,8 +635,8 @@ func formatNews(n lookup.NewsItem) string {
 // names the bug's ACTUAL new status (CONFIRMED, IN_PROGRESS, …), localized by lookup.TranslateBugValue, rather than
 // always "confirmed", since the trigger is any move out of UNCONFIRMED. 🔔 (not ✅, which marks
 // resolution) signals a live status update; rendered in the feed's own language.
-func confirmNotice(b recentBug, lang string) string {
-	status := lookup.TranslateBugValue(b.Status, !strings.EqualFold(lang, "en")) // Chinese label unless lang is en
+func confirmNotice(b recentBug, l i18n.Lang) string {
+	status := lookup.TranslateBugValue(l, b.Status)
 	return fmt.Sprintf("🔔 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a> → %s\n%s",
 		b.ID, b.ID, html.EscapeString(status), html.EscapeString(capRunes(b.Summary, 600)))
 }
@@ -667,7 +670,7 @@ func feedStatePath(dir string, chatID int64) string {
 }
 
 // postFeedItems posts the bugs/news that are new to this feed (filtered, localized, deduped).
-func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *feedState, bugs []recentBug, news []lookup.NewsItem) {
+func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, l i18n.Lang, st *feedState, bugs []recentBug, news []lookup.NewsItem) {
 	if f.BugsOn() && len(bugs) > 0 {
 		if st.LastBugID == 0 {
 			latest := bugs[0].ID
@@ -693,7 +696,7 @@ func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *f
 					processed++
 					continue
 				}
-				text, silent := formatNewBug(b, f.Lang, bugSilent(f, b))
+				text, silent := formatNewBug(b, l, bugSilent(f, b))
 				mid, ok, _, _ := postFeed(ctx, bot, f.ChatID, text, silent, 0)
 				if !ok {
 					break // do not advance across an undelivered bug
@@ -727,7 +730,7 @@ func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *f
 				nn = nil
 			}
 			for i := len(nn) - 1; i >= 0; i-- { // oldest first
-				_, ok, _, permanent := postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false, 0)
+				_, ok, _, permanent := postFeed(ctx, bot, f.ChatID, formatNews(l, nn[i]), false, 0)
 				if !ok {
 					if permanent {
 						log.Printf("feed: skip permanently rejected news item %s in %d", nn[i].URL, f.ChatID)
@@ -835,11 +838,12 @@ func pollAllWithSources(ctx context.Context, bot feedBot, feeds []*config.FeedCo
 	}
 
 	for _, f := range due {
+		l := feedLanguage(f.Lang)
 		st := states[f.ChatID]
 		cursor := st.LastBugID
-		postFeedItems(ctx, bot, f, st, bugsByCursor[cursor], news)
+		postFeedItems(ctx, bot, f, l, st, bugsByCursor[cursor], news)
 		if len(st.Tracked) > 0 {
-			refreshTracked(ctx, bot, f, st, byID, fetchOK)
+			refreshTracked(ctx, bot, f, l, st, byID, fetchOK)
 		}
 		saveFeedState(feedStatePath(stateDir, f.ChatID), *st)
 		nextDue[f.ChatID] = now.Add(f.Interval())

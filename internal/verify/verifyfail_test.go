@@ -1,4 +1,4 @@
-package main
+package verify
 
 import (
 	"path/filepath"
@@ -11,7 +11,7 @@ import (
 func TestVerifyStrikes(t *testing.T) {
 	c := &config.Config{VerifyMaxFails: 3, VerifyRetrySeconds: 180}
 	path := filepath.Join(t.TempDir(), "verify-fails.json")
-	v := NewVerifier(c)
+	v := newTestService(c)
 	v.vfailPath = path
 
 	for i := 1; i <= 2; i++ {
@@ -21,7 +21,7 @@ func TestVerifyStrikes(t *testing.T) {
 		}
 	}
 
-	restored := NewVerifier(c)
+	restored := newTestService(c)
 	restored.vfailPath = path
 	restored.loadVerifyFails()
 	if remaining := restored.verifyCooldownRemaining(-100, 42); remaining <= 0 {
@@ -44,7 +44,7 @@ func TestVerifyStrikes(t *testing.T) {
 }
 
 func TestVerifyNoAutoBan(t *testing.T) {
-	v := NewVerifier(&config.Config{VerifyMaxFails: -1})
+	v := newTestService(&config.Config{VerifyMaxFails: -1})
 	for i := range 10 {
 		if _, ban := v.recordVerifyFail(-100, 7); ban {
 			t.Fatalf("auto-ban should be disabled with verify_max_fails=-1 (fired at strike %d)", i+1)
@@ -53,7 +53,7 @@ func TestVerifyNoAutoBan(t *testing.T) {
 }
 
 func TestVerifyCooldownDisabled(t *testing.T) {
-	v := NewVerifier(&config.Config{VerifyRetrySeconds: -1})
+	v := newTestService(&config.Config{VerifyRetrySeconds: -1})
 	v.recordVerifyFail(-100, 5)
 	if v.verifyCooldownRemaining(-100, 5) != 0 {
 		t.Error("cooldown should be disabled with verify_retry_seconds=-1")
@@ -61,7 +61,7 @@ func TestVerifyCooldownDisabled(t *testing.T) {
 }
 
 func TestVerifyStrikeDecay(t *testing.T) {
-	v := NewVerifier(&config.Config{VerifyMaxFails: 3})
+	v := newTestService(&config.Config{VerifyMaxFails: 3})
 	if count, _ := v.recordVerifyFail(-100, 42); count != 1 {
 		t.Fatalf("first strike count=%d, want 1", count)
 	}
@@ -75,7 +75,7 @@ func TestVerifyStrikeDecay(t *testing.T) {
 }
 
 func TestConsumeNonceIdentity(t *testing.T) {
-	v := NewVerifier(&config.Config{})
+	v := newTestService(&config.Config{})
 	key := pkey{-100, 42}
 	v.pend[key] = &pending{nonce: "NEW"}
 	if _, ok := v.consumeNonce(-100, 42, "OLD"); ok {
@@ -93,7 +93,7 @@ func TestConsumeNonceIdentity(t *testing.T) {
 }
 
 func TestClaimPendingNonce(t *testing.T) {
-	v := NewVerifier(&config.Config{})
+	v := newTestService(&config.Config{})
 	key := pkey{-100, 42}
 	p := &pending{nonce: "NEW", timer: time.AfterFunc(time.Hour, func() {})}
 	v.pend[key] = p

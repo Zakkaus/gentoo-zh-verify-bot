@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestGetNewsAvailability(t *testing.T) {
@@ -117,7 +119,7 @@ func TestRenderNewsAvailability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := renderNews(tt.arg, tt.items, tt.available)
+			got := renderNews(i18n.LangZH, tt.arg, tt.items, tt.available)
 			for _, want := range tt.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("renderNews() = %q, want substring %q", got, want)

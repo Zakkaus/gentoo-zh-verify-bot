@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -572,7 +573,11 @@ func commandArg(text string) string {
 // OnPkg handles package searches across the Gentoo tree and configured overlays.
 func (v *Service) OnPkg(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -609,16 +614,16 @@ func (v *Service) OnPkg(ctx *th.Context, update telego.Update) error {
 	}
 
 	availability := pkgLookupAvailability{official: mainOK, overlays: overlayOK}
-	plain := renderPkg(q, mainRes, vm, ovRes, availability)
+	plain := renderPkg(l, q, mainRes, vm, ovRes, availability)
 	rich := ""
 	if v.richEnabled() {
-		rich = renderPkgRich(q, mainRes, vm, ovRes, availability)
+		rich = renderPkgRich(l, q, mainRes, vm, ovRes, availability)
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, rich, plain)
 	return nil
 }
 
-func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
+func renderPkg(_ i18n.Lang, q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔎 <b>%s</b> 的搜索结果", esc(q))
@@ -669,7 +674,7 @@ func renderPkg(q string, mainRes []string, vm map[string][2]string, ovRes map[st
 }
 
 // Rich messages require block tags because newlines are ignored.
-func renderPkgRich(q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
+func renderPkgRich(_ i18n.Lang, q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	fmt.Fprintf(&b, "<h3>🔎 %s 的搜索结果</h3>", esc(q))
@@ -943,7 +948,7 @@ func useLink(f useFlag) string {
 	return flagMark(f) + fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(f.name))
 }
 
-func writeLocalFlags(b *strings.Builder, flags []useFlag) {
+func writeLocalFlags(b *strings.Builder, _ i18n.Lang, flags []useFlag) {
 	if len(flags) == 0 {
 		return
 	}
@@ -961,7 +966,7 @@ func writeLocalFlags(b *strings.Builder, flags []useFlag) {
 	}
 }
 
-func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
+func writeGlobalFlags(b *strings.Builder, _ i18n.Lang, flags []useFlag) {
 	if len(flags) == 0 {
 		return
 	}
@@ -976,7 +981,7 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 const expandCap = 16
 
 // Compact output truncates values; the rich view retains full descriptions.
-func writeExpandFlags(b *strings.Builder, groups []useExpandGroup) {
+func writeExpandFlags(b *strings.Builder, _ i18n.Lang, groups []useExpandGroup) {
 	for _, g := range groups {
 		if len(g.flags) == 0 {
 			continue
@@ -1018,7 +1023,7 @@ func overlayRefs(alsoIn []string, atom string) string {
 	return strings.Join(refs, ", ")
 }
 
-func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
+func renderUse(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	label := ""
@@ -1044,9 +1049,9 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	case info.latest != "":
 		fmt.Fprintf(&b, "\n版本:~%s", esc(info.latest))
 	}
-	writeLocalFlags(&b, info.local)
-	writeGlobalFlags(&b, info.global)
-	writeExpandFlags(&b, info.expand)
+	writeLocalFlags(&b, l, info.local)
+	writeGlobalFlags(&b, l, info.global)
+	writeExpandFlags(&b, l, info.expand)
 	if len(info.local) == 0 && len(info.global) == 0 && len(info.expand) == 0 {
 		b.WriteString("\n(该包无 USE 标志)")
 	}
@@ -1062,7 +1067,7 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 }
 
 // Rich output keeps full flag descriptions in collapsible sections.
-func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
+func renderUseRich(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
 	label := ""
@@ -1093,9 +1098,9 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 	if len(hdr) > 0 {
 		fmt.Fprintf(&b, "<p>%s</p>", strings.Join(hdr, "<br>"))
 	}
-	writeFlagsRich(&b, "本地 USE", info.local, false)
-	writeFlagsRich(&b, "全局 USE", info.global, true)
-	writeExpandFlagsRich(&b, info.expand)
+	writeFlagsRich(&b, l, "本地 USE", info.local, false)
+	writeFlagsRich(&b, l, "全局 USE", info.global, true)
+	writeExpandFlagsRich(&b, l, info.expand)
 	if len(info.local) == 0 && len(info.global) == 0 && len(info.expand) == 0 {
 		b.WriteString("<p>(该包无 USE 标志)</p>")
 	}
@@ -1111,7 +1116,7 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 }
 
 // Rich messages require block structure; newlines are whitespace.
-func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse bool) {
+func writeFlagsRich(b *strings.Builder, _ i18n.Lang, title string, flags []useFlag, collapse bool) {
 	if len(flags) == 0 {
 		return
 	}
@@ -1134,7 +1139,7 @@ func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse 
 }
 
 // Each large USE_EXPAND group gets its own collapsible section.
-func writeExpandFlagsRich(b *strings.Builder, groups []useExpandGroup) {
+func writeExpandFlagsRich(b *strings.Builder, _ i18n.Lang, groups []useExpandGroup) {
 	for _, g := range groups {
 		if len(g.flags) == 0 {
 			continue
@@ -1242,14 +1247,14 @@ func resolveUseSourcesWith(
 	return srcs, availability
 }
 
-func renderUseLookupMiss(q string, availability pkgLookupAvailability) string {
+func renderUseLookupMiss(_ i18n.Lang, q string, availability pkgLookupAvailability) string {
 	if availability.anyUnavailable() {
 		return fmt.Sprintf("部分来源暂时无法查询，目前无法确认是否有精确匹配「%s」的包，请稍后重试。", q)
 	}
 	return fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q)
 }
 
-func appendUseAvailabilityNote(plain, rich string, availability pkgLookupAvailability) (string, string) {
+func appendUseAvailabilityNote(_ i18n.Lang, plain, rich string, availability pkgLookupAvailability) (string, string) {
 	if !availability.anyUnavailable() {
 		return plain, rich
 	}
@@ -1263,7 +1268,11 @@ func appendUseAvailabilityNote(plain, rich string, availability pkgLookupAvailab
 // OnUse handles package metadata and USE flag lookups.
 func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -1282,7 +1291,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 
 	switch len(srcs) {
 	case 0:
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderUseLookupMiss(q, availability))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderUseLookupMiss(l, q, availability))
 		return nil
 	case 1:
 		// A unique atom needs no disambiguation.
@@ -1314,9 +1323,9 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 	if s.official {
 		if info, found, _ := officialInfo(hc, atom); found {
 			url := "https://packages.gentoo.org/packages/" + atom
-			out = renderUse(info, "", url, false, s.ovs)
+			out = renderUse(l, info, "", url, false, s.ovs)
 			if v.richEnabled() {
-				outRich = renderUseRich(info, "", url, false, s.ovs)
+				outRich = renderUseRich(l, info, "", url, false, s.ovs)
 			}
 		}
 	}
@@ -1325,9 +1334,9 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		o, _ := overlayByName(ovName)
 		if info, ok := overlayInfo(hc, o, atom, pkgC.overlayVer(ovName, atom)); ok {
 			url := o.treeURL(atom)
-			out = renderUse(info, "overlay:"+ovName, url, true, s.ovs[1:])
+			out = renderUse(l, info, "overlay:"+ovName, url, true, s.ovs[1:])
 			if v.richEnabled() {
-				outRich = renderUseRich(info, "overlay:"+ovName, url, true, s.ovs[1:])
+				outRich = renderUseRich(l, info, "overlay:"+ovName, url, true, s.ovs[1:])
 			}
 		}
 	}
@@ -1335,7 +1344,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("暂时无法获取 %s 的信息,请稍后重试。", atom))
 		return nil
 	}
-	out, outRich = appendUseAvailabilityNote(out, outRich, availability)
+	out, outRich = appendUseAvailabilityNote(l, out, outRich, availability)
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, outRich, out)
 	return nil
 }
@@ -1377,6 +1386,7 @@ func arm64Keywords(versions []pkgVersionJSON) (stable, testing string) {
 // Failed searches remain distinct from authoritative package misses.
 func lookupArm(
 	ctx context.Context,
+	_ i18n.Lang,
 	name string,
 	search func(context.Context, string) ([]string, bool),
 	status func(context.Context, string) (string, string, bool),
@@ -1413,7 +1423,11 @@ func lookupArm(
 // OnArm handles Gentoo arm64 keyword lookups.
 func (v *Service) OnArm(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -1425,7 +1439,7 @@ func (v *Service) OnArm(ctx *th.Context, update telego.Update) error {
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
-	body, useHTML := lookupArm(hc, name, searchMainTree, armStatus)
+	body, useHTML := lookupArm(hc, l, name, searchMainTree, armStatus)
 	if useHTML {
 		v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, body)
 	} else {

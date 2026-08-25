@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestArm64Keywords(t *testing.T) {
@@ -61,12 +63,7 @@ func TestLookupArmAvailability(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, useHTML := lookupArm(
-				context.Background(),
-				"firefox",
-				func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available },
-				func(context.Context, string) (string, string, bool) { return "140.12.0", "", true },
-			)
+			got, useHTML := lookupArm(context.Background(), i18n.LangZH, "firefox", func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available }, func(context.Context, string) (string, string, bool) { return "140.12.0", "", true })
 			if useHTML != tc.wantHTML {
 				t.Errorf("lookupArm() useHTML = %v, want %v", useHTML, tc.wantHTML)
 			}

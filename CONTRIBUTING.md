@@ -8,7 +8,7 @@ requests are welcome.
 Requires **Go 1.26.7+** (per `go.mod`) and uses [telego v1.11.2](https://github.com/mymmrac/telego).
 
 ```sh
-go build ./...
+go build ./cmd/gentoo-zh-verify-bot
 ```
 
 ## Before opening a PR

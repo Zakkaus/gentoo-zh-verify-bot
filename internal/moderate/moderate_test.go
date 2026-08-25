@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
@@ -277,7 +278,7 @@ func TestWarnPrecheckGate(t *testing.T) {
 	denied := newFakeMod()
 	denied.memberByID = map[int64]telego.ChatMember{callerID: &telego.ChatMemberMember{}}
 	deniedService := newTestService(t, &config.Config{}, denied, "")
-	if got := deniedService.warnPrecheck(ctx, message(), "/warn", true); got != nil {
+	if got := deniedService.warnPrecheck(ctx, message(), "/warn", true, i18n.LangZH); got != nil {
 		t.Error("a non-admin caller must be denied")
 	}
 	if denied.bans != 0 || denied.mutes != 0 || denied.unbans != 0 {
@@ -287,14 +288,14 @@ func TestWarnPrecheckGate(t *testing.T) {
 	allowed := newFakeMod()
 	allowed.memberByID = map[int64]telego.ChatMember{callerID: &telego.ChatMemberAdministrator{}, targetID: &telego.ChatMemberMember{}}
 	allowedService := newTestService(t, &config.Config{}, allowed, "")
-	if got := allowedService.warnPrecheck(ctx, message(), "/warn", true); got == nil || got.ID != targetID {
+	if got := allowedService.warnPrecheck(ctx, message(), "/warn", true, i18n.LangZH); got == nil || got.ID != targetID {
 		t.Errorf("admin caller and non-admin target resolved to %v", got)
 	}
 
 	skipped := newFakeMod()
 	skipped.memberByID = map[int64]telego.ChatMember{callerID: &telego.ChatMemberAdministrator{}, targetID: &telego.ChatMemberAdministrator{}}
 	skippedService := newTestService(t, &config.Config{}, skipped, "")
-	if got := skippedService.warnPrecheck(ctx, message(), "/warn", true); got != nil {
+	if got := skippedService.warnPrecheck(ctx, message(), "/warn", true, i18n.LangZH); got != nil {
 		t.Error("an admin target must be skipped")
 	}
 	if skipped.bans != 0 || skipped.mutes != 0 {

@@ -3,6 +3,8 @@ package lookup
 import (
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestPkgKeywordLegend(t *testing.T) {
@@ -13,25 +15,13 @@ func TestPkgKeywordLegend(t *testing.T) {
 		{
 			name: "plain",
 			fn: func() string {
-				return renderPkg(
-					"vim",
-					[]string{"app-editors/vim"},
-					map[string][2]string{"app-editors/vim": {"", "9.1"}},
-					nil,
-					pkgLookupAvailability{official: true},
-				)
+				return renderPkg(i18n.LangZH, "vim", []string{"app-editors/vim"}, map[string][2]string{"app-editors/vim": {"", "9.1"}}, nil, pkgLookupAvailability{official: true})
 			},
 		},
 		{
 			name: "rich",
 			fn: func() string {
-				return renderPkgRich(
-					"vim",
-					[]string{"app-editors/vim"},
-					map[string][2]string{"app-editors/vim": {"", "9.1"}},
-					nil,
-					pkgLookupAvailability{official: true},
-				)
+				return renderPkgRich(i18n.LangZH, "vim", []string{"app-editors/vim"}, map[string][2]string{"app-editors/vim": {"", "9.1"}}, nil, pkgLookupAvailability{official: true})
 			},
 		},
 	}

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -107,6 +108,13 @@ func (s *Service) setChannelWhitelist(groupID, senderID int64, allow bool) error
 	return err
 }
 
+func channelSenderAlert(_ i18n.Lang, banned bool, title string, senderID, groupID int64) string {
+	if banned {
+		return fmt.Sprintf("🛡 已删除消息并封禁以频道身份发言的「%s」(id %d,群 %d)。如属误封,用 /bc allow %d 解除封禁并加入白名单。", title, senderID, groupID, senderID)
+	}
+	return fmt.Sprintf("🛡 已删除「%s」以频道身份发送的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", title, senderID, groupID)
+}
+
 // FilterChannelSenders drops untrusted sender-channel posts when BotFather privacy mode is disabled.
 func (s *Service) FilterChannelSenders(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -117,19 +125,15 @@ func (s *Service) FilterChannelSenders(ctx *th.Context, update telego.Update) er
 			!s.isKnownChat(sender.ID) &&
 			!s.channelWhitelisted(msg.Chat.ID, sender.ID) {
 			requestCtx := ctx.Context()
+			l := s.groupLanguage(msg.Chat.ID)
 			s.telegram.Delete(requestCtx, msg.Chat.ID, msg.MessageID)
 			banned := true
 			if err := s.telegram.BanSenderChat(requestCtx, msg.Chat.ID, sender.ID); err != nil {
 				banned = false
 				log.Printf("antispam: ban sender_chat %d in %d: %v", sender.ID, msg.Chat.ID, err)
 			}
-			if banned {
-				s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
-					fmt.Sprintf("🛡 已删除消息并封禁以频道身份发言的「%s」(id %d,群 %d)。如属误封,用 /bc allow %d 解除封禁并加入白名单。", sender.Title, sender.ID, msg.Chat.ID, sender.ID))
-			} else {
-				s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
-					fmt.Sprintf("🛡 已删除「%s」以频道身份发送的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", sender.Title, sender.ID, msg.Chat.ID))
-			}
+			s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
+				channelSenderAlert(l, banned, sender.Title, sender.ID, msg.Chat.ID))
 			log.Printf("antispam: channel sender %d (%q) in group %d deleted, banned=%v", sender.ID, sender.Title, msg.Chat.ID, banned)
 			return nil
 		}
@@ -145,6 +149,7 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 	}
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
+	l := s.groupLanguage(groupID)
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
 	if !s.isGroupAdmin(requestCtx, groupID, msg.From.ID) {
 		s.notify(requestCtx, groupID, "⛔ /bc 只能由群管理员使用。")
@@ -156,7 +161,7 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 	case len(fields) == 0:
 		enabled, err := s.toggleAntispam(groupID)
 		if err != nil {
-			s.notifySettingsFailure(requestCtx, groupID, err)
+			s.notifySettingsFailure(requestCtx, groupID, l, err)
 			return nil
 		}
 		if enabled {
@@ -172,7 +177,7 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 		}
 		allow := fields[0] == "allow"
 		if err := s.setChannelWhitelist(groupID, senderID, allow); err != nil {
-			s.notifySettingsFailure(requestCtx, groupID, err)
+			s.notifySettingsFailure(requestCtx, groupID, l, err)
 			return nil
 		}
 		if !allow {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 type bugTestRoundTripper func(*http.Request) (*http.Response, error)
@@ -83,7 +85,7 @@ func TestBugLookupFailureMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := bugLookupFailureMessage("123", link, tt.state); got != tt.want {
+			if got := bugLookupFailureMessage(i18n.LangZH, "123", link, tt.state); got != tt.want {
 				t.Errorf("bugLookupFailureMessage() = %q, want %q", got, tt.want)
 			}
 		})

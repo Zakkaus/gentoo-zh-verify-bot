@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestSearchTransientNotDefinitive(t *testing.T) {
@@ -21,7 +23,7 @@ func TestSearchTransientNotDefinitive(t *testing.T) {
 func TestPickWikiTitlesDedup(t *testing.T) {
 	g := wikiSource{classify: classifyGentoo}
 	// Case-insensitive topics prefer zh-cn and drop unsupported translations.
-	got := g.pickWikiTitles([]string{
+	got := g.pickWikiTitles(i18n.LangZH, []string{
 		"NVIDIA/nvidia-drivers",
 		"NVidia/nvidia-drivers/zh-cn",
 		"NVIDIA/nvidia-drivers/fr",
@@ -32,11 +34,11 @@ func TestPickWikiTitlesDedup(t *testing.T) {
 
 	a := wikiSource{classify: classifyArch}
 	// The localized Arch title must replace its English base topic.
-	if got := a.pickWikiTitles([]string{"NVIDIA", "Nvidia (简体中文)"}, 4); !reflect.DeepEqual(got, []string{"Nvidia (简体中文)"}) {
+	if got := a.pickWikiTitles(i18n.LangZH, []string{"NVIDIA", "Nvidia (简体中文)"}, 4); !reflect.DeepEqual(got, []string{"Nvidia (简体中文)"}) {
 		t.Errorf("arch dedup = %v, want [Nvidia (简体中文)]", got)
 	}
 
-	if got := a.pickWikiTitles([]string{"A", "B", "C", "D", "E"}, 3); !reflect.DeepEqual(got, []string{"A", "B", "C"}) {
+	if got := a.pickWikiTitles(i18n.LangZH, []string{"A", "B", "C", "D", "E"}, 3); !reflect.DeepEqual(got, []string{"A", "B", "C"}) {
 		t.Errorf("cap = %v, want [A B C]", got)
 	}
 }
@@ -77,7 +79,7 @@ func TestWikiResultNotice(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := wikiResultNotice(tt.found, tt.srcOK)
+			got := wikiResultNotice(i18n.LangZH, tt.found, tt.srcOK)
 			if got != tt.want {
 				t.Errorf("wikiResultNotice() = %q, want %q", got, tt.want)
 			}

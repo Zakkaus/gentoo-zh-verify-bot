@@ -1,4 +1,4 @@
-package main
+package verify
 
 import (
 	"bytes"
@@ -63,12 +63,12 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 		t.Skip("set UPDATE_STATE_COMPAT_FIXTURES=1 to regenerate state compatibility fixtures")
 	}
 
-	dir := filepath.Join("testdata", "state")
+	dir := filepath.Join("..", "..", "testdata", "state")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	pendingV := NewVerifier(stateCompatConfig())
+	pendingV := newTestService(stateCompatConfig())
 	pendingV.statePath = filepath.Join(dir, "pending.json")
 	pendingV.pend[pkey{stateCompatGroupA, 7001}] = &pending{
 		groupMsgID: 501, mode: config.ModeKernel, lang: i18n.LangEN,
@@ -84,18 +84,18 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 	}
 	pendingV.save()
 
-	strikeV := NewVerifier(stateCompatConfig())
+	strikeV := newTestService(stateCompatConfig())
 	strikeV.vfailPath = filepath.Join(dir, "verifyfail.json")
 	strikeV.vfail[pkey{stateCompatGroupA, 7201}] = &vfailRec{count: 2, last: stateCompatStrikeA}
 	strikeV.vfail[pkey{stateCompatGroupB, 7202}] = &vfailRec{count: 3, last: stateCompatStrikeB}
 	strikeV.saveVerifyFails()
 
-	heartbeatV := NewVerifier(stateCompatConfig())
+	heartbeatV := newTestService(stateCompatConfig())
 	heartbeatV.hbPath = filepath.Join(dir, "heartbeat.json")
 	heartbeatV.lastOnline = stateCompatHeartbeat
 	heartbeatV.saveHeartbeat()
 
-	agentV := NewVerifier(stateCompatConfig())
+	agentV := newTestService(stateCompatConfig())
 	agentV.agentPath = filepath.Join(dir, "agents.json")
 	for _, claim := range []string{
 		"model=gpt-5", "model=gpt-5", "model=gpt-5",
@@ -145,7 +145,7 @@ func TestStateCompatPending(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := stateCompatTempFile(t, "pending.json", tt.data)
-			v := NewVerifier(stateCompatConfig())
+			v := newTestService(stateCompatConfig())
 			v.statePath = path
 			v.load(nil)
 			t.Cleanup(v.stopForShutdown)
@@ -174,50 +174,6 @@ func TestStateCompatPending(t *testing.T) {
 	}
 }
 
-func TestStateCompatAntispamMigration(t *testing.T) {
-	fixture := stateCompatFixture(t, "antispam.json")
-	wantWhitelist := []int64{
-		-1007000000003,
-		-1007000000001,
-		-1007000000002,
-	}
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{name: "current", data: fixture},
-		{name: "unknown top-level key", data: stateCompatWithUnknown(t, fixture)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			legacyPath := filepath.Join(dir, "antispam.json")
-			if err := os.WriteFile(legacyPath, tt.data, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			settings, err := store.NewSettings(
-				filepath.Join(dir, "settings.json"),
-				settingsBaselineFromConfig(stateCompatConfig(), configPresence{}),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, groupID := range []int64{stateCompatGroupA, stateCompatGroupB} {
-				group, ok := settings.Group(groupID)
-				if !ok {
-					t.Fatalf("group %d missing after antispam migration", groupID)
-				}
-				if !group.AntispamEnabled().Value || !reflect.DeepEqual(group.ChannelWhitelist().Value, wantWhitelist) {
-					t.Fatalf("group %d antispam = enabled:%v whitelist:%v", groupID, group.AntispamEnabled().Value, group.ChannelWhitelist().Value)
-				}
-			}
-			if after := stateCompatRead(t, legacyPath); !bytes.Equal(after, tt.data) {
-				t.Fatal("legacy antispam fixture changed during migration")
-			}
-		})
-	}
-}
-
 func TestStateCompatVerificationFailures(t *testing.T) {
 	fixture := stateCompatFixture(t, "verifyfail.json")
 	want := map[pkey]struct {
@@ -237,7 +193,7 @@ func TestStateCompatVerificationFailures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(stateCompatConfig())
+			v := newTestService(stateCompatConfig())
 			v.vfailPath = stateCompatTempFile(t, "verifyfail.json", tt.data)
 			v.loadVerifyFails()
 			v.mu.Lock()
@@ -265,43 +221,6 @@ func TestStateCompatVerificationFailures(t *testing.T) {
 	}
 }
 
-func TestStateCompatSettings(t *testing.T) {
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{name: "existing legacy fixture", data: stateCompatFixture(t, "settings.json")},
-		{name: "legacy v0 golden", data: stateCompatFixture(t, "settings-legacy-v0.json")},
-		{name: "unknown legacy key", data: stateCompatWithUnknown(t, stateCompatFixture(t, "settings.json"))},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := stateCompatTempFile(t, "settings.json", tt.data)
-			settings, err := store.NewSettings(path, settingsBaselineFromConfig(stateCompatConfig(), configPresence{}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, groupID := range []int64{stateCompatGroupA, stateCompatGroupB} {
-				group, ok := settings.Group(groupID)
-				if !ok {
-					t.Fatalf("group %d missing after migration", groupID)
-				}
-				if group.Enabled().Value || group.NameSpoiler().Value || group.VerifyMode().Value != config.ModeMixed {
-					t.Fatalf("group %d settings = enabled:%v name_spoiler:%v verify_mode:%q", groupID, group.Enabled().Value, group.NameSpoiler().Value, group.VerifyMode().Value)
-				}
-			}
-			var migrated map[string]any
-			stateCompatDecode(t, stateCompatRead(t, path), &migrated)
-			if migrated["version"] != float64(store.SettingsSchemaVersion) {
-				t.Fatalf("migrated settings version = %v", migrated["version"])
-			}
-			if groups, ok := migrated["groups"].(map[string]any); !ok || len(groups) != 2 {
-				t.Fatalf("migrated settings groups = %#v", migrated["groups"])
-			}
-		})
-	}
-}
-
 func TestStateCompatHeartbeat(t *testing.T) {
 	fixture := stateCompatFixture(t, "heartbeat.json")
 	tests := []struct {
@@ -314,7 +233,7 @@ func TestStateCompatHeartbeat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &Verifier{hbPath: stateCompatTempFile(t, "heartbeat.json", tt.data)}
+			v := &Service{hbPath: stateCompatTempFile(t, "heartbeat.json", tt.data)}
 			got := v.loadHeartbeat()
 			if !got.Equal(stateCompatHeartbeat) {
 				t.Fatalf("loaded heartbeat = %v, want %v", got, stateCompatHeartbeat)
@@ -349,7 +268,7 @@ func TestStateCompatAgentTally(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(stateCompatConfig())
+			v := newTestService(stateCompatConfig())
 			v.agentPath = stateCompatTempFile(t, "agents.json", tt.data)
 			v.loadAgents()
 			v.agentMu.Lock()
@@ -375,7 +294,7 @@ func TestStateCompatAgentTally(t *testing.T) {
 	}
 }
 
-func stateCompatAssertPending(t *testing.T, v *Verifier, want []stateCompatPendingWant) {
+func stateCompatAssertPending(t *testing.T, v *Service, want []stateCompatPendingWant) {
 	t.Helper()
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -405,7 +324,7 @@ func stateCompatAssertPending(t *testing.T, v *Verifier, want []stateCompatPendi
 
 func stateCompatFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	return stateCompatRead(t, filepath.Join("testdata", "state", name))
+	return stateCompatRead(t, filepath.Join("..", "..", "testdata", "state", name))
 }
 
 func stateCompatTempFile(t *testing.T, name string, data []byte) string {

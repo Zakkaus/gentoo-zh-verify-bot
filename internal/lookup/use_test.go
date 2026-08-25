@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestWriteExpandFlags(t *testing.T) {
@@ -16,7 +18,7 @@ func TestWriteExpandFlags(t *testing.T) {
 		{name: "l10n", flags: many},
 	}
 	var b strings.Builder
-	writeExpandFlags(&b, groups)
+	writeExpandFlags(&b, i18n.LangZH, groups)
 	out := b.String()
 
 	if !strings.Contains(out, "<b>LLVM_SLOT</b>(3):") {
@@ -41,7 +43,7 @@ func TestRenderUseIncludesExpand(t *testing.T) {
 		atom:   "www-client/firefox",
 		expand: []useExpandGroup{{name: "l10n", flags: []useFlag{{name: "zh-CN"}, {name: "en", def: true}}}},
 	}
-	out := renderUse(info, "", "", false, nil)
+	out := renderUse(i18n.LangZH, info, "", "", false, nil)
 	if !strings.Contains(out, "L10N") {
 		t.Errorf("renderUse should include the L10N use_expand group: %q", out)
 	}
@@ -55,7 +57,7 @@ func TestRenderUseRichIncludesExpand(t *testing.T) {
 		atom:   "www-client/firefox",
 		expand: []useExpandGroup{{name: "llvm_slot", flags: []useFlag{{name: "20"}, {name: "21", desc: "Use LLVM 21.", def: true}}}},
 	}
-	out := renderUseRich(info, "", "https://packages.gentoo.org/packages/www-client/firefox", false, nil)
+	out := renderUseRich(i18n.LangZH, info, "", "https://packages.gentoo.org/packages/www-client/firefox", false, nil)
 	if !strings.Contains(out, "<details>") || !strings.Contains(out, "LLVM_SLOT") {
 		t.Errorf("renderUseRich should put USE_EXPAND in a <details> block, got %q", out)
 	}
@@ -124,7 +126,7 @@ func TestRenderUseLookupMiss(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderUseLookupMiss("vim", tc.availability)
+			got := renderUseLookupMiss(i18n.LangZH, "vim", tc.availability)
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("renderUseLookupMiss() = %q, want substring %q", got, tc.want)
 			}
@@ -152,7 +154,7 @@ func TestAppendUseAvailabilityNote(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			plain, rich := appendUseAvailabilityNote("plain result", "<p>rich result</p>", tc.availability)
+			plain, rich := appendUseAvailabilityNote(i18n.LangZH, "plain result", "<p>rich result</p>", tc.availability)
 			for label, got := range map[string]string{"plain": plain, "rich": rich} {
 				hasNote := strings.Contains(got, "结果可能不完整")
 				if hasNote != tc.wantNote {

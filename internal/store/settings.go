@@ -296,6 +296,7 @@ type GlobalView struct{ global *effectiveGlobal }
 // NewSettings loads, migrates, and owns one settings.json transaction.
 func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 	baseline = cloneSettingsBaseline(baseline)
+	normalizeBaselineLanguages(&baseline)
 	if err := validateBaseline(baseline); err != nil {
 		return nil, err
 	}
@@ -813,6 +814,17 @@ func resolveSlice[T any](override *[]T, baseline BaselineValue[[]T], clone func(
 	return Setting[[]T]{Value: clone(baseline.Value), Source: baseline.Source}
 }
 
+func normalizeBaselineLanguages(baseline *SettingsBaseline) {
+	if baseline.DefaultGroup.Lang.Value == "" {
+		baseline.DefaultGroup.Lang = BaselineValue[string]{Value: "zh", Source: SourceDefault}
+	}
+	for i := range baseline.Groups {
+		if baseline.Groups[i].Lang.Value == "" {
+			baseline.Groups[i].Lang = BaselineValue[string]{Value: "zh", Source: SourceDefault}
+		}
+	}
+}
+
 func validateBaseline(baseline SettingsBaseline) error {
 	if len(baseline.Groups) == 0 {
 		return fmt.Errorf("settings baseline requires at least one group")
@@ -863,6 +875,9 @@ func validateBaselineSources(group GroupBaseline) error {
 func validateEffectiveGroup(group *effectiveGroup) error {
 	if !config.ValidMode(group.verifyMode.Value) {
 		return fmt.Errorf("invalid verify mode %q", group.verifyMode.Value)
+	}
+	if group.lang.Value == "" || !config.ValidLanguage(group.lang.Value) {
+		return fmt.Errorf("invalid language %q", group.lang.Value)
 	}
 	if group.banSeconds.Source == SourceRuntime && group.banSeconds.Value != config.ClampBanSeconds(group.banSeconds.Value) {
 		return fmt.Errorf("ban_seconds %d is outside Telegram's supported range", group.banSeconds.Value)

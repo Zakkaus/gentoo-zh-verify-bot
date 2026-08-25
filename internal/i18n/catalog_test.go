@@ -40,6 +40,22 @@ func TestFromTelegram(t *testing.T) {
 	}
 }
 
+func TestFromRequester(t *testing.T) {
+	for code, want := range map[string]Lang{
+		"en":      LangEN,
+		"en-US":   LangEN,
+		"zh-CN":   LangZH,
+		"zh-Hant": LangZHHant,
+		"yue-HK":  LangZHHant,
+		"":        LangZHHant,
+		"fr":      LangZHHant,
+	} {
+		if got := FromRequester(code, LangZHHant); got != want {
+			t.Errorf("FromRequester(%q, zh-Hant) = %v, want %v", code, got, want)
+		}
+	}
+}
+
 func TestFromStored(t *testing.T) {
 	tests := map[string]Lang{
 		"":        LangZH,

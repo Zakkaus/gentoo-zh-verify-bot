@@ -39,7 +39,7 @@ func testSettingsBaseline() SettingsBaseline {
 		}}, Source: SourceConfig},
 		FallbackQuestions: BaselineValue[[]config.ShortQuestion]{Value: []config.ShortQuestion{}, Source: SourceDefault},
 		FallbackBuiltin:   BaselineValue[bool]{Value: true, Source: SourceDefault},
-		Lang:              BaselineValue[string]{Value: "", Source: SourceDefault},
+		Lang:              BaselineValue[string]{Value: "zh", Source: SourceDefault},
 	}
 	groupA, groupB := group, group
 	groupA.ID = testGroupA
@@ -77,6 +77,9 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	}
 	if got := initial.AntispamEnabled(); got.Value || got.Source != SourceConfig {
 		t.Fatalf("initial antispam = %+v, want configured false", got)
+	}
+	if got := initial.Lang(); got.Value != "zh" || got.Source != SourceDefault {
+		t.Fatalf("initial language = %+v, want default zh", got)
 	}
 	sameAsBaseline := initial.Overrides()
 	sameAsBaseline.Enabled = ptr(true)
@@ -197,6 +200,57 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	}
 	if raw["enabled"] != true || raw["name_spoiler"] != false || raw["verify_mode"] != config.ModeMixed {
 		t.Fatalf("legacy mirrors = enabled:%v spoiler:%v mode:%v", raw["enabled"], raw["name_spoiler"], raw["verify_mode"])
+	}
+}
+func TestGroupLanguageSettingSourceAndRevision(t *testing.T) {
+	baseline := testSettingsBaseline()
+	baseline.Groups[0].Lang = BaselineValue[string]{Value: "zh-Hant", Source: SourceConfig}
+	settings, err := NewSettings(filepath.Join(t.TempDir(), "settings.json"), baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	group, _ := settings.Group(testGroupA)
+	if got := group.Lang(); got.Value != "zh-Hant" || got.Source != SourceConfig {
+		t.Fatalf("configured language = %+v", got)
+	}
+	override := group.Overrides()
+	override.Lang = ptr("en")
+	result, err := settings.CommitGroup(testGroupA, group.Revision(), override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Revision != 1 {
+		t.Fatalf("language revision = %d, want 1", result.Revision)
+	}
+	group, _ = settings.Group(testGroupA)
+	if got := group.Lang(); got.Value != "en" || got.Source != SourceRuntime {
+		t.Fatalf("runtime language = %+v", got)
+	}
+
+	stale := group.Overrides()
+	stale.Lang = ptr("zh")
+	if _, err := settings.CommitGroup(testGroupA, 0, stale); !errors.Is(err, ErrSettingsConflict) {
+		t.Fatalf("stale language commit error = %v, want conflict", err)
+	}
+	invalid := group.Overrides()
+	invalid.Lang = ptr("fr")
+	if _, err := settings.CommitGroup(testGroupA, group.Revision(), invalid); err == nil {
+		t.Fatal("unsupported runtime language was accepted")
+	}
+	group, _ = settings.Group(testGroupA)
+	if group.Revision() != 1 || group.Lang().Value != "en" {
+		t.Fatalf("failed language commit published %+v at revision %d", group.Lang(), group.Revision())
+	}
+
+	restore := group.Overrides()
+	restore.Lang = nil
+	if _, err := settings.CommitGroup(testGroupA, group.Revision(), restore); err != nil {
+		t.Fatal(err)
+	}
+	group, _ = settings.Group(testGroupA)
+	if got := group.Lang(); got.Value != "zh-Hant" || got.Source != SourceConfig {
+		t.Fatalf("restored language = %+v", got)
 	}
 }
 

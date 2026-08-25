@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -26,7 +27,7 @@ var distroFamilies = []struct {
 	label    string
 	prefixes []string
 	search   string
-	relabel  func(string) string
+	relabel  func(i18n.Lang, string) string
 }{
 	{"Gentoo", []string{"gentoo"}, "https://packages.gentoo.org/packages/search?q=%s", nil},
 	{"AUR", []string{"aur"}, "https://aur.archlinux.org/packages?K=%s", nil},
@@ -320,7 +321,7 @@ func gentooDistroLines(stable, latest, url string) []distroLine {
 	return nil
 }
 
-func renderRepologyLookupMiss(name string, available bool) string {
+func renderRepologyLookupMiss(_ i18n.Lang, name string, available bool) string {
 	if !available {
 		return fmt.Sprintf("暂时无法查询 Repology 中「%s」的跨发行版信息，请稍后重试。", name)
 	}
@@ -330,7 +331,11 @@ func renderRepologyLookupMiss(name string, available bool) string {
 // OnPkgs handles cross-distribution package version lookups.
 func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -346,7 +351,7 @@ func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 	proj, pkgs, alts, exact, repologyOK := fetchRepology(hc, repologyQuery(name))
 	esc := html.EscapeString
 	if len(pkgs) == 0 {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderRepologyLookupMiss(name, repologyOK))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderRepologyLookupMiss(l, name, repologyOK))
 		return nil
 	}
 
@@ -393,7 +398,7 @@ func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 		for _, ch := range familyChannels(rows, f.prefixes, isTesting) {
 			label := ch.label
 			if f.relabel != nil {
-				label = f.relabel(ch.label)
+				label = f.relabel(l, ch.label)
 			}
 			lines = append(lines, distroLine{f.label, ch.ver, label, url})
 		}
@@ -438,12 +443,13 @@ func (v *Service) OnPkgs(ctx *th.Context, update telego.Update) error {
 
 // /armpkgs compares arm64 support across distro-specific architecture APIs.
 
-func (v *Service) gentooArmStatus(ctx context.Context, name string) (status, url string) {
-	return gentooArmStatusWith(ctx, name, searchMainTree, armStatus)
+func (v *Service) gentooArmStatus(ctx context.Context, l i18n.Lang, name string) (status, url string) {
+	return gentooArmStatusWith(ctx, l, name, searchMainTree, armStatus)
 }
 
 func gentooArmStatusWith(
 	ctx context.Context,
+	_ i18n.Lang,
 	name string,
 	search func(context.Context, string) ([]string, bool),
 	status func(context.Context, string) (string, string, bool),
@@ -513,7 +519,7 @@ func pickMadison(entries []madEntry, devSuite func(string) bool) (suite, ver str
 }
 
 // Development suites are never presented as current releases.
-func madisonArmStatus(ctx context.Context, madisonURL, pkg string, devSuite func(string) bool) string {
+func madisonArmStatus(ctx context.Context, _ i18n.Lang, madisonURL, pkg string, devSuite func(string) bool) string {
 	body, err := httpGetBody(ctx, madisonURL+neturl.QueryEscape(pkg)+"&text=on&a=arm64", 1<<20)
 	if err != nil {
 		return "⚠️ 查询失败"
@@ -530,8 +536,8 @@ func madisonArmStatus(ctx context.Context, madisonURL, pkg string, devSuite func
 }
 
 // Only an authoritative 404 proves absence; all other failures remain unknown.
-func fedoraArmStatus(ctx context.Context, pkg string) string {
-	return fedoraArmStatusWith(ctx, pkg, func(ctx context.Context, url string) (string, error) {
+func fedoraArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
+	return fedoraArmStatusWith(ctx, l, pkg, func(ctx context.Context, url string) (string, error) {
 		var r struct {
 			Version string `json:"version"`
 		}
@@ -542,6 +548,7 @@ func fedoraArmStatus(ctx context.Context, pkg string) string {
 
 func fedoraArmStatusWith(
 	ctx context.Context,
+	_ i18n.Lang,
 	pkg string,
 	fetch func(context.Context, string) (string, error),
 ) string {
@@ -561,7 +568,7 @@ func fedoraArmStatusWith(
 var aurArchRe = regexp.MustCompile(`(?i)arch=\(([^)]*)\)`)
 
 // AUR support follows the PKGBUILD arch declaration, not buildability in practice.
-func aurArchLabel(pkgbuild string) string {
+func aurArchLabel(_ i18n.Lang, pkgbuild string) string {
 	m := aurArchRe.FindStringSubmatch(pkgbuild)
 	if m == nil {
 		return "⚠️ 无法解析 PKGBUILD"
@@ -580,7 +587,7 @@ func aurArchLabel(pkgbuild string) string {
 }
 
 // Only an AUR 404 proves absence; other failures remain unknown.
-func (v *Service) aurArmStatus(ctx context.Context, pkg string) string {
+func (v *Service) aurArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
 	body, err := httpGetBody(ctx, "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h="+neturl.QueryEscape(pkg), 64<<10)
 	if err != nil {
 		if httpStatusCode(err) == 404 {
@@ -588,11 +595,11 @@ func (v *Service) aurArmStatus(ctx context.Context, pkg string) string {
 		}
 		return "⚠️ AUR 查询失败"
 	}
-	return aurArchLabel(string(body))
+	return aurArchLabel(l, string(body))
 }
 
 // Only an Arch Linux ARM 404 proves absence.
-func alarmArmStatus(ctx context.Context, pkg string) string {
+func alarmArmStatus(ctx context.Context, _ i18n.Lang, pkg string) string {
 	if _, err := httpGetBody(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), 1<<10); err != nil {
 		if httpStatusCode(err) == 404 {
 			return "❌ 未打包"
@@ -605,7 +612,11 @@ func alarmArmStatus(ctx context.Context, pkg string) string {
 // OnArmpkgs handles cross-distribution arm64 support lookups.
 func (v *Service) OnArmpkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -624,20 +635,22 @@ func (v *Service) OnArmpkgs(ctx *th.Context, update telego.Update) error {
 		label string
 		fn    func() (string, string)
 	}{
-		{"Gentoo", func() (string, string) { return v.gentooArmStatus(hc, name) }},
+		{"Gentoo", func() (string, string) { return v.gentooArmStatus(hc, l, name) }},
 		{"Debian", func() (string, string) {
-			return madisonArmStatus(hc, "https://qa.debian.org/madison.php?package=", name, nil), "https://tracker.debian.org/pkg/" + pe
+			return madisonArmStatus(hc, l, "https://qa.debian.org/madison.php?package=", name, nil), "https://tracker.debian.org/pkg/" + pe
 		}},
 		{"Ubuntu", func() (string, string) {
-			return madisonArmStatus(hc, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name, ubuntuDevSuite), "https://launchpad.net/ubuntu/+source/" + pe
+			return madisonArmStatus(hc, l, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name, ubuntuDevSuite), "https://launchpad.net/ubuntu/+source/" + pe
 		}},
 		{"Fedora", func() (string, string) {
-			return fedoraArmStatus(hc, name), "https://packages.fedoraproject.org/pkgs/" + pe + "/"
+			return fedoraArmStatus(hc, l, name), "https://packages.fedoraproject.org/pkgs/" + pe + "/"
 		}},
 		{"Arch Linux ARM", func() (string, string) {
-			return alarmArmStatus(hc, name), "https://archlinuxarm.org/packages/aarch64/" + pe
+			return alarmArmStatus(hc, l, name), "https://archlinuxarm.org/packages/aarch64/" + pe
 		}},
-		{"AUR", func() (string, string) { return v.aurArmStatus(hc, name), "https://aur.archlinux.org/packages/" + pe }},
+		{"AUR", func() (string, string) {
+			return v.aurArmStatus(hc, l, name), "https://aur.archlinux.org/packages/" + pe
+		}},
 	}
 	type srcResult struct{ label, status, url string }
 	results := make([]srcResult, len(sources))
@@ -848,7 +861,7 @@ func ubuntuDevSuite(series string) bool {
 }
 
 // Unknown Debian labels pass through before metadata loads.
-func debianRelabel(raw string) string {
+func debianRelabel(_ i18n.Lang, raw string) string {
 	if raw == "unstable" {
 		return "unstable/sid" // the rolling unstable channel is codenamed sid
 	}
@@ -860,7 +873,7 @@ func debianRelabel(raw string) string {
 	return raw
 }
 
-func ubuntuRelabel(raw string) string {
+func ubuntuRelabel(_ i18n.Lang, raw string) string {
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
 	out := raw

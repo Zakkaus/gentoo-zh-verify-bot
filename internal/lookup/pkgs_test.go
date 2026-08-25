@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 type pkgRoundTripper func(*http.Request) (*http.Response, error)
@@ -379,7 +381,7 @@ func TestFetchRepologyAvailability(t *testing.T) {
 					len(gotPkgs), available, tc.wantPkgs, tc.available)
 			}
 			if tc.wantText != "" {
-				got := renderRepologyLookupMiss("vim", available)
+				got := renderRepologyLookupMiss(i18n.LangZH, "vim", available)
 				if !strings.Contains(got, tc.wantText) {
 					t.Errorf("renderRepologyLookupMiss() = %q, want substring %q", got, tc.wantText)
 				}

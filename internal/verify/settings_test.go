@@ -1,153 +1,59 @@
-package main
+package verify
 
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
-	"github.com/mymmrac/telego"
 )
 
 func TestRuntimeSettingsGroupCommandsPersist(t *testing.T) {
 	cfg := runtimeSettingsTestConfig()
 	groupID := cfg.GroupIDs[0]
 	path := filepath.Join(t.TempDir(), "settings.json")
-	settings, err := store.NewSettings(path, settingsBaselineFromConfig(cfg, configPresence{}))
+	settings, err := store.NewSettings(path, testSettingsBaselineFromConfig(cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewVerifier(cfg)
-	installRuntimeSettings(v, settings)
-	if err := v.setEnabled(groupID, false); err != nil {
+	v := newService(settings, nil, cfg, &i18n.Messages)
+	if err := v.SetEnabled(groupID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.toggleNameSpoiler(groupID); err != nil {
+	if _, err := v.ToggleNameSpoiler(groupID); err != nil {
 		t.Fatal(err)
 	}
-	if err := v.setVerifyMode(groupID, config.ModeMixed); err != nil {
+	if err := v.SetVerifyMode(groupID, config.ModeMixed); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := store.NewSettings(path, settingsBaselineFromConfig(cfg, configPresence{}))
+	reloaded, err := store.NewSettings(path, testSettingsBaselineFromConfig(cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v2 := NewVerifier(cfg)
-	installRuntimeSettings(v2, reloaded)
-	if v2.isEnabled(groupID) || v2.nameSpoilerOn(groupID) || v2.effectiveMode(groupID) != config.ModeMixed {
-		t.Fatalf("reloaded group = enabled:%v spoiler:%v mode:%q", v2.isEnabled(groupID), v2.nameSpoilerOn(groupID), v2.effectiveMode(groupID))
+	v2 := newService(reloaded, nil, cfg, &i18n.Messages)
+	if v2.IsEnabled(groupID) || v2.NameSpoilerOn(groupID) || v2.EffectiveMode(groupID) != config.ModeMixed {
+		t.Fatalf("reloaded group = enabled:%v spoiler:%v mode:%q", v2.IsEnabled(groupID), v2.NameSpoilerOn(groupID), v2.EffectiveMode(groupID))
 	}
 
-	runtimeOnly, err := store.NewSettings("", settingsBaselineFromConfig(cfg, configPresence{}))
+	runtimeOnly, err := store.NewSettings("", testSettingsBaselineFromConfig(cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v3 := NewVerifier(cfg)
-	installRuntimeSettings(v3, runtimeOnly)
-	if err := v3.setEnabled(groupID, false); err != nil {
+	v3 := newService(runtimeOnly, nil, cfg, &i18n.Messages)
+	if err := v3.SetEnabled(groupID, false); err != nil {
 		t.Fatal(err)
 	}
-	if v3.isEnabled(groupID) {
+	if v3.IsEnabled(groupID) {
 		t.Fatal("runtime-only group command did not update settings")
 	}
 	group, _ := runtimeOnly.Group(groupID)
 	if group.Enabled().Value || group.Enabled().Source != store.SourceRuntime {
 		t.Fatalf("runtime-only transaction = %+v", group.Enabled())
-	}
-}
-func TestStopCommandWritesInvokingGroup(t *testing.T) {
-	const (
-		groupA int64 = -1009000000301
-		groupB int64 = -1009000000302
-	)
-	cfg := &config.Config{
-		Groups:           []config.GroupConfig{{ID: groupA}, {ID: groupB}},
-		GroupIDs:         []int64{groupA, groupB},
-		ControlGroupID:   groupA,
-		NotifyTTLSeconds: -1,
-	}
-	v := NewVerifier(cfg)
-	fake := newFakeVerifyBot()
-	fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
-	runFakeHandler(t, newAPITestBot(t, fake), v.onStop, telego.Update{Message: &telego.Message{
-		MessageID: 1,
-		Chat:      telego.Chat{ID: groupB, Type: "supergroup"},
-		From:      &telego.User{ID: 7},
-		Text:      "/stop",
-	}})
-	if !v.isEnabled(groupA) || v.isEnabled(groupB) {
-		t.Fatalf("/stop state = group A:%v group B:%v, want true/false", v.isEnabled(groupA), v.isEnabled(groupB))
-	}
-}
-
-func TestSettingsCommandReportsWriteFailure(t *testing.T) {
-	cfg := runtimeSettingsTestConfig()
-	cfg.NotifyTTLSeconds = -1
-	settings, err := store.NewSettings(t.TempDir(), settingsBaselineFromConfig(cfg, configPresence{}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	v := NewVerifier(cfg)
-	installRuntimeSettings(v, settings)
-	fake := newFakeVerifyBot()
-	fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
-	runFakeHandler(t, newAPITestBot(t, fake), v.onStop, telego.Update{Message: &telego.Message{
-		MessageID: 1,
-		Chat:      telego.Chat{ID: cfg.GroupIDs[0], Type: "supergroup"},
-		From:      &telego.User{ID: 7},
-		Text:      "/stop",
-	}})
-	if !strings.Contains(fake.lastSendText, "无法保存设置") {
-		t.Fatalf("write failure notice = %q", fake.lastSendText)
-	}
-	if !v.isEnabled(cfg.GroupIDs[0]) {
-		t.Fatal("failed settings write changed effective state")
-	}
-}
-
-func TestSettingsBaselineProvenance(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	data := []byte(`{
-		"groups":[{"id":-1001,"verify_mode":"quiz","questions":[{"q":"Package manager?","options":["Portage","apt"],"answer":0}]}],
-		"channel_whitelist":[],
-		"lookup_ttl_seconds":0,
-		"private_query_per_min":5
-	}`)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := config.LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseline, err := settingsBaseline(path, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings, err := store.NewSettings("", baseline)
-	if err != nil {
-		t.Fatal(err)
-	}
-	group, _ := settings.Group(-1001)
-	if got := group.VerifyMode(); got.Value != config.ModeQuiz || got.Source != store.SourceConfig {
-		t.Fatalf("group verify mode provenance = %+v", got)
-	}
-	if got := group.ChannelWhitelist(); len(got.Value) != 0 || got.Source != store.SourceConfig {
-		t.Fatalf("explicit empty whitelist provenance = %+v", got)
-	}
-	if got := group.LookupTTLSeconds(); got.Value != 0 || got.Source != store.SourceConfig {
-		t.Fatalf("disabled lookup provenance = %+v", got)
-	}
-	if got := group.TimeoutSeconds(); got.Value != 240 || got.Source != store.SourceDefault {
-		t.Fatalf("default timeout provenance = %+v", got)
-	}
-	if got := settings.Global().PrivateQueryPerMin(); got.Value != 5 || got.Source != store.SourceConfig {
-		t.Fatalf("global query-rate provenance = %+v", got)
 	}
 }
 func TestUntouchedGroupUsesConfigAndDefaults(t *testing.T) {
@@ -175,17 +81,13 @@ func TestUntouchedGroupUsesConfigAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseline, err := settingsBaseline(path, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseline := testSettingsBaselineFromConfig(cfg, store.SourceConfig)
 	settings, err := store.NewSettings("", baseline)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewVerifier(cfg)
-	installRuntimeSettings(v, settings)
-	if err := v.setEnabled(groupA, false); err != nil {
+	v := newService(settings, nil, cfg, &i18n.Messages)
+	if err := v.SetEnabled(groupA, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,8 +98,8 @@ func TestUntouchedGroupUsesConfigAndDefaults(t *testing.T) {
 	if got := untouched.TimeoutSeconds(); got.Value != 420 || got.Source != store.SourceConfig {
 		t.Fatalf("untouched timeout = %+v, want configured 420", got)
 	}
-	if !v.isEnabled(groupB) || v.timeout(groupB) != 420*time.Second || untouched.BanSeconds().Value != 7200 {
-		t.Fatalf("untouched scalar behavior = enabled:%v timeout:%v ban:%d", v.isEnabled(groupB), v.timeout(groupB), untouched.BanSeconds().Value)
+	if !v.IsEnabled(groupB) || v.timeout(groupB) != 420*time.Second || untouched.BanSeconds().Value != 7200 {
+		t.Fatalf("untouched scalar behavior = enabled:%v timeout:%v ban:%d", v.IsEnabled(groupB), v.timeout(groupB), untouched.BanSeconds().Value)
 	}
 	if ttl, enabled := testLookupService(v).AutoDelete(groupB); ttl != 10*time.Minute || !enabled {
 		t.Fatalf("untouched lookup cleanup = (%v, %v), want (10m, true)", ttl, enabled)
@@ -206,9 +108,9 @@ func TestUntouchedGroupUsesConfigAndDefaults(t *testing.T) {
 		t.Fatalf("untouched verification/antispam = max:%d retry:%d antispam:%v",
 			v.verifyMaxFails(groupB), v.verifyRetrySeconds(groupB), untouched.AntispamEnabled().Value)
 	}
+	known := untouched.KnownChatIDs().Value
 	if whitelist := untouched.ChannelWhitelist().Value; len(whitelist) != 1 || whitelist[0] != -1009000000201 ||
-		len(v.trustedGroups(groupB)) != 1 ||
-		!v.isKnownChat(-1009000000203) {
+		len(v.trustedGroups(groupB)) != 1 || len(known) != 1 || known[0] != -1009000000203 {
 		t.Fatal("untouched group did not use configured list settings")
 	}
 }
@@ -230,7 +132,7 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 		VerifyRetrySeconds: 180,
 		LookupTTLSeconds:   intPointer(180),
 	}
-	settings, err := store.NewSettings("", settingsBaselineFromConfig(cfg, configPresence{}))
+	settings, err := store.NewSettings("", testSettingsBaselineFromConfig(cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,12 +182,11 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 	}
 	groupAView, _ := settings.Group(groupA)
 	groupBView, _ := settings.Group(groupB)
-	v := NewVerifier(cfg)
-	installRuntimeSettings(v, settings)
+	v := newService(settings, nil, cfg, &i18n.Messages)
 
-	if v.isEnabled(groupA) || !v.isEnabled(groupB) ||
-		v.nameSpoilerOn(groupA) || !v.nameSpoilerOn(groupB) ||
-		v.effectiveMode(groupA) != config.ModeQuiz || v.effectiveMode(groupB) != config.ModeKernel {
+	if v.IsEnabled(groupA) || !v.IsEnabled(groupB) ||
+		v.NameSpoilerOn(groupA) || !v.NameSpoilerOn(groupB) ||
+		v.EffectiveMode(groupA) != config.ModeQuiz || v.EffectiveMode(groupB) != config.ModeKernel {
 		t.Fatal("enabled, spoiler, or mode leaked between groups")
 	}
 	if v.timeout(groupA) != 10*time.Minute || v.timeout(groupB) != 4*time.Minute ||
@@ -310,9 +211,10 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 		len(groupBView.ChannelWhitelist().Value) != 0 {
 		t.Fatal("failure cooldown or antispam state leaked between groups")
 	}
+	knownValues := groupAView.KnownChatIDs().Value
 	if len(v.trustedGroups(groupA)) != 1 || len(v.trustedGroups(groupB)) != 0 ||
-		!v.isKnownChat(knownID) || v.requiredChannelID(groupA) != requiredID ||
-		v.requiredChannelID(groupB) != 0 || v.channelDisplay(groupA) != display ||
+		len(knownValues) != 1 || knownValues[0] != knownID || v.RequiredChannelID(groupA) != requiredID ||
+		v.RequiredChannelID(groupB) != 0 || v.channelDisplay(groupA) != display ||
 		v.channelInviteURL(groupA) != invite {
 		t.Fatal("channel or trusted-chat settings leaked between groups")
 	}
@@ -322,8 +224,8 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 	if question, answers := v.fallbackQuestion(groupA, i18n.LangZH); question != fallback[0].Q || len(answers) != 1 {
 		t.Fatalf("group A fallback = %q %v", question, answers)
 	}
-	if v.groupLanguage(groupA, "zh-hant") != i18n.LangEN ||
-		v.groupLanguage(groupB, "zh-hant") != i18n.LangZHHant {
+	if v.groupLanguage(groupA) != i18n.LangEN ||
+		v.groupLanguage(groupB) != i18n.LangZH {
 		t.Fatal("language settings leaked between groups")
 	}
 }
@@ -333,7 +235,7 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 	cfg := runtimeSettingsTestConfig()
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	baseline := settingsBaselineFromConfig(cfg, configPresence{})
+	baseline := testSettingsBaselineFromConfig(cfg, store.SourceDefault)
 	settings, err := store.NewSettings(settingsPath, baseline)
 	if err != nil {
 		t.Fatal(err)
@@ -344,9 +246,8 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	effective := configWithEffectiveGroups(cfg, settings)
-	before := NewVerifier(effective)
-	installRuntimeSettings(before, settings)
+	effective := testConfigWithEffectiveGroups(cfg, settings)
+	before := newService(settings, nil, effective, &i18n.Messages)
 	before.statePath = filepath.Join(dir, "pending.json")
 	key := pkey{gid: runtimeGroup, uid: 7001}
 	before.pend[key] = &pending{
@@ -365,8 +266,7 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := NewVerifier(configWithEffectiveGroups(cfg, reloaded))
-	installRuntimeSettings(after, reloaded)
+	after := newService(reloaded, nil, testConfigWithEffectiveGroups(cfg, reloaded), &i18n.Messages)
 	after.statePath = before.statePath
 	after.load(nil)
 	t.Cleanup(after.stopForShutdown)
@@ -374,13 +274,111 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 		t.Fatal("pending for durably registered runtime group was dropped on restart")
 	}
 
-	withoutRegistration := NewVerifier(cfg)
+	withoutRegistration := newTestService(cfg)
 	withoutRegistration.statePath = before.statePath
 	withoutRegistration.load(nil)
 	t.Cleanup(withoutRegistration.stopForShutdown)
 	if _, ok := withoutRegistration.pend[key]; ok {
 		t.Fatal("pending for an unregistered runtime group was restored")
 	}
+}
+
+func testSettingsBaselineFromConfig(cfg *config.Config, configuredSource store.Source) store.SettingsBaseline {
+	seed := newService(nil, nil, cfg, &i18n.Messages)
+	defaultGroup := seed.fallbackGroupSettings(0)
+	defaultGroup.BanSeconds.Source = configuredSource
+	defaultGroup.LookupTTLSeconds.Source = configuredSource
+	defaultGroup.LookupAutoDeleteEnabled.Source = configuredSource
+	defaultGroup.TimeoutSeconds.Source = configuredSource
+	defaultGroup.VerifyMaxFails.Source = configuredSource
+	defaultGroup.VerifyRetrySeconds.Source = configuredSource
+	defaultGroup.AntispamEnabled.Source = configuredSource
+	defaultGroup.ChannelWhitelist.Source = configuredSource
+	defaultGroup.TrustedMemberGroupIDs.Source = configuredSource
+	defaultGroup.KnownChatIDs.Source = configuredSource
+	defaultGroup.RequiredChannelID.Source = configuredSource
+	defaultGroup.ChannelDisplay.Source = configuredSource
+	defaultGroup.ChannelInviteURL.Source = configuredSource
+	defaultGroup.Questions.Source = configuredSource
+	defaultGroup.FallbackQuestions.Source = configuredSource
+
+	privateQueryPerMin := cfg.PrivateQueryPerMin
+	if privateQueryPerMin <= 0 {
+		privateQueryPerMin = 3
+	}
+	baseline := store.SettingsBaseline{
+		DefaultGroup:   defaultGroup,
+		ControlGroupID: cfg.ControlGroupID,
+		Global: store.GlobalBaseline{
+			RichMessages:       store.BaselineValue[bool]{Value: cfg.RichMessages, Source: configuredSource},
+			PrivateQueryPerMin: store.BaselineValue[int]{Value: privateQueryPerMin, Source: configuredSource},
+		},
+	}
+	seen := make(map[int64]bool, max(len(cfg.Groups), len(cfg.GroupIDs)))
+	for _, configured := range cfg.Groups {
+		if configured.ID == 0 || seen[configured.ID] {
+			continue
+		}
+		group := seed.fallbackGroupSettings(configured.ID)
+		group.BanSeconds.Source = configuredSource
+		group.LookupTTLSeconds.Source = configuredSource
+		group.LookupAutoDeleteEnabled.Source = configuredSource
+		group.TimeoutSeconds.Source = configuredSource
+		group.VerifyMaxFails.Source = configuredSource
+		group.VerifyRetrySeconds.Source = configuredSource
+		group.AntispamEnabled.Source = configuredSource
+		group.ChannelWhitelist.Source = configuredSource
+		group.KnownChatIDs.Source = configuredSource
+		baseline.Groups = append(baseline.Groups, group)
+		seen[configured.ID] = true
+	}
+	for _, groupID := range cfg.GroupIDs {
+		if groupID == 0 || seen[groupID] {
+			continue
+		}
+		group := seed.fallbackGroupSettings(groupID)
+		group.BanSeconds.Source = configuredSource
+		group.LookupTTLSeconds.Source = configuredSource
+		group.LookupAutoDeleteEnabled.Source = configuredSource
+		group.TimeoutSeconds.Source = configuredSource
+		group.VerifyMaxFails.Source = configuredSource
+		group.VerifyRetrySeconds.Source = configuredSource
+		group.AntispamEnabled.Source = configuredSource
+		group.ChannelWhitelist.Source = configuredSource
+		group.KnownChatIDs.Source = configuredSource
+		baseline.Groups = append(baseline.Groups, group)
+		seen[groupID] = true
+	}
+	return baseline
+}
+
+func testConfigWithEffectiveGroups(cfg *config.Config, settings *store.Settings) *config.Config {
+	effective := *cfg
+	effective.Groups = append([]config.GroupConfig(nil), cfg.Groups...)
+	effective.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
+	groupSeen := make(map[int64]bool, len(effective.Groups))
+	for _, group := range effective.Groups {
+		groupSeen[group.ID] = true
+	}
+	idSeen := make(map[int64]bool, len(effective.GroupIDs))
+	for _, groupID := range effective.GroupIDs {
+		idSeen[groupID] = true
+	}
+	for _, groupID := range settings.GroupIDs() {
+		if !groupSeen[groupID] {
+			effective.Groups = append(effective.Groups, config.GroupConfig{ID: groupID})
+			groupSeen[groupID] = true
+		}
+		if !idSeen[groupID] {
+			effective.GroupIDs = append(effective.GroupIDs, groupID)
+			idSeen[groupID] = true
+		}
+	}
+	return &effective
+}
+
+func testLookupService(v *Service) *lookup.Service {
+	return lookup.New(v.settings, nil, v.cfg, "")
 }
 
 func runtimeSettingsTestConfig() *config.Config {

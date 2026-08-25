@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -64,17 +65,17 @@ var (
 	}
 )
 
-// TranslateBugValue localizes a known Bugzilla enum value when zh is true.
-func TranslateBugValue(v string, zh bool) string {
-	if !zh {
-		return v
+// TranslateBugValue localizes a known Bugzilla enum value for l.
+func TranslateBugValue(l i18n.Lang, value string) string {
+	if l == i18n.LangEN {
+		return value
 	}
 	for _, values := range [...]map[string]string{bugStatusZH, bugResolutionZH, bugSeverityZH, bugPriorityZH} {
-		if translated, ok := values[v]; ok {
+		if translated, ok := values[value]; ok {
 			return translated
 		}
 	}
-	return v
+	return value
 }
 
 // Only an HTTP 404 is authoritative; malformed, restricted, and failed responses are retryable.
@@ -95,7 +96,7 @@ func fetchBug(ctx context.Context, id string) (bugInfo, bugLookupState) {
 	return bugInfo{b.Summary, b.Status, b.Resolution, b.Product, b.Component, b.Severity}, bugLookupFound
 }
 
-func bugLookupFailureMessage(id, link string, state bugLookupState) string {
+func bugLookupFailureMessage(_ i18n.Lang, id, link string, state bugLookupState) string {
 	if state == bugLookupNotFound {
 		return fmt.Sprintf("❓ Bug %s 不存在。", id)
 	}
@@ -105,7 +106,11 @@ func bugLookupFailureMessage(id, link string, state bugLookupState) string {
 // OnBug handles Gentoo Bugzilla lookups.
 func (v *Service) OnBug(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -122,19 +127,19 @@ func (v *Service) OnBug(ctx *th.Context, update telego.Update) error {
 	info, state := fetchBug(hc, id)
 	if state != bugLookupFound {
 		// Keep unsuccessful lookups on the reply-linked cleanup path.
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, bugLookupFailureMessage(id, link, state))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, bugLookupFailureMessage(l, id, link, state))
 		return nil
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "🐞 <a href=\"%s\">Bug %s</a>\n%s\n", link, id, html.EscapeString(info.summary))
-	status := TranslateBugValue(info.status, true)
+	status := TranslateBugValue(l, info.status)
 	if info.resolution != "" {
-		status += " / " + TranslateBugValue(info.resolution, true)
+		status += " / " + TranslateBugValue(l, info.resolution)
 	}
 	fmt.Fprintf(&b, "状态:%s", html.EscapeString(status))
 	if info.severity != "" {
-		fmt.Fprintf(&b, " · 严重性:%s", html.EscapeString(TranslateBugValue(info.severity, true)))
+		fmt.Fprintf(&b, " · 严重性:%s", html.EscapeString(TranslateBugValue(l, info.severity)))
 	}
 	if info.product != "" {
 		comp := info.product
@@ -237,7 +242,7 @@ func GetNews(c context.Context) ([]NewsItem, bool) {
 	return items, true
 }
 
-func renderNews(arg string, items []NewsItem, available bool) string {
+func renderNews(_ i18n.Lang, arg string, items []NewsItem, available bool) string {
 	q := strings.ToLower(arg)
 	var b strings.Builder
 	if q == "" {
@@ -272,7 +277,11 @@ func renderNews(arg string, items []NewsItem, available bool) string {
 // OnNews handles Gentoo news lookups.
 func (v *Service) OnNews(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -281,7 +290,7 @@ func (v *Service) OnNews(ctx *th.Context, update telego.Update) error {
 	defer cancel()
 	items, available := GetNews(hc)
 	arg := commandArg(msg.Text)
-	b := renderNews(arg, items, available)
+	b := renderNews(l, arg, items, available)
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b)
 	return nil
 }
@@ -303,9 +312,11 @@ func classifyGentoo(title string) (string, string) {
 		return title, "en"
 	}
 	base := title[:len(title)-len(m[0])]
-	switch m[1] {
+	switch strings.ToLower(m[1]) {
 	case "zh-cn", "zh-hans":
 		return base, "zh"
+	case "zh-tw", "zh-hant":
+		return base, "zh-Hant"
 	default:
 		return base, "other"
 	}
@@ -320,10 +331,14 @@ func classifyArch(title string) (string, string) {
 		return title, "en"
 	}
 	base := title[:len(title)-len(m[0])]
-	if m[1] == "简体中文" {
+	switch m[1] {
+	case "简体中文":
 		return base, "zh"
+	case "繁體中文", "正體中文":
+		return base, "zh-Hant"
+	default:
+		return base, "other"
 	}
-	return base, "other"
 }
 
 var wikiSources = []wikiSource{
@@ -404,41 +419,54 @@ func displayTitles(ctx context.Context, w wikiSource, titles []string) map[strin
 	return out
 }
 
-// Dedupe topics case-insensitively, preferring Simplified Chinese over English.
-func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
-	type entry struct{ title, lang string }
+// Dedupe topics case-insensitively, preferring the requester's language.
+func (w wikiSource) pickWikiTitles(l i18n.Lang, titles []string, max int) []string {
+	type entry struct {
+		title string
+		lang  string
+	}
+	preferred := l.String()
+	rank := func(language string) int {
+		if language == preferred {
+			return 0
+		}
+		if language == "en" {
+			return 1
+		}
+		return 2
+	}
 	chosen := map[string]entry{}
 	var order []string
-	for _, t := range titles {
-		base, lang := w.classify(t)
-		if lang == "other" || (lang == "en" && hasNonASCII(base)) {
+	for _, title := range titles {
+		base, language := w.classify(title)
+		if language == "other" || (language == "en" && hasNonASCII(base)) {
 			continue
 		}
-		key := strings.ToLower(base) // case-insensitive topic key
-		if cur, ok := chosen[key]; ok {
-			if cur.lang != "zh" && lang == "zh" { // upgrade en -> zh for the same topic
-				chosen[key] = entry{t, lang}
+		key := strings.ToLower(base)
+		if current, ok := chosen[key]; ok {
+			if rank(language) < rank(current.lang) {
+				chosen[key] = entry{title: title, lang: language}
 			}
 			continue
 		}
-		chosen[key] = entry{t, lang}
+		chosen[key] = entry{title: title, lang: language}
 		order = append(order, key)
 	}
-	var zh, en []string
-	for _, b := range order {
-		if chosen[b].lang == "zh" {
-			zh = append(zh, chosen[b].title)
+	var primary, fallback []string
+	for _, key := range order {
+		if chosen[key].lang == preferred {
+			primary = append(primary, chosen[key].title)
 		} else {
-			en = append(en, chosen[b].title)
+			fallback = append(fallback, chosen[key].title)
 		}
 	}
-	out := append(zh, en...)
+	out := append(primary, fallback...)
 	if len(out) > max {
 		out = out[:max]
 	}
 	return out
 }
-func wikiResultNotice(found bool, srcOK []bool) string {
+func wikiResultNotice(_ i18n.Lang, found bool, srcOK []bool) string {
 	var b strings.Builder
 	missing := 0
 	for i, ok := range srcOK {
@@ -467,7 +495,11 @@ func wikiResultNotice(found bool, srcOK []bool) string {
 // OnWiki handles Gentoo and Arch wiki searches.
 func (v *Service) OnWiki(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()
@@ -490,7 +522,7 @@ func (v *Service) OnWiki(ctx *th.Context, update telego.Update) error {
 			defer wg.Done()
 			raw, ok := searchTitles(hc, w, q, 24)
 			srcOK[i] = ok
-			titles[i] = w.pickWikiTitles(raw, 4)
+			titles[i] = w.pickWikiTitles(l, raw, 4)
 			dtitles[i] = displayTitles(hc, w, titles[i])
 		}(i, w)
 	}
@@ -513,7 +545,7 @@ func (v *Service) OnWiki(ctx *th.Context, update telego.Update) error {
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(w.pageURL(t)), html.EscapeString(label))
 		}
 	}
-	b.WriteString(wikiResultNotice(found, srcOK))
+	b.WriteString(wikiResultNotice(l, found, srcOK))
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }
@@ -559,7 +591,11 @@ func ddgSiteSearch(site, query string) string {
 // OnBbs handles Linux forum searches.
 func (v *Service) OnBbs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
+	if msg == nil || msg.From == nil {
+		return nil
+	}
+	l := v.requesterLanguage(msg)
+	if !v.queryAllowed(ctx, msg, l) {
 		return nil
 	}
 	bot := ctx.Bot()

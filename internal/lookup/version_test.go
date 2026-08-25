@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 func TestVerLess(t *testing.T) {
@@ -160,13 +162,13 @@ func TestRenderPkgAvailability(t *testing.T) {
 		{
 			name: "plain",
 			fn: func(main []string, availability pkgLookupAvailability) string {
-				return renderPkg("vim", main, map[string][2]string{}, nil, availability)
+				return renderPkg(i18n.LangZH, "vim", main, map[string][2]string{}, nil, availability)
 			},
 		},
 		{
 			name: "rich",
 			fn: func(main []string, availability pkgLookupAvailability) string {
-				return renderPkgRich("vim", main, map[string][2]string{}, nil, availability)
+				return renderPkgRich(i18n.LangZH, "vim", main, map[string][2]string{}, nil, availability)
 			},
 		},
 	}

@@ -3,6 +3,7 @@ package moderate
 import (
 	"context"
 	"fmt"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"log"
 	"path/filepath"
 	"strconv"
@@ -93,8 +94,16 @@ func (s *Service) isGroupAdmin(ctx context.Context, chatID, userID int64) bool {
 func (s *Service) notify(ctx context.Context, chatID int64, text string) {
 	s.telegram.Notify(ctx, chatID, text, s.cfg.NotifyTTLSeconds)
 }
+func (s *Service) groupLanguage(groupID int64) i18n.Lang {
+	if s.settings != nil {
+		if group, ok := s.settings.Group(groupID); ok {
+			return i18n.FromStored(group.Lang().Value)
+		}
+	}
+	return i18n.FromStored(s.cfg.LangForGroup(groupID))
+}
 
-func (s *Service) warnPrecheck(ctx context.Context, msg *telego.Message, command string, checkTargetAdmin bool) *telego.User {
+func (s *Service) warnPrecheck(ctx context.Context, msg *telego.Message, command string, checkTargetAdmin bool, _ i18n.Lang) *telego.User {
 	groupID := msg.Chat.ID
 	if !s.isGroupAdmin(ctx, groupID, msg.From.ID) {
 		s.notify(ctx, groupID, fmt.Sprintf("⛔ %s 只能由群管理员使用。", command))
@@ -139,8 +148,8 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-
-	target := s.warnPrecheck(requestCtx, msg, "/warn", true)
+	l := s.groupLanguage(groupID)
+	target := s.warnPrecheck(requestCtx, msg, "/warn", true, l)
 	if target == nil {
 		return nil
 	}
@@ -184,8 +193,8 @@ func (s *Service) OnClearWarn(ctx *th.Context, update telego.Update) error {
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-
-	target := s.warnPrecheck(requestCtx, msg, "/clearwarn", false)
+	l := s.groupLanguage(groupID)
+	target := s.warnPrecheck(requestCtx, msg, "/clearwarn", false, l)
 	if target == nil {
 		return nil
 	}
@@ -215,8 +224,8 @@ func (s *Service) moderate(ctx *th.Context, update telego.Update, command string
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-
-	target := s.warnPrecheck(requestCtx, msg, command, true)
+	l := s.groupLanguage(groupID)
+	target := s.warnPrecheck(requestCtx, msg, command, true, l)
 	if target == nil {
 		return nil
 	}
@@ -235,7 +244,7 @@ func (s *Service) moderate(ctx *th.Context, update telego.Update, command string
 	if command == "/sb" {
 		verb = "封禁并清空(已清除其全部消息)"
 	}
-	action := fmt.Sprintf("已%s(%s)", verb, banDurationText(seconds))
+	action := fmt.Sprintf("已%s(%s)", verb, banDurationText(l, seconds))
 	s.notify(requestCtx, groupID, fmt.Sprintf("✅ %s:%s(id %d),操作人 %s。", action, displayName(target), target.ID, displayName(msg.From)))
 	s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
 		fmt.Sprintf("%s %s: 群 %d 目标 %d (%s) 操作人 %s", command, action, groupID, target.ID, displayName(target), displayName(msg.From)))
@@ -252,8 +261,8 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-
-	target := s.warnPrecheck(requestCtx, msg, "/mute", true)
+	l := s.groupLanguage(groupID)
+	target := s.warnPrecheck(requestCtx, msg, "/mute", true, l)
 	if target == nil {
 		return nil
 	}
@@ -261,7 +270,7 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 	if arg := strings.TrimSpace(commandArg(msg.Text)); arg != "" {
 		parsed, ok := parseBanDuration(arg)
 		if !ok || parsed <= 0 {
-			s.notify(requestCtx, groupID, fmt.Sprintf("用法:/mute(默认禁言 %s),或 /mute 30m、/mute 2h、/mute 12h 指定时长(不支持永久)。", banDurationText(s.cfg.MuteSeconds)))
+			s.notify(requestCtx, groupID, fmt.Sprintf("用法:/mute(默认禁言 %s),或 /mute 30m、/mute 2h、/mute 12h 指定时长(不支持永久)。", banDurationText(l, s.cfg.MuteSeconds)))
 			return nil
 		}
 		seconds = parsed
@@ -274,9 +283,9 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 	}
 	s.telegram.Delete(requestCtx, groupID, msg.ReplyToMessage.MessageID)
 	s.notify(requestCtx, groupID, fmt.Sprintf("🔇 已禁言 %s(id %d),时长 %s,到期自动解除(可 /unmute 提前解除)。操作人 %s。",
-		displayName(target), target.ID, banDurationText(seconds), displayName(msg.From)))
+		displayName(target), target.ID, banDurationText(l, seconds), displayName(msg.From)))
 	s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
-		fmt.Sprintf("/mute %s: 群 %d 目标 %d (%s) 操作人 %s", banDurationText(seconds), groupID, target.ID, displayName(target), displayName(msg.From)))
+		fmt.Sprintf("/mute %s: 群 %d 目标 %d (%s) 操作人 %s", banDurationText(l, seconds), groupID, target.ID, displayName(target), displayName(msg.From)))
 	log.Printf("/mute by admin=%d target=%d group=%d secs=%d", msg.From.ID, target.ID, groupID, seconds)
 	return nil
 }
@@ -290,8 +299,8 @@ func (s *Service) OnUnmute(ctx *th.Context, update telego.Update) error {
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-
-	target := s.warnPrecheck(requestCtx, msg, "/unmute", false)
+	l := s.groupLanguage(groupID)
+	target := s.warnPrecheck(requestCtx, msg, "/unmute", false, l)
 	if target == nil {
 		return nil
 	}
@@ -307,19 +316,16 @@ func (s *Service) OnUnmute(ctx *th.Context, update telego.Update) error {
 
 // OnBanTime handles the group-specific /bantime policy command.
 func (s *Service) OnBanTime(ctx *th.Context, update telego.Update) error {
-	const usage = "用法:/bantime <时长>,设定 /ban、/sb 和验证自动封禁的封禁时长:\n" +
-		"• /bantime 0 —— 永久封禁(被封后无法再加入本群)\n" +
-		"• /bantime 7d / 12h / 30m / 3600 —— 限时封禁(到期后可重新申请加入,相当于「踢出 + 冷静期」)\n" +
-		"(d=天 h=小时 m=分钟,纯数字=秒;最少 30 秒)"
-	return s.runSettingsAdminCommand(ctx, update, func(groupID int64) (string, error) {
-		arg := strings.TrimSpace(commandArg(update.Message.Text))
+	return s.runSettingsAdminCommand(ctx, update, func(groupID int64, l i18n.Lang) (string, error) {
+		arg := strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text)))
+		usage := "用法:/bantime 0(永久),或 /bantime 7d、12h、30m、90s"
 		if arg == "" {
 			seconds := s.banDuration(groupID)
-			kind := "永久,被封后无法再加入"
+			kind := "永久"
 			if seconds > 0 {
-				kind = "限时,到期后可重新加入"
+				kind = "到期后可重新加入"
 			}
-			return fmt.Sprintf("⏱ 当前封禁时长:%s(%s)。\n\n%s", banDurationText(seconds), kind, usage), nil
+			return fmt.Sprintf("⏱ 当前封禁时长:%s(%s)。\n\n%s", banDurationText(l, seconds), kind, usage), nil
 		}
 		seconds, ok := parseBanDuration(arg)
 		if !ok {
@@ -328,37 +334,38 @@ func (s *Service) OnBanTime(ctx *th.Context, update telego.Update) error {
 		if err := s.setBanDuration(groupID, seconds); err != nil {
 			return "", err
 		}
-		kind := "永久,被封后无法再加入本群"
+		kind := "永久封禁"
 		if seconds > 0 {
-			kind = "限时,到期后可重新申请加入(相当于踢出 + 冷静期)"
+			kind = "到期后可重新加入"
 		}
-		return fmt.Sprintf("✅ 已设定封禁时长:%s —— %s。\n/ban、/sb 及验证连续失败自动封禁都会使用它。", banDurationText(seconds), kind), nil
+		return fmt.Sprintf("✅ 已设定封禁时长:%s —— %s。\n/ban、/sb 及验证连续失败自动封禁都会使用它。", banDurationText(l, seconds), kind), nil
 	})
 }
 
-func (s *Service) runSettingsAdminCommand(ctx *th.Context, update telego.Update, run func(groupID int64) (string, error)) error {
+func (s *Service) runSettingsAdminCommand(ctx *th.Context, update telego.Update, run func(groupID int64, l i18n.Lang) (string, error)) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !s.settings.IsGroup(msg.Chat.ID) {
 		return nil
 	}
 	requestCtx := ctx.Context()
 	groupID := msg.Chat.ID
+	l := s.groupLanguage(groupID)
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
 	if !s.isGroupAdmin(requestCtx, groupID, msg.From.ID) {
 		s.notify(requestCtx, groupID, "⛔ 该命令仅群管理员可用。")
 		return nil
 	}
-	text, err := run(groupID)
+	text, err := run(groupID, l)
 	if err != nil {
-		s.notifySettingsFailure(requestCtx, groupID, err)
+		s.notifySettingsFailure(requestCtx, groupID, l, err)
 		return nil
 	}
 	s.notify(requestCtx, groupID, text)
 	return nil
 }
 
-func (s *Service) notifySettingsFailure(ctx context.Context, groupID int64, err error) {
-	log.Printf("settings command in group %d failed: %v", groupID, err)
+func (s *Service) notifySettingsFailure(ctx context.Context, groupID int64, _ i18n.Lang, err error) {
+	log.Printf("moderation settings command in group %d failed: %v", groupID, err)
 	s.notify(ctx, groupID, "❌ 无法保存设置,请稍后重试。")
 }
 
@@ -405,7 +412,7 @@ func parseBanDuration(arg string) (seconds int, ok bool) {
 	return config.ClampBanSeconds(value * multiplier), true
 }
 
-func banDurationText(seconds int) string {
+func banDurationText(_ i18n.Lang, seconds int) string {
 	if seconds <= 0 {
 		return "永久"
 	}

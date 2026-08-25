@@ -64,6 +64,19 @@ func FromTelegram(code string) Lang {
 	return LangZH
 }
 
+// FromRequester resolves a supported requester language or returns fallback.
+func FromRequester(code string, fallback Lang) Lang {
+	code = strings.ToLower(strings.TrimSpace(code))
+	switch {
+	case code == "en" || strings.HasPrefix(code, "en-") || strings.HasPrefix(code, "en_"):
+		return LangEN
+	case strings.HasPrefix(code, "zh") || strings.HasPrefix(code, "yue"):
+		return FromTelegram(code)
+	default:
+		return fallback
+	}
+}
+
 // FromStored resolves canonical and legacy pending language tags.
 func FromStored(tag string) Lang {
 	switch strings.ToLower(strings.TrimSpace(tag)) {

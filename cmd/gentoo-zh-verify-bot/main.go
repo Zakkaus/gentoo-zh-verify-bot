@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,12 +12,16 @@ import (
 	"syscall"
 	"time"
 
+	botapp "github.com/Zakkaus/gentoo-zh-verify-bot/internal/bot"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/feed"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/panel"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/verify"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -32,8 +37,12 @@ func streamEndedUnexpectedly(ctxErr error) bool { return ctxErr == nil }
 
 func main() {
 	configPath := flag.String("config", "/etc/gentoo-zh-verify-bot/config.json", "path to config.json")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
-
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	token := os.Getenv("BOT_TOKEN")
 	if token == "" {
 		log.Fatal("BOT_TOKEN environment variable is required")
@@ -52,7 +61,7 @@ func main() {
 		store.ReclaimTemps(sd)
 		settingsPath = filepath.Join(sd, "settings.json")
 	}
-	baseline, err := settingsBaseline(*configPath, cfg)
+	baseline, err := store.LoadBaseline(*configPath, cfg)
 	if err != nil {
 		log.Fatalf("settings baseline: %v", err)
 	}
@@ -63,7 +72,7 @@ func main() {
 	if status := runtimeSettings.Persistence(); status.LastError != nil {
 		log.Printf("WARNING: runtime settings persistence unavailable: %v", status.LastError)
 	}
-	cfg = configWithEffectiveGroups(cfg, runtimeSettings)
+	cfg = store.EffectiveConfig(cfg, runtimeSettings)
 
 	// TELEGRAM_API_URL selects a lower-latency self-hosted Bot API server.
 	var botOpts []telego.BotOption
@@ -99,40 +108,27 @@ func main() {
 	}
 	// Fatal exits skip defers; the graceful path stops the handler explicitly.
 
-	v := newVerifier(cfg, runtimeSettings)
-	v.telegramBot = bot
-	v.telegramClient = telegram
+	startedAt := time.Now()
 	me, err := bot.GetMe(ctx)
 	if err != nil {
 		log.Fatalf("GetMe failed (required for the verification deep link): %v", err)
 	}
-	v.botUsername = me.Username
-	v.botID = me.ID
-	v.probe = bot // liveness prober for the on-demand reachability check in the expiry path
-	if sd != "" {
-		v.hbPath = filepath.Join(sd, "heartbeat.json")
-		v.statePath = filepath.Join(sd, "pending.json")
-		v.load(bot) // reads the heartbeat before interpreting pending deadlines
-		v.vfailPath = filepath.Join(sd, "verifyfail.json")
-		v.loadVerifyFails()
-		v.agentPath = filepath.Join(sd, "agents.json")
-		v.loadAgents()
-	} else {
+	identity := verify.Identity{ID: me.ID, Username: me.Username}
+	verification := verify.New(runtimeSettings, telegram, cfg, &i18n.Messages, bot, identity, sd)
+	if sd == "" {
 		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: settings changes are runtime-only, and pending verifications, warn counts, and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
 	}
 	moderation := moderate.New(runtimeSettings, telegram, cfg, sd)
-	log.Printf("verify bot @%s (%s) started — groups=%d", me.Username, version, len(runtimeSettings.GroupIDs()))
-	for _, groupID := range runtimeSettings.GroupIDs() {
-		group, _ := runtimeSettings.Group(groupID)
-		log.Printf("  group %d: required_channel=%d questions=%d timeout=%ds", groupID,
-			v.requiredChannelID(groupID), len(group.Questions().Value), group.TimeoutSeconds().Value)
-	}
-	go func() {
-		moderation.LogGroupAdmin(ctx, bot, me.ID)
-		v.logVerificationAccess(ctx, bot, me.ID)
-	}()
-	v.register(bh, moderation, lookups)
-	setupCommands(ctx, bot, cfg.WarnLimit)
+	administration := panel.New(
+		runtimeSettings, telegram, cfg, &i18n.Messages,
+		verification, moderation, lookups, version, startedAt,
+	)
+	application := botapp.New(
+		cfg, runtimeSettings, telegram, verification, administration, moderation, lookups, version,
+	)
+	application.LogStartup(ctx, bot, identity)
+	application.Register(bh)
+	application.SetupCommands(ctx, bot)
 
 	var feeds []*config.FeedConfig // one shared poller fans new bugs + news out to all configured feeds
 	for i := range cfg.Feeds {
@@ -152,8 +148,8 @@ func main() {
 		}()
 	}
 
-	go lookups.Warm(ctx)        // warm the package-search cache in the background (cancelled on shutdown)
-	go v.runHeartbeat(ctx, bot) // liveness probe: pause verification timeouts during a Telegram/network outage and refresh on recovery
+	go lookups.Warm(ctx)                   // warm the package-search cache in the background (cancelled on shutdown)
+	go verification.RunHeartbeat(ctx, bot) // liveness probe: pause verification timeouts during a Telegram/network outage and refresh on recovery
 
 	if err := bh.Start(); err != nil {
 		log.Fatalf("handler stopped: %v", err)
@@ -163,10 +159,7 @@ func main() {
 	}
 	// Freeze timers, then flush state updated by any callback whose own save was interrupted.
 	_ = bh.Stop()
-	v.stopForShutdown() // freeze pending timers so a verification deadline firing during exit can't wrongly decline/ban
-	v.save()
-	v.saveVerifyFails()
-	v.saveHeartbeat() // record a clean exit time so the next start sees a recent heartbeat, not a false outage
+	verification.Shutdown() // freeze timers before persisting so no deadline can decline or ban during exit
 	if feedDone != nil {
 		// Bound shutdown even if the feed's final network call stalls.
 		select {
