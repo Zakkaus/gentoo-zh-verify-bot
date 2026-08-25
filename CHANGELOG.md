@@ -7,11 +7,11 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
-- **Optional `control_group_id` for multi-group deployments.** It restricts `/rich`, the only
-  command that changes bot-wide settings, to administrators in one guarded group. The other
-  settings commands remain per-group. Leaving it unset preserves the previous any-guarded-group
-  command policy and now logs a startup warning when several groups are configured. Naming a chat
-  outside `groups` fails config loading instead of locking the global command out.
+- **Optional `control_group_id` for multi-group deployments.** It selects the group whose
+  administrators may change bot-wide `/rich` output and `private_query_per_min` through the
+  settings panel. When unset, runtime settings use the first effective group; registering the
+  first runtime group in an otherwise empty deployment persists that choice. Naming a chat outside
+  configured `groups` fails config loading.
 - **`/distro` is now advertised as an alias of `/pkgs`** in the command menu, `/help`, and the
   user documentation.
 - Unknown config keys now produce a startup warning with their location. They remain ignored, so
@@ -21,6 +21,9 @@ All notable changes to this project are documented here. The format is based on
   overrides. `owner_claim_user_id` can restrict first-owner setup to one Telegram user.
 
 ### Changed
+- Rewrote the Simplified Chinese README as the source document and translated the English README
+  from it. Both now focus on deployment fit and operating footprint, with current verification,
+  runtime registration, settings, command scope, watchdog, persistence, and outage behavior.
 - **Join verification now tries the private challenge first by default.** Applicants who have
   previously started the bot receive only the DM; Telegram's ordinary cannot-initiate 403 falls
   back to the group challenge. New fallback links encode the group ID so concurrent requests
