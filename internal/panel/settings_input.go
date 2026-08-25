@@ -24,14 +24,13 @@ func (v *Panel) dispatchQuizBank(ctx context.Context, bot *telego.Bot, session *
 	case "go":
 		return v.navigate(ctx, bot, session, data.value)
 	case "pg":
-		page, _ := decodeUnsigned(data.value)
-		session.page = int(page)
+		page, _ := decodeIndex(data.value)
+		session.page = page
 		return v.renderSession(ctx, bot, session, session.groupID)
 	case "ca":
 		return v.armTextInput(ctx, bot, session, inputQuizQuestion, "qb")
 	case "qq":
-		indexValue, _ := decodeUnsigned(data.value)
-		index := int(indexValue)
+		index, _ := decodeIndex(data.value)
 		questions := group.Questions().Value
 		if index < 0 || index >= len(questions) {
 			return &store.ConflictError{GroupID: session.groupID, Expected: session.revision, Actual: group.Revision()}
@@ -56,16 +55,14 @@ func (v *Panel) dispatchQuizDraft(ctx context.Context, bot *telego.Bot, session 
 	case "qo":
 		return v.armTextInput(ctx, bot, session, inputQuizOption, "qd")
 	case "ok":
-		indexValue, _ := decodeUnsigned(data.value)
-		index := int(indexValue)
+		index, _ := decodeIndex(data.value)
 		if index < 0 || index >= len(draft.question.Options) {
 			return &store.ConflictError{GroupID: session.groupID, Expected: session.revision, Actual: group.Revision()}
 		}
 		draft.question.Answer = index
 		return v.renderSession(ctx, bot, session, session.groupID)
 	case "dl":
-		indexValue, _ := decodeUnsigned(data.value)
-		index := int(indexValue)
+		index, _ := decodeIndex(data.value)
 		if index < 0 || index >= len(draft.question.Options) {
 			return &store.ConflictError{GroupID: session.groupID, Expected: session.revision, Actual: group.Revision()}
 		}
@@ -122,14 +119,13 @@ func (v *Panel) dispatchFallbackBank(ctx context.Context, bot *telego.Bot, sessi
 	case "go":
 		return v.navigate(ctx, bot, session, data.value)
 	case "pg":
-		page, _ := decodeUnsigned(data.value)
-		session.page = int(page)
+		page, _ := decodeIndex(data.value)
+		session.page = page
 		return v.renderSession(ctx, bot, session, session.groupID)
 	case "ca":
 		return v.armTextInput(ctx, bot, session, inputFallbackQuestion, "fb")
 	case "fq":
-		indexValue, _ := decodeUnsigned(data.value)
-		index := int(indexValue)
+		index, _ := decodeIndex(data.value)
 		questions := group.FallbackQuestions().Value
 		if group.FallbackBuiltin().Value || index < 0 || index >= len(questions) {
 			return &store.ConflictError{GroupID: session.groupID, Expected: session.revision, Actual: group.Revision()}
@@ -157,8 +153,7 @@ func (v *Panel) dispatchFallbackDraft(ctx context.Context, bot *telego.Bot, sess
 	case "fa":
 		return v.armTextInput(ctx, bot, session, inputFallbackAnswer, "fd")
 	case "dl":
-		indexValue, _ := decodeUnsigned(data.value)
-		index := int(indexValue)
+		index, _ := decodeIndex(data.value)
 		if index < 0 || index >= len(draft.question.Answers) {
 			return &store.ConflictError{GroupID: session.groupID, Expected: session.revision, Actual: group.Revision()}
 		}
@@ -356,7 +351,7 @@ func (v *Panel) armChatInput(ctx context.Context, bot *telego.Bot, session *pane
 	}
 	buttons := []telego.KeyboardButton{{
 		Text: buttonText,
-		RequestChat: (&telego.KeyboardButtonRequestChat{RequestID: int32(primary), ChatIsChannel: isChannel}).
+		RequestChat: (&telego.KeyboardButtonRequestChat{RequestID: primary, ChatIsChannel: isChannel}).
 			WithRequestTitle(true).WithRequestUsername(true).WithBotIsMember(true),
 	}}
 	if kind == inputKnownChat {
@@ -364,7 +359,7 @@ func (v *Panel) armChatInput(ctx context.Context, bot *telego.Bot, session *pane
 		pending.requestAltID = alternative
 		buttons = append(buttons, telego.KeyboardButton{
 			Text: i18n.Messages.Panel.Settings.Field.ChatChannel.For(session.language),
-			RequestChat: (&telego.KeyboardButtonRequestChat{RequestID: int32(alternative), ChatIsChannel: true}).
+			RequestChat: (&telego.KeyboardButtonRequestChat{RequestID: alternative, ChatIsChannel: true}).
 				WithRequestTitle(true).WithRequestUsername(true).WithBotIsMember(true),
 		})
 	}
@@ -486,8 +481,8 @@ func (v *Panel) OnPanelChatShared(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	pending := session.pending
-	request := message.ChatShared.RequestID
-	if pending == nil || (pending.requestID != request && pending.requestAltID != request) {
+	request, valid := sharedRequestID(message.ChatShared.RequestID)
+	if !valid || pending == nil || (pending.requestID != request && pending.requestAltID != request) {
 		return nil
 	}
 	if !v.authorizeInput(ctx.Context(), ctx.Bot(), session) {

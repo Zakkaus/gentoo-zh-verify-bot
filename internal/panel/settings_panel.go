@@ -304,8 +304,8 @@ func (v *Panel) dispatchGroupList(ctx context.Context, bot *telego.Bot, session 
 		session.screen = "gh"
 		return v.renderSession(ctx, bot, session, data.group)
 	case "pg":
-		page, _ := decodeUnsigned(data.value)
-		session.page = int(page)
+		page, _ := decodeIndex(data.value)
+		session.page = page
 		return v.renderSession(ctx, bot, session, data.group)
 	case "rf":
 		return v.renderSession(ctx, bot, session, data.group)
@@ -384,8 +384,8 @@ func (v *Panel) dispatchList(ctx context.Context, bot *telego.Bot, session *pane
 	case "go":
 		return v.navigate(ctx, bot, session, data.value)
 	case "pg":
-		page, _ := decodeUnsigned(data.value)
-		session.page = int(page)
+		page, _ := decodeIndex(data.value)
+		session.page = page
 		return v.renderSession(ctx, bot, session, session.groupID)
 	case "ca":
 		if inputKind(data.value) != session.listKind {
@@ -549,10 +549,10 @@ func (v *Panel) buildGroupList(ctx context.Context, bot *telego.Bot, session *pa
 	}
 	var pageButtons []panelButton
 	if session.page > 0 {
-		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Prev.For(session.language), field: "pg", value: encodeUnsigned(uint64(session.page - 1))})
+		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Prev.For(session.language), field: "pg", value: encodeIndex(session.page - 1)})
 	}
 	if session.page < maxPage {
-		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Next.For(session.language), field: "pg", value: encodeUnsigned(uint64(session.page + 1))})
+		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Next.For(session.language), field: "pg", value: encodeIndex(session.page + 1)})
 	}
 	if len(pageButtons) > 0 {
 		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID, pageButtons...)
@@ -689,10 +689,10 @@ func (v *Panel) buildList(session *panelSession, token string) (string, *telego.
 	}
 	var pages []panelButton
 	if session.page > 0 {
-		pages = append(pages, panelButton{text: i18n.Messages.Panel.Settings.Common.Prev.For(session.language), field: "pg", value: encodeUnsigned(uint64(session.page - 1))})
+		pages = append(pages, panelButton{text: i18n.Messages.Panel.Settings.Common.Prev.For(session.language), field: "pg", value: encodeIndex(session.page - 1)})
 	}
 	if session.page < maxPage {
-		pages = append(pages, panelButton{text: i18n.Messages.Panel.Settings.Common.Next.For(session.language), field: "pg", value: encodeUnsigned(uint64(session.page + 1))})
+		pages = append(pages, panelButton{text: i18n.Messages.Panel.Settings.Common.Next.For(session.language), field: "pg", value: encodeIndex(session.page + 1)})
 	}
 	if len(pages) > 0 {
 		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID, pages...)
@@ -784,7 +784,7 @@ func (v *Panel) buildFallbackBank(session *panelSession, token string) (string, 
 		label := i18n.Messages.Panel.Settings.Value.QuestionItem.Render(session.language, index+1, summarize(questions[index].Q))
 		lines = append(lines, label)
 		var err error
-		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID, panelButton{text: label, field: "fq", value: encodeUnsigned(uint64(index))})
+		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID, panelButton{text: label, field: "fq", value: encodeIndex(index)})
 		if err != nil {
 			return "", nil, err
 		}
@@ -821,7 +821,7 @@ func (v *Panel) buildQuestionBank(session *panelSession, token string, questions
 		label := i18n.Messages.Panel.Settings.Value.QuestionItem.Render(session.language, index+1, summarize(questions[index].Q))
 		lines = append(lines, label)
 		var err error
-		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID, panelButton{text: label, field: "qq", value: encodeUnsigned(uint64(index))})
+		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID, panelButton{text: label, field: "qq", value: encodeIndex(index)})
 		if err != nil {
 			return "", nil, err
 		}
@@ -861,8 +861,8 @@ func (v *Panel) buildQuizDetail(session *panelSession, token string) (string, *t
 	}
 	for index, option := range draft.Options {
 		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID,
-			panelButton{text: i18n.Messages.Panel.Settings.Field.CorrectOption.For(session.language) + " " + summarize(option), field: "ok", value: encodeUnsigned(uint64(index))},
-			panelButton{text: i18n.Messages.Panel.Settings.Common.Remove.For(session.language) + " " + strconv.Itoa(index+1), field: "dl", value: encodeUnsigned(uint64(index))})
+			panelButton{text: i18n.Messages.Panel.Settings.Field.CorrectOption.For(session.language) + " " + summarize(option), field: "ok", value: encodeIndex(index)},
+			panelButton{text: i18n.Messages.Panel.Settings.Common.Remove.For(session.language) + " " + strconv.Itoa(index+1), field: "dl", value: encodeIndex(index)})
 		if err != nil {
 			return "", nil, err
 		}
@@ -897,7 +897,7 @@ func (v *Panel) buildFallbackDetail(session *panelSession, token string) (string
 	}
 	for index := range draft.Answers {
 		rows, err = v.appendButtonRow(rows, token, session.screen, session.groupID,
-			panelButton{text: i18n.Messages.Panel.Settings.Common.Remove.For(session.language) + " " + strconv.Itoa(index+1), field: "dl", value: encodeUnsigned(uint64(index))})
+			panelButton{text: i18n.Messages.Panel.Settings.Common.Remove.For(session.language) + " " + strconv.Itoa(index+1), field: "dl", value: encodeIndex(index)})
 		if err != nil {
 			return "", nil, err
 		}
@@ -996,10 +996,10 @@ func (v *Panel) appendButtonRow(rows [][]telego.InlineKeyboardButton, token, scr
 func (v *Panel) appendPageAndBack(rows [][]telego.InlineKeyboardButton, token string, session *panelSession, maxPage int, back string) ([][]telego.InlineKeyboardButton, error) {
 	var pageButtons []panelButton
 	if session.page > 0 {
-		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Prev.For(session.language), field: "pg", value: encodeUnsigned(uint64(session.page - 1))})
+		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Prev.For(session.language), field: "pg", value: encodeIndex(session.page - 1)})
 	}
 	if session.page < maxPage {
-		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Next.For(session.language), field: "pg", value: encodeUnsigned(uint64(session.page + 1))})
+		pageButtons = append(pageButtons, panelButton{text: i18n.Messages.Panel.Settings.Common.Next.For(session.language), field: "pg", value: encodeIndex(session.page + 1)})
 	}
 	var err error
 	if len(pageButtons) > 0 {
@@ -1251,6 +1251,8 @@ func (v *Panel) inputPrompt(language i18n.Lang, kind inputKind) string {
 	}
 }
 
-func requestID() int {
-	return int(time.Now().UnixNano() & 0x7fffffff)
+// requestID returns a chat-picker request identifier. Telegram carries it as a signed 32-bit value,
+// and a known-chat prompt also uses id+1, so the mask leaves room for that increment.
+func requestID() int32 {
+	return int32(time.Now().UnixNano() & 0x3fffffff)
 }

@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -41,8 +42,8 @@ type pendingInput struct {
 	kind             inputKind
 	parent           string
 	promptMessageID  int
-	requestID        int
-	requestAltID     int
+	requestID        int32
+	requestAltID     int32
 	expectedRevision uint64
 }
 
@@ -319,5 +320,18 @@ func (v *Panel) PanelChatSharedDM(_ context.Context, update telego.Update) bool 
 	if pending == nil || pending.requestID == 0 {
 		return false
 	}
-	return pending.requestID == message.ChatShared.RequestID || pending.requestAltID == message.ChatShared.RequestID
+	shared, ok := sharedRequestID(message.ChatShared.RequestID)
+	if !ok {
+		return false
+	}
+	return pending.requestID == shared || pending.requestAltID == shared
+}
+
+// sharedRequestID narrows a Telegram-supplied chat-picker identifier. The Bot API defines it as a
+// signed 32-bit value, so anything outside that range did not come from a prompt this bot sent.
+func sharedRequestID(value int) (int32, bool) {
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		return 0, false
+	}
+	return int32(value), true
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -144,7 +145,9 @@ func pageValue(value string) bool {
 func screenValue(values ...string) func(string) bool { return enumValue(values...) }
 
 func encodeSigned(value int64) string {
-	zigzag := (uint64(value) << 1) ^ uint64(value>>63)
+	// Zig-zag encoding reinterprets the two's-complement bits deliberately; both conversions are
+	// bit-exact by definition and cannot lose information.
+	zigzag := (uint64(value) << 1) ^ uint64(value>>63) // #nosec G115 -- intentional bit-exact reinterpretation
 	return strconv.FormatUint(zigzag, 16)
 }
 
@@ -157,6 +160,31 @@ func decodeSigned(value string) (int64, error) {
 		return 0, err
 	}
 	return int64(zigzag>>1) ^ -int64(zigzag&1), nil
+}
+
+// panelIndexMax bounds every list index and page number carried in a callback payload. No settings
+// list can approach it; the bound exists so a forged payload cannot address a slice out of range or
+// wrap when converted on a 32-bit platform.
+const panelIndexMax = math.MaxInt32
+
+// encodeIndex encodes a non-negative list index or page number for a callback payload.
+func encodeIndex(value int) string {
+	if value < 0 {
+		value = 0
+	}
+	return encodeUnsigned(uint64(value))
+}
+
+// decodeIndex decodes a list index or page number, rejecting anything a slice could not address.
+func decodeIndex(value string) (int, error) {
+	raw, err := decodeUnsigned(value)
+	if err != nil {
+		return 0, err
+	}
+	if raw > panelIndexMax {
+		return 0, errors.New("index out of range")
+	}
+	return int(raw), nil
 }
 
 func encodeUnsigned(value uint64) string { return strconv.FormatUint(value, 16) }

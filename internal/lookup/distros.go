@@ -556,7 +556,7 @@ func fedoraArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
 		// mdapi currently serves x86_64 metadata for this route. Only an
 		// aarch64 or architecture-independent record can prove arm64 support.
 		if r.Arch != "aarch64" && r.Arch != "noarch" {
-			return "", fmt.Errorf("Fedora mdapi returned architecture %q", r.Arch)
+			return "", fmt.Errorf("fedora mdapi returned architecture %q", r.Arch)
 		}
 		return r.Version, nil
 	})

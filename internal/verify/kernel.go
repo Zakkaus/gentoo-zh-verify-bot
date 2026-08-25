@@ -661,15 +661,6 @@ func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string,
 	return p.lang, p.nonce, p.fbAnswers, true
 }
 
-func (v *Service) kernelTriesUsed(gid, uid int64) int {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if p, ok := v.pend[pkey{gid, uid}]; ok {
-		return p.tries
-	}
-	return 0
-}
-
 // Prepare a hidden fallback and suspend grading until its prompt delivery is confirmed.
 func (v *Service) beginKernelFallback(bot verifyBot, gid, uid int64, nonce, question string, answers []string) bool {
 	v.mu.Lock()

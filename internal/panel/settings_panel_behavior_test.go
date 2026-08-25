@@ -719,7 +719,7 @@ func submitSharedChat(t *testing.T, panel *Panel, bot *telego.Bot, session *pane
 		Chat:      telego.Chat{ID: panelTestUser, Type: "private"},
 		From:      &telego.User{ID: panelTestUser, LanguageCode: "en"},
 		ChatShared: &telego.ChatShared{
-			RequestID: session.pending.requestID,
+			RequestID: int(session.pending.requestID),
 			ChatID:    chatID,
 		},
 	}}

@@ -250,7 +250,11 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 	}
 	limit := s.cfg.WarnLimit
 	count := s.warnings.increment(groupID, target.ID)
-	s.warnings.save() // Persist immediately so a failed at-limit kick survives restart.
+	// Persist immediately so a failed at-limit kick survives restart. A write failure keeps the
+	// in-memory count authoritative for this process; the store already logged the cause.
+	if err := s.warnings.save(); err != nil {
+		log.Printf("moderate: warning state save failed for group %d: %v", groupID, err)
+	}
 
 	if count >= limit {
 		rejoinable, err := s.warnKick(requestCtx, groupID, target.ID)
@@ -263,7 +267,9 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 			return nil
 		}
 		s.warnings.clear(groupID, target.ID)
-		s.warnings.save()
+		if err := s.warnings.save(); err != nil {
+			log.Printf("moderate: warning state save failed for group %d: %v", groupID, err)
+		}
 		outcome := i18n.Messages.Moderate.Warning.KickRejoinable.For(l)
 		if !rejoinable {
 			outcome = i18n.Messages.Moderate.Warning.KickUnbanFailed.For(l)
@@ -294,7 +300,9 @@ func (s *Service) OnClearWarn(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	previous := s.warnings.clear(groupID, target.ID)
-	s.warnings.save()
+	if err := s.warnings.save(); err != nil {
+		log.Printf("moderate: warning state save failed for group %d: %v", groupID, err)
+	}
 	s.notify(requestCtx, groupID, i18n.Messages.Moderate.Warning.Cleared.Render(l, displayName(target), previous, displayName(msg.From)))
 	log.Printf("/clearwarn user=%d group=%d was=%d by=%d", target.ID, groupID, previous, msg.From.ID)
 	return nil
