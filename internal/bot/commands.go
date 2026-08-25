@@ -10,41 +10,43 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-func memberCommands(_ i18n.Lang) []telego.BotCommand {
+func memberCommands(l i18n.Lang) []telego.BotCommand {
 	// Keep menu descriptions short because Telegram truncates them.
+	menu := i18n.Messages.Bot.Menu.Member
 	return []telego.BotCommand{
-		{Command: "help", Description: "查看可用指令"},
-		{Command: "pkg", Description: "搜索 Gentoo 包"},
-		{Command: "use", Description: "查包的 USE 标志 + 信息"},
-		{Command: "bug", Description: "查 Gentoo Bugzilla 编号"},
-		{Command: "news", Description: "查 / 搜 Gentoo 新闻"},
-		{Command: "wiki", Description: "搜 Gentoo / Arch wiki"},
-		{Command: "bbs", Description: "搜 Linux 论坛(中文优先)"},
-		{Command: "pkgs", Description: "跨发行版查包版本"},
-		{Command: "distro", Description: "/pkgs 的别名"},
-		{Command: "arm", Description: "查包的 arm64 keyword 状态"},
-		{Command: "armpkgs", Description: "跨发行版查 arm64 支持"},
-		{Command: "ping", Description: "机器人状态 / 运行时长"},
-		{Command: "stats", Description: "今日通过 / 拒绝人数"},
+		{Command: "help", Description: menu.Help.For(l)},
+		{Command: "pkg", Description: menu.Pkg.For(l)},
+		{Command: "use", Description: menu.Use.For(l)},
+		{Command: "bug", Description: menu.Bug.For(l)},
+		{Command: "news", Description: menu.News.For(l)},
+		{Command: "wiki", Description: menu.Wiki.For(l)},
+		{Command: "bbs", Description: menu.BBS.For(l)},
+		{Command: "pkgs", Description: menu.Pkgs.For(l)},
+		{Command: "distro", Description: menu.Distro.For(l)},
+		{Command: "arm", Description: menu.Arm.For(l)},
+		{Command: "armpkgs", Description: menu.ArmPkgs.For(l)},
+		{Command: "ping", Description: menu.Ping.For(l)},
+		{Command: "stats", Description: menu.Stats.For(l)},
 	}
 }
 
 func adminCommands(l i18n.Lang, warnLimit int) []telego.BotCommand {
+	menu := i18n.Messages.Bot.Menu.Admin
 	return append([]telego.BotCommand{
-		{Command: "start", Description: "[管理] 开启入群验证"},
-		{Command: "stop", Description: "[管理] 关闭入群验证"},
-		{Command: "mute", Description: "[管理] 回复:禁言(默认1h,可 /mute 30m)"},
-		{Command: "unmute", Description: "[管理] 回复:解除禁言"},
-		{Command: "sb", Description: "[管理] 回复:封禁并清空其消息"},
-		{Command: "ban", Description: "[管理] 回复:封禁(踢出群)"},
-		{Command: "warn", Description: fmt.Sprintf("[管理] 回复:警告(满 %d 次自动踢)", warnLimit)},
-		{Command: "clearwarn", Description: "[管理] 回复:清除警告"},
-		{Command: "bc", Description: "[管理] 频道身份发言封禁 / 白名单"},
-		{Command: "rich", Description: "[管理] 开关富文本(/pkg /use)"},
-		{Command: "spoiler", Description: "[管理] 开关:遮盖新成员名字(防广告)"},
-		{Command: "vmode", Description: "[管理] 切换验证方式(内核版本 / 选择题)"},
-		{Command: "autodel", Description: "[管理] 查询结果自动删除开关"},
-		{Command: "bantime", Description: "[管理] 设定封禁时长(0=永久)"},
+		{Command: "start", Description: menu.Start.For(l)},
+		{Command: "stop", Description: menu.Stop.For(l)},
+		{Command: "mute", Description: menu.Mute.For(l)},
+		{Command: "unmute", Description: menu.Unmute.For(l)},
+		{Command: "sb", Description: menu.Purge.For(l)},
+		{Command: "ban", Description: menu.Ban.For(l)},
+		{Command: "warn", Description: menu.Warn.Render(l, warnLimit)},
+		{Command: "clearwarn", Description: menu.ClearWarn.For(l)},
+		{Command: "bc", Description: menu.Channel.For(l)},
+		{Command: "rich", Description: menu.RichText.For(l)},
+		{Command: "spoiler", Description: menu.NameSpoiler.For(l)},
+		{Command: "vmode", Description: menu.VerificationMode.For(l)},
+		{Command: "autodel", Description: menu.AutoDelete.For(l)},
+		{Command: "bantime", Description: menu.BanTime.For(l)},
 	}, memberCommands(l)...)
 }
 

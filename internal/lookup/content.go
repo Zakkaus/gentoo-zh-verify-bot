@@ -47,32 +47,70 @@ type bugResponse struct {
 
 // Only Bugzilla's finite enum values are localized; official identifiers stay unchanged.
 var (
-	bugStatusZH = map[string]string{
-		"UNCONFIRMED": "未确认", "CONFIRMED": "已确认", "IN_PROGRESS": "处理中",
-		"RESOLVED": "已解决", "VERIFIED": "已验证",
+	bugStatusMessages = map[string]i18n.Text{
+		"UNCONFIRMED": i18n.Messages.LookupContent.Bug.Status.Unconfirmed,
+		"CONFIRMED":   i18n.Messages.LookupContent.Bug.Status.Confirmed,
+		"IN_PROGRESS": i18n.Messages.LookupContent.Bug.Status.InProgress,
+		"RESOLVED":    i18n.Messages.LookupContent.Bug.Status.Resolved,
+		"VERIFIED":    i18n.Messages.LookupContent.Bug.Status.Verified,
 	}
-	bugResolutionZH = map[string]string{
-		"FIXED": "已修复", "WONTFIX": "不予修复", "CANTFIX": "无法修复", "DUPLICATE": "重复",
-		"INVALID": "无效", "WORKSFORME": "无法复现", "OBSOLETE": "已过时", "UPSTREAM": "需向上游报告",
-		"PKGREMOVED": "软件包已移除", "NEEDINFO": "需补充信息", "TEST-REQUEST": "待测试", "PENDING-UPSTREAM": "待上游",
+	bugResolutionMessages = map[string]i18n.Text{
+		"FIXED":            i18n.Messages.LookupContent.Bug.Resolution.Fixed,
+		"WONTFIX":          i18n.Messages.LookupContent.Bug.Resolution.WontFix,
+		"CANTFIX":          i18n.Messages.LookupContent.Bug.Resolution.CantFix,
+		"DUPLICATE":        i18n.Messages.LookupContent.Bug.Resolution.Duplicate,
+		"INVALID":          i18n.Messages.LookupContent.Bug.Resolution.Invalid,
+		"WORKSFORME":       i18n.Messages.LookupContent.Bug.Resolution.WorksForMe,
+		"OBSOLETE":         i18n.Messages.LookupContent.Bug.Resolution.Obsolete,
+		"UPSTREAM":         i18n.Messages.LookupContent.Bug.Resolution.Upstream,
+		"PKGREMOVED":       i18n.Messages.LookupContent.Bug.Resolution.PackageRemoved,
+		"NEEDINFO":         i18n.Messages.LookupContent.Bug.Resolution.NeedInfo,
+		"TEST-REQUEST":     i18n.Messages.LookupContent.Bug.Resolution.TestRequest,
+		"PENDING-UPSTREAM": i18n.Messages.LookupContent.Bug.Resolution.PendingUpstream,
 	}
-	bugSeverityZH = map[string]string{
-		"blocker": "阻断", "critical": "严重", "major": "重大", "normal": "普通",
-		"minor": "次要", "trivial": "轻微", "enhancement": "功能请求",
+	bugSeverityMessages = map[string]i18n.Text{
+		"blocker":     i18n.Messages.LookupContent.Bug.Severity.Blocker,
+		"critical":    i18n.Messages.LookupContent.Bug.Severity.Critical,
+		"major":       i18n.Messages.LookupContent.Bug.Severity.Major,
+		"normal":      i18n.Messages.LookupContent.Bug.Severity.Normal,
+		"minor":       i18n.Messages.LookupContent.Bug.Severity.Minor,
+		"trivial":     i18n.Messages.LookupContent.Bug.Severity.Trivial,
+		"enhancement": i18n.Messages.LookupContent.Bug.Severity.Enhancement,
 	}
-	bugPriorityZH = map[string]string{
-		"Highest": "最高", "High": "高", "Normal": "普通", "Low": "低", "Lowest": "最低",
+	bugPriorityMessages = map[string]i18n.Text{
+		"Highest": i18n.Messages.LookupContent.Bug.Priority.Highest,
+		"High":    i18n.Messages.LookupContent.Bug.Priority.High,
+		"Normal":  i18n.Messages.LookupContent.Bug.Priority.Normal,
+		"Low":     i18n.Messages.LookupContent.Bug.Priority.Low,
+		"Lowest":  i18n.Messages.LookupContent.Bug.Priority.Lowest,
 	}
+	bugStatusZH     = localizedBugLabels(i18n.LangZH, bugStatusMessages)
+	bugResolutionZH = localizedBugLabels(i18n.LangZH, bugResolutionMessages)
+	bugSeverityZH   = localizedBugLabels(i18n.LangZH, bugSeverityMessages)
+	bugPriorityZH   = localizedBugLabels(i18n.LangZH, bugPriorityMessages)
 )
+
+func localizedBugLabels(l i18n.Lang, messages map[string]i18n.Text) map[string]string {
+	labels := make(map[string]string, len(messages))
+	for code, message := range messages {
+		labels[code] = message.For(l)
+	}
+	return labels
+}
 
 // TranslateBugValue localizes a known Bugzilla enum value for l.
 func TranslateBugValue(l i18n.Lang, value string) string {
-	if l == i18n.LangEN {
+	if l == i18n.LangZH {
+		for _, labels := range [...]map[string]string{bugStatusZH, bugResolutionZH, bugSeverityZH, bugPriorityZH} {
+			if translated, ok := labels[value]; ok {
+				return translated
+			}
+		}
 		return value
 	}
-	for _, values := range [...]map[string]string{bugStatusZH, bugResolutionZH, bugSeverityZH, bugPriorityZH} {
-		if translated, ok := values[value]; ok {
-			return translated
+	for _, messages := range [...]map[string]i18n.Text{bugStatusMessages, bugResolutionMessages, bugSeverityMessages, bugPriorityMessages} {
+		if message, ok := messages[value]; ok {
+			return message.For(l)
 		}
 	}
 	return value
@@ -96,11 +134,11 @@ func fetchBug(ctx context.Context, id string) (bugInfo, bugLookupState) {
 	return bugInfo{b.Summary, b.Status, b.Resolution, b.Product, b.Component, b.Severity}, bugLookupFound
 }
 
-func bugLookupFailureMessage(_ i18n.Lang, id, link string, state bugLookupState) string {
+func bugLookupFailureMessage(l i18n.Lang, id, link string, state bugLookupState) string {
 	if state == bugLookupNotFound {
-		return fmt.Sprintf("❓ Bug %s 不存在。", id)
+		return i18n.Messages.LookupContent.Bug.NotFound.Render(l, id)
 	}
-	return fmt.Sprintf("❓ 暂时无法获取 Bug %s 的详情，请稍后重试。可直接查看：%s", id, link)
+	return i18n.Messages.LookupContent.Bug.Unavailable.Render(l, id, link)
 }
 
 // OnBug handles Gentoo Bugzilla lookups.
@@ -117,7 +155,7 @@ func (v *Service) OnBug(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	id := commandArg(msg.Text)
 	if !bugIDRe.MatchString(id) {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/bug <编号>,例如 /bug 900000")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupContent.Bug.Usage.For(l))
 		return nil
 	}
 	link := "https://bugs.gentoo.org/" + id
@@ -132,21 +170,22 @@ func (v *Service) OnBug(ctx *th.Context, update telego.Update) error {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "🐞 <a href=\"%s\">Bug %s</a>\n%s\n", link, id, html.EscapeString(info.summary))
+	b.WriteString(i18n.Messages.LookupContent.Bug.Heading.Render(l, link, id, html.EscapeString(info.summary)))
 	status := TranslateBugValue(l, info.status)
 	if info.resolution != "" {
-		status += " / " + TranslateBugValue(l, info.resolution)
+		status += i18n.Messages.LookupContent.Bug.Details.ResolutionSeparator.For(l) + TranslateBugValue(l, info.resolution)
 	}
-	fmt.Fprintf(&b, "状态:%s", html.EscapeString(status))
+	b.WriteString(i18n.Messages.LookupContent.Bug.Details.Status.Render(l, html.EscapeString(status)))
 	if info.severity != "" {
-		fmt.Fprintf(&b, " · 严重性:%s", html.EscapeString(TranslateBugValue(l, info.severity)))
+		b.WriteString(i18n.Messages.LookupContent.Bug.Details.Severity.Render(l, html.EscapeString(TranslateBugValue(l, info.severity))))
 	}
 	if info.product != "" {
 		comp := info.product
 		if info.component != "" {
 			comp += " › " + info.component
 		}
-		fmt.Fprintf(&b, "\n产品:%s", html.EscapeString(comp))
+		b.WriteByte('\n')
+		b.WriteString(i18n.Messages.LookupContent.Bug.Details.ProductComponent.Render(l, html.EscapeString(comp)))
 	}
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
@@ -242,13 +281,13 @@ func GetNews(c context.Context) ([]NewsItem, bool) {
 	return items, true
 }
 
-func renderNews(_ i18n.Lang, arg string, items []NewsItem, available bool) string {
+func renderNews(l i18n.Lang, arg string, items []NewsItem, available bool) string {
 	q := strings.ToLower(arg)
 	var b strings.Builder
 	if q == "" {
-		b.WriteString("📰 Gentoo 最新新闻:")
+		b.WriteString(i18n.Messages.LookupContent.News.LatestHeading.For(l))
 	} else {
-		fmt.Fprintf(&b, "📰 Gentoo 新闻搜索「%s」:", html.EscapeString(arg))
+		b.WriteString(i18n.Messages.LookupContent.News.SearchHeading.Render(l, html.EscapeString(arg)))
 	}
 	n := 0
 	for _, it := range items {
@@ -264,12 +303,15 @@ func renderNews(_ i18n.Lang, arg string, items []NewsItem, available bool) strin
 	}
 	if n == 0 {
 		if available {
-			b.WriteString("\n没找到匹配的新闻。")
+			b.WriteByte('\n')
+			b.WriteString(i18n.Messages.LookupContent.News.NoMatches.For(l))
 		} else {
-			b.WriteString("\n暂时无法获取新闻列表，请稍后重试。")
+			b.WriteByte('\n')
+			b.WriteString(i18n.Messages.LookupContent.News.Unavailable.For(l))
 		}
 	} else if !available {
-		b.WriteString("\n新闻列表暂时无法更新，以上结果可能不完整，请稍后重试。")
+		b.WriteByte('\n')
+		b.WriteString(i18n.Messages.LookupContent.News.Stale.For(l))
 	}
 	return b.String()
 }
@@ -332,9 +374,9 @@ func classifyArch(title string) (string, string) {
 	}
 	base := title[:len(title)-len(m[0])]
 	switch m[1] {
-	case "简体中文":
+	case "\u7b80\u4f53\u4e2d\u6587":
 		return base, "zh"
-	case "繁體中文", "正體中文":
+	case "\u7e41\u9ad4\u4e2d\u6587", "\u6b63\u9ad4\u4e2d\u6587":
 		return base, "zh-Hant"
 	default:
 		return base, "other"
@@ -466,33 +508,24 @@ func (w wikiSource) pickWikiTitles(l i18n.Lang, titles []string, max int) []stri
 	}
 	return out
 }
-func wikiResultNotice(_ i18n.Lang, found bool, srcOK []bool) string {
-	var b strings.Builder
-	missing := 0
+func wikiResultNotice(l i18n.Lang, found bool, srcOK []bool) string {
+	var missing []string
 	for i, ok := range srcOK {
-		if ok {
-			continue
+		if !ok {
+			missing = append(missing, wikiSources[i].name+" Wiki")
 		}
-		if missing == 0 {
-			b.WriteString("\n\n以下来源暂时无法查询，结果可能不完整：")
-		} else {
-			b.WriteString("、")
-		}
-		b.WriteString(wikiSources[i].name)
-		b.WriteString(" Wiki")
-		missing++
 	}
-	if missing > 0 {
-		b.WriteString("。请稍后重试。")
-		return b.String()
+	if len(missing) > 0 {
+		sources := strings.Join(missing, i18n.Messages.LookupContent.Wiki.SourceJoin.For(l))
+		return i18n.Messages.LookupContent.Wiki.SourcesUnavailable.Render(l, sources)
 	}
 	if !found {
-		return "\n\n没找到相关条目，换个关键词试试？"
+		return i18n.Messages.LookupContent.Wiki.NoMatches.For(l)
 	}
 	return ""
 }
 
-// OnWiki handles Gentoo and Arch wiki searches.
+// OnWiki handles Gentoo Wiki and ArchWiki searches.
 func (v *Service) OnWiki(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil {
@@ -506,7 +539,7 @@ func (v *Service) OnWiki(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/wiki <关键词>,例如 /wiki systemd boot —— 搜索 Gentoo / Arch wiki(优先简体中文页)")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupContent.Wiki.Usage.For(l))
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)
@@ -529,7 +562,7 @@ func (v *Service) OnWiki(ctx *th.Context, update telego.Update) error {
 	wg.Wait()
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "📚 <b>%s</b> 的 wiki 搜索", html.EscapeString(q))
+	b.WriteString(i18n.Messages.LookupContent.Wiki.Heading.Render(l, html.EscapeString(q)))
 	found := false
 	for i, w := range wikiSources {
 		if len(titles[i]) == 0 {
@@ -577,11 +610,14 @@ func searchArchcn(ctx context.Context, query string, limit int) (topics []forumT
 	return out, true
 }
 
-var forumLinks = []struct{ name, site string }{
-	{"Gentoo 论坛", "forums.gentoo.org"},
-	{"Arch BBS", "bbs.archlinux.org"},
-	{"Ubuntu 论坛", "ubuntuforums.org"},
-	{"Debian 论坛", "forums.debian.net"},
+var forumLinks = []struct {
+	label i18n.Text
+	site  string
+}{
+	{i18n.Messages.LookupContent.BBS.GentooForum, "forums.gentoo.org"},
+	{i18n.Messages.LookupContent.BBS.ArchBBS, "bbs.archlinux.org"},
+	{i18n.Messages.LookupContent.BBS.UbuntuForum, "ubuntuforums.org"},
+	{i18n.Messages.LookupContent.BBS.DebianForum, "forums.debian.net"},
 }
 
 func ddgSiteSearch(site, query string) string {
@@ -602,27 +638,27 @@ func (v *Service) OnBbs(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/bbs <关键词>,例如 /bbs nvidia 黑屏 —— 搜各大 Linux 论坛(中文优先)")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupContent.BBS.Usage.For(l))
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "💬 <b>%s</b> 的论坛搜索", html.EscapeString(q))
+	b.WriteString(i18n.Messages.LookupContent.BBS.Heading.Render(l, html.EscapeString(q)))
 	hits, archcnOK := searchArchcn(hc, q, 5)
 	switch {
 	case len(hits) > 0:
-		b.WriteString("\n\n<b>Arch Linux CN 论坛</b>")
+		b.WriteString(i18n.Messages.LookupContent.BBS.ArchCNHeading.For(l))
 		for _, h := range hits {
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(h.url), html.EscapeString(h.title))
 		}
 	case !archcnOK: // the fetch failed — honest transient message, not a false "no results"
-		b.WriteString("\n\n暂时无法获取 Arch Linux CN 论坛的结果(请稍后重试)。")
+		b.WriteString(i18n.Messages.LookupContent.BBS.ArchCNUnavailable.For(l))
 	default:
-		b.WriteString("\n\nArch Linux CN 论坛暂无匹配结果。")
+		b.WriteString(i18n.Messages.LookupContent.BBS.ArchCNNoMatches.For(l))
 	}
-	b.WriteString("\n\n其它论坛(点按钮搜索):")
+	b.WriteString(i18n.Messages.LookupContent.BBS.OtherForums.For(l))
 
 	// Telegram rejects the whole reply when a button URL exceeds its limit.
 	qBtn := q
@@ -633,7 +669,7 @@ func (v *Service) OnBbs(ctx *th.Context, update telego.Update) error {
 	for i := 0; i < len(forumLinks); i += 2 {
 		var row []telego.InlineKeyboardButton
 		for j := i; j < i+2 && j < len(forumLinks); j++ {
-			row = append(row, telego.InlineKeyboardButton{Text: forumLinks[j].name, URL: ddgSiteSearch(forumLinks[j].site, qBtn)})
+			row = append(row, telego.InlineKeyboardButton{Text: forumLinks[j].label.For(l), URL: ddgSiteSearch(forumLinks[j].site, qBtn)})
 		}
 		rows = append(rows, row)
 	}

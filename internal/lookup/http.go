@@ -226,7 +226,7 @@ func (s *Service) queryRateOK(userID int64) bool {
 }
 
 // External lookups are unlimited in guarded groups and rate-limited per user in private chats.
-func (s *Service) queryAllowed(ctx *th.Context, msg *telego.Message, _ i18n.Lang) bool {
+func (s *Service) queryAllowed(ctx *th.Context, msg *telego.Message, l i18n.Lang) bool {
 	if s.cfg.IsGroup(msg.Chat.ID) {
 		return true
 	}
@@ -235,7 +235,7 @@ func (s *Service) queryAllowed(ctx *th.Context, msg *telego.Message, _ i18n.Lang
 			return true
 		}
 		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(msg.Chat.ID),
-			fmt.Sprintf("⏳ 查询太频繁:私聊每分钟最多 %d 次,请稍后再试(在群里不限次)。", s.privateQueryPerMin())))
+			i18n.Messages.LookupContent.Transport.PrivateRateLimited.Render(l, s.privateQueryPerMin())))
 		return false
 	}
 	return false

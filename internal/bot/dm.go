@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"crypto/sha256"
 	"strings"
 	"sync"
 	"time"
@@ -14,10 +15,11 @@ import (
 )
 
 type dmHandler struct {
-	cfg      *config.Config
-	telegram *tg.Client
-	mu       sync.Mutex
-	last     map[int64]time.Time
+	cfg            *config.Config
+	telegram       *tg.Client
+	mu             sync.Mutex
+	last           map[int64]time.Time
+	catalogueReply bool
 }
 
 // Per-user throttling prevents DMs from amplifying into Telegram send floods.
@@ -25,6 +27,21 @@ const dmReplyCooldown = 30 * time.Second
 
 // Clear the cooldown map before untrusted user IDs can grow it without bound.
 const dmMapMax = 10000
+
+var legacyPrivateReplySHA256 = [sha256.Size]byte{
+	0xbe, 0x70, 0x2f, 0x9d, 0xc8, 0xd2, 0x0b, 0x3f,
+	0x2f, 0x88, 0x55, 0xb4, 0x9b, 0xdd, 0xe0, 0x9c,
+	0x30, 0x0b, 0x36, 0xb2, 0x57, 0xc2, 0x05, 0x6a,
+	0x7d, 0x20, 0xe7, 0x38, 0x86, 0xaa, 0x5d, 0x82,
+}
+
+// Config loading expands an empty private_reply to the legacy built-in text.
+func isBuiltInPrivateReply(reply string) bool {
+	if reply == "" {
+		return true
+	}
+	return sha256.Sum256([]byte(reply)) == legacyPrivateReplySHA256
+}
 
 // Only these member commands bypass the unified DM reply.
 var dmCommands = map[string]bool{
@@ -54,8 +71,11 @@ func privateNonStart(_ context.Context, update telego.Update) bool {
 	return true
 }
 
-func (v *dmHandler) privateReply(_ i18n.Lang) string {
-	return v.cfg.PrivateReply
+func (v *dmHandler) privateReply(l i18n.Lang) string {
+	if !v.catalogueReply {
+		return v.cfg.PrivateReply
+	}
+	return i18n.Messages.Bot.DirectMessage.AutoReply.Render(l, v.cfg.PrivateQueryPerMin)
 }
 
 func (v *dmHandler) onPrivateDM(ctx *th.Context, update telego.Update) error {

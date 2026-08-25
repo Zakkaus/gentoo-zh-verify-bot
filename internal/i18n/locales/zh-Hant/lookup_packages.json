@@ -1,1 +1,49 @@
-{}
+{
+  "arm": {
+    "heading": "🦾 <a href=\"%[1]s\">%[2]s</a> 在 arm64（AArch64）上的 keyword：",
+    "keyword_unavailable": "⚠️ 暫時無法取得 keyword 狀態。請稍後重試，或開啟上方連結查看。",
+    "no_keyword": "❌ 未設定 arm64 keyword——這通常表示此套件尚未支援 arm64 或尚未經過測試。如需確認支援狀態，請開啟上方連結查看。",
+    "not_found": "❓ 未在 Gentoo 官方樹中找到「%[1]s」。請檢查套件名稱，或使用 /pkg %[1]s 進行模糊搜尋。",
+    "official_unavailable": "暫時無法查詢 Gentoo 官方樹。請稍後重試。",
+    "stable_only": "\n✅ stable keyword（arm64）：%[1]s",
+    "stable_testing": "\n✅ stable keyword（arm64）：%[1]s\n🧪 testing keyword（~arm64）：%[2]s",
+    "testing_only": "\n🧪 僅有 testing keyword（~arm64）：%[1]s（尚無 arm64 stable keyword；如需安裝，請在 package.accept_keywords 中接受 ~arm64）",
+    "usage": "用法：/arm <套件名稱>。範例：/arm firefox。查看此套件在 Gentoo arm64（AArch64）上的 keyword 狀態。"
+  },
+  "pkg": {
+    "keyword_legend": "官方樹：無符號表示 amd64 stable keyword；~ 表示最新版本尚無 amd64 stable keyword，不保證已設定 ~amd64。overlay：~ 僅標記最新 ebuild，不表示已設定 ~arch keyword。",
+    "not_found": "未找到相符的套件。請嘗試較短的關鍵字。",
+    "official_heading": "Gentoo 官方樹",
+    "overlay_count": "（共 %[1]d 個）",
+    "results_heading": "%[1]s 的搜尋結果",
+    "unavailable": "暫時無法查詢以下來源：%[1]s。目前無法確認是否有相符的套件。請稍後重試。",
+    "usage": "用法：/pkg <套件名稱>。範例：/pkg vim。也可貼上連結：/pkg https://packages.gentoo.org/packages/app-editors/vim"
+  },
+  "source": {
+    "gentoo_official_tree": "Gentoo 官方樹",
+    "list_separator": "、",
+    "overlay": "overlay %[1]s",
+    "partial_results": "暫時無法查詢以下來源：%[1]s。以上結果可能不完整。請稍後重試。"
+  },
+  "use": {
+    "also_in_overlay": "overlay 也包含此套件：%[1]s",
+    "count": "（共 %[1]d 個）",
+    "global_flags": "global USE flag",
+    "info_unavailable": "暫時無法取得 %[1]s 的資訊。請稍後重試。",
+    "local_flags": "local USE flag",
+    "multiple_matches": "找到多個相符套件，請以完整套件名稱（category/package）指定一個：",
+    "no_flags": "（此套件沒有 USE flag）",
+    "not_found": "未找到與「%[1]s」完全相符的套件。請使用 /pkg %[1]s 進行模糊搜尋。",
+    "official_legend": "+ 表示 USE flag 預設啟用；版本前的 ~ 表示尚無 amd64 stable keyword，不保證已設定 ~amd64。",
+    "overlay_legend": "overlay · USE flag 取自最新 ebuild，可能不完整；+ 表示預設啟用。",
+    "partial_matches": "暫時無法查詢以下來源：%[1]s。以上相符結果可能不完整。請稍後重試。",
+    "source_label": "（%[1]s）",
+    "truncated_count": " …（共 %[1]d 個）",
+    "unavailable": "暫時無法查詢以下來源：%[2]s。目前無法確認是否有與「%[1]s」完全相符的套件。請稍後重試。",
+    "usage": "用法：/use <套件名稱>。範例：/use vim、/use app-editors/vim。也可貼上 packages.gentoo.org 連結。",
+    "value_separator": "：",
+    "version_latest": "版本：~%[1]s",
+    "version_stable": "版本：%[1]s",
+    "version_stable_latest": "版本：%[1]s  ~%[2]s"
+  }
+}

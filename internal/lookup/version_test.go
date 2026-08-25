@@ -157,18 +157,18 @@ func TestPkgCacheRefreshAvailability(t *testing.T) {
 func TestRenderPkgAvailability(t *testing.T) {
 	renderers := []struct {
 		name string
-		fn   func([]string, pkgLookupAvailability) string
+		fn   func(i18n.Lang, []string, pkgLookupAvailability) string
 	}{
 		{
 			name: "plain",
-			fn: func(main []string, availability pkgLookupAvailability) string {
-				return renderPkg(i18n.LangZH, "vim", main, map[string][2]string{}, nil, availability)
+			fn: func(l i18n.Lang, main []string, availability pkgLookupAvailability) string {
+				return renderPkg(l, "vim", main, map[string][2]string{}, nil, availability)
 			},
 		},
 		{
 			name: "rich",
-			fn: func(main []string, availability pkgLookupAvailability) string {
-				return renderPkgRich(i18n.LangZH, "vim", main, map[string][2]string{}, nil, availability)
+			fn: func(l i18n.Lang, main []string, availability pkgLookupAvailability) string {
+				return renderPkgRich(l, "vim", main, map[string][2]string{}, nil, availability)
 			},
 		},
 	}
@@ -176,39 +176,55 @@ func TestRenderPkgAvailability(t *testing.T) {
 		name         string
 		main         []string
 		availability pkgLookupAvailability
-		want         string
-		notWant      string
+		want         func(i18n.Lang, pkgLookupAvailability) string
+		notWant      func(i18n.Lang, pkgLookupAvailability) string
 	}{
 		{
 			name:         "complete miss",
 			availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": true}},
-			want:         "没找到匹配的包",
-			notWant:      "暂时无法查询",
+			want: func(l i18n.Lang, _ pkgLookupAvailability) string {
+				return i18n.Messages.LookupPackages.Pkg.NotFound.For(l)
+			},
+			notWant: func(l i18n.Lang, availability pkgLookupAvailability) string {
+				return i18n.Messages.LookupPackages.Pkg.Unavailable.Render(l, availability.unavailableSources(l))
+			},
 		},
 		{
 			name:         "lookup unavailable",
 			availability: pkgLookupAvailability{overlays: map[string]bool{"guru": true}},
-			want:         "目前无法确认是否有匹配的包",
-			notWant:      "没找到匹配的包",
+			want: func(l i18n.Lang, availability pkgLookupAvailability) string {
+				return i18n.Messages.LookupPackages.Pkg.Unavailable.Render(l, availability.unavailableSources(l))
+			},
+			notWant: func(l i18n.Lang, _ pkgLookupAvailability) string {
+				return i18n.Messages.LookupPackages.Pkg.NotFound.For(l)
+			},
 		},
 		{
 			name:         "partial hit",
 			main:         []string{"app-editors/vim"},
 			availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": false}},
-			want:         "以上结果可能不完整",
+			want: func(l i18n.Lang, availability pkgLookupAvailability) string {
+				return i18n.Messages.LookupPackages.Source.PartialResults.Render(l, availability.unavailableSources(l))
+			},
 		},
 	}
-	for _, renderer := range renderers {
-		for _, tc := range cases {
-			t.Run(renderer.name+"/"+tc.name, func(t *testing.T) {
-				got := renderer.fn(tc.main, tc.availability)
-				if !strings.Contains(got, tc.want) {
-					t.Errorf("rendered result %q does not contain %q", got, tc.want)
-				}
-				if tc.notWant != "" && strings.Contains(got, tc.notWant) {
-					t.Errorf("rendered result %q unexpectedly contains %q", got, tc.notWant)
-				}
-			})
+	for _, l := range i18n.Languages() {
+		for _, renderer := range renderers {
+			for _, tc := range cases {
+				t.Run(l.String()+"/"+renderer.name+"/"+tc.name, func(t *testing.T) {
+					got := renderer.fn(l, tc.main, tc.availability)
+					want := tc.want(l, tc.availability)
+					if !strings.Contains(got, want) {
+						t.Errorf("rendered result %q does not contain %q", got, want)
+					}
+					if tc.notWant != nil {
+						notWant := tc.notWant(l, tc.availability)
+						if strings.Contains(got, notWant) {
+							t.Errorf("rendered result %q unexpectedly contains %q", got, notWant)
+						}
+					}
+				})
+			}
 		}
 	}
 }

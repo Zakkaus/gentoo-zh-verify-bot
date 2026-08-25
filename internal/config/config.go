@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 const (
@@ -70,12 +72,6 @@ func clampMuteSecs(secs int) int {
 		return secs
 	}
 }
-
-// defaultPrivateReply handles plain DMs not routed to a command.
-const defaultPrivateReply = "👋 这是 Gentoo 中文社区的入群验证 + Gentoo/Linux 助手机器人。\n\n" +
-	"• 想入群:回到群里发起加入申请,再点群消息中的「✅ 点此完成验证」链接来这里完成验证。\n" +
-	"• 查询命令(/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs)私聊也能直接用(每分钟有限次,防滥用;群里不限次)。\n" +
-	"• 审核/管理命令仅在群里有效。"
 
 // Question is one verification quiz item with a zero-based answer index.
 type Question struct {
@@ -417,9 +413,6 @@ func LoadConfig(path string) (*Config, error) {
 	// Keep reported config durations within Telegram's enforced window.
 	c.BanSeconds = ClampBanSeconds(c.BanSeconds)
 	c.MuteSeconds = clampMuteSecs(c.MuteSeconds)
-	if c.PrivateReply == "" {
-		c.PrivateReply = defaultPrivateReply
-	}
 	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
 		c.Feeds = append(c.Feeds, *c.Feed)
 	}
@@ -465,7 +458,8 @@ func (c *Config) ControlGroupAllowed(chatID int64) (bool, string) {
 	if c.ControlGroupID == 0 || chatID == c.ControlGroupID {
 		return true, ""
 	}
-	return false, fmt.Sprintf("⛔ 该命令只能在控制群（ID %d）中使用。", c.ControlGroupID)
+	l := i18n.FromStored(c.LangForGroup(chatID))
+	return false, i18n.Messages.Feed.Config.ControlGroupOnly.Render(l, c.ControlGroupID)
 }
 
 func (c *Config) group(id int64) *GroupConfig {

@@ -3,7 +3,6 @@ package bot
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -60,9 +59,10 @@ func New(
 		lookups:        lookups,
 		version:        version,
 		dm: &dmHandler{
-			cfg:      cfg,
-			telegram: telegram,
-			last:     make(map[int64]time.Time),
+			cfg:            cfg,
+			telegram:       telegram,
+			last:           make(map[int64]time.Time),
+			catalogueReply: isBuiltInPrivateReply(cfg.PrivateReply),
 		},
 	}
 }
@@ -120,8 +120,8 @@ func (s *Service) handlerRoutes() []handlerRoute {
 	}
 }
 
-func unauthorizedChatAlert(_ i18n.Lang, chat telego.Chat) string {
-	return fmt.Sprintf("🚪 已自动退出未授权聊天:%s(id %d,%s)", chat.Title, chat.ID, chat.Type)
+func unauthorizedChatAlert(l i18n.Lang, chat telego.Chat) string {
+	return i18n.Messages.Bot.Lifecycle.UnauthorizedChat.Render(l, chat.Title, chat.ID, chat.Type)
 }
 
 func (s *Service) onMyChatMember(ctx *th.Context, update telego.Update) error {

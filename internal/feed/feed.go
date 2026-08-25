@@ -429,20 +429,10 @@ func formatBug(b recentBug, l i18n.Lang) string {
 
 // formatBugMarked renders a Bugzilla bug for the feed behind the given leading marker (🐞 open,
 // ✅/❌ resolved — passed in rather than string-replaced, so a 🐞 inside a summary can't be hit and
-// English uses English field labels; other locales retain the existing Simplified Chinese copy
-// until the feed catalogue migration.
+// every configured feed locale uses its catalogue field labels.
 func formatBugMarked(b recentBug, l i18n.Lang, marker string) string {
-	en := l == i18n.LangEN
-	sep := "："
-	if en {
-		sep = ": "
-	}
-	pick := func(zh, eng string) string {
-		if en {
-			return eng
-		}
-		return zh
-	}
+	labels := i18n.Messages.Feed.Bug
+	sep := labels.FieldSeparator.For(l)
 	esc := html.EscapeString
 	var sb strings.Builder
 	// Cap the free-text summary by rune (Bugzilla summaries are short, but the field is
@@ -456,32 +446,32 @@ func formatBugMarked(b recentBug, l i18n.Lang, marker string) string {
 
 	status := lookup.TranslateBugValue(l, b.Status)
 	if b.Resolution != "" {
-		status += " / " + lookup.TranslateBugValue(l, b.Resolution)
+		status += labels.StatusResolutionSeparator.For(l) + lookup.TranslateBugValue(l, b.Resolution)
 	}
-	line(pick("状态", "Status"), status)
+	line(labels.Status.For(l), status)
 
 	comp := b.Product
 	if b.Component != "" {
 		comp += " › " + b.Component
 	}
-	line(pick("组件", "Component"), comp)
-	line(pick("优先级", "Priority"), lookup.TranslateBugValue(l, b.Priority))
-	line(pick("严重性", "Severity"), lookup.TranslateBugValue(l, b.Severity))
+	line(labels.ProductComponent.For(l), comp)
+	line(labels.Priority.For(l), lookup.TranslateBugValue(l, b.Priority))
+	line(labels.Severity.For(l), lookup.TranslateBugValue(l, b.Severity))
 	if len(b.Keywords) > 0 {
-		line(pick("关键词", "Keywords"), capRunes(strings.Join(b.Keywords, ", "), 400))
+		line(labels.Keywords.For(l), capRunes(strings.Join(b.Keywords, ", "), 400))
 	}
 	if atoms := flattenAtoms(b.Atoms); atoms != "" {
-		line(pick("包", "Packages"), atoms)
+		line(labels.Packages.For(l), atoms)
 	}
 
 	if a := b.AssignedTo.link("assigned_to"); a != "" {
-		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("负责人", "Assigned"), sep, a)
+		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", labels.Assignee.For(l), sep, a)
 	}
 	if c := b.Creator.link("reporter"); c != "" {
-		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", pick("报告人", "Reporter"), sep, c)
+		fmt.Fprintf(&sb, "\n<b>%s</b>%s%s", labels.Reporter.For(l), sep, c)
 	}
 	if d := dateOnly(b.CreationTime); d != "" {
-		line(pick("日期", "Date"), d)
+		line(labels.CreationDate.For(l), d)
 	}
 	return sb.String()
 }

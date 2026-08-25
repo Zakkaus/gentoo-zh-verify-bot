@@ -94,7 +94,43 @@ func TestDistroAliasVisible(t *testing.T) {
 			break
 		}
 	}
+	want := i18n.Messages.Bot.Menu.Member.Distro.For(i18n.LangZH)
+	if description != want {
+		t.Errorf("/distro menu description = %q, want catalogue text %q", description, want)
+	}
 	if !strings.Contains(description, "/pkgs") {
 		t.Errorf("/distro menu description = %q, want an explicit /pkgs alias", description)
+	}
+}
+
+func TestBuiltInPrivateReplyUsesCatalogue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"groups":[{"id":-1001,"verify_mode":"kernel"}]}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isBuiltInPrivateReply(cfg.PrivateReply) {
+		t.Fatal("normalized built-in private reply was not recognized")
+	}
+	handler := dmHandler{cfg: cfg, catalogueReply: true}
+	for _, language := range i18n.Languages() {
+		got := handler.privateReply(language)
+		want := i18n.Messages.Bot.DirectMessage.AutoReply.Render(language, cfg.PrivateQueryPerMin)
+		if got != want {
+			t.Errorf("private reply for %s = %q, want catalogue text %q", language, got, want)
+		}
+	}
+
+	const customReply = "Contact a group administrator."
+	if isBuiltInPrivateReply(customReply) {
+		t.Fatal("custom private reply was recognized as built-in")
+	}
+	handler = dmHandler{cfg: &config.Config{PrivateReply: customReply}}
+	if got := handler.privateReply(i18n.LangZHHant); got != customReply {
+		t.Errorf("custom private reply = %q, want %q", got, customReply)
 	}
 }

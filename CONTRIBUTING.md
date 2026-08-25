@@ -45,13 +45,29 @@ regenerate them as an unrelated cleanup. When a format change requires new fixtu
 `UPDATE_STATE_COMPAT_FIXTURES=1 go test -run TestStateCompatGenerateFixtures`, review every
 fixture diff, then run the full test gate.
 
+## Localisation
+
+- Put every user-visible string in the typed catalogue under `internal/i18n/`, with one JSON
+  file per subsystem and locale.
+- To add a key, add its typed `Text` or `Format` field and the matching JSON key in every
+  locale. To add a locale, provide all subsystem files and register its `Lang` and
+  `localeDefinitions` entry.
+- `TestProductionCodeContainsNoChineseStringLiterals` rejects Chinese literals outside the
+  catalogue. `TestLocaleFilesLoad` rejects missing files, malformed JSON, unknown keys, and
+  invalid value shapes. The other `internal/i18n` tests enforce completeness, placeholder
+  parity, terminology, English Gentoo terms, and script consistency.
+- Write Traditional Chinese natively; never derive it by converting Simplified Chinese.
+
+See [`internal/i18n/README.md`](internal/i18n/README.md) for the catalogue layout and complete
+translation workflow.
+
 ## Code style
 
 - Put new functionality in a focused, command-named file and reuse the shared helpers
   (`httpGetJSON`, `httpGetBody`, `htmlMessage`, the `Verifier`/`Config` types) rather than
   duplicating them.
 - Keep it simple and readable; match the surrounding style. `gofmt` decides formatting.
-- User-facing strings are Simplified Chinese (this bot targets the Gentoo zh community).
+- Keep user-visible text in the localisation catalogue; do not hard-code it in production.
 - Make config values configurable (with a sensible default in `LoadConfig`) instead of
   hard-coding them.
 

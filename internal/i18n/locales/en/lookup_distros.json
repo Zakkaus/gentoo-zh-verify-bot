@@ -29,7 +29,7 @@
     "available": "✅ %[1]s %[2]s",
     "not_in_fedora": "❌ Not in Fedora",
     "fedora_query_failed": "⚠️ Fedora query failed",
-    "fedora_rawhide": "✅ rawhide %[1]s",
+    "fedora_rawhide": "✅ Rawhide %[1]s",
     "pkgbuild_parse_failed": "⚠️ Could not parse PKGBUILD; open the AUR link to inspect it",
     "any_architecture": "✅ any (architecture-independent)",
     "declares_aarch64": "✅ Declares aarch64",

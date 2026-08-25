@@ -476,19 +476,20 @@ func (v *Service) verificationBanDuration(groupID int64) int {
 	return v.fallbackGroupSettings(groupID).BanSeconds.Value
 }
 
-func verificationBanDurationText(seconds int) string {
+func verificationBanDurationText(messages *i18n.Catalog, l i18n.Lang, seconds int) string {
+	duration := &messages.Verification.Duration
 	if seconds <= 0 {
-		return "永久"
+		return duration.Permanent.For(l)
 	}
 	switch {
 	case seconds%86400 == 0:
-		return fmt.Sprintf("%d 天", seconds/86400)
+		return duration.Days.Render(l, seconds/86400)
 	case seconds%3600 == 0:
-		return fmt.Sprintf("%d 小时", seconds/3600)
+		return duration.Hours.Render(l, seconds/3600)
 	case seconds%60 == 0:
-		return fmt.Sprintf("%d 分钟", seconds/60)
+		return duration.Minutes.Render(l, seconds/60)
 	default:
-		return fmt.Sprintf("%d 秒", seconds)
+		return duration.Seconds.Render(l, seconds)
 	}
 }
 
@@ -627,7 +628,8 @@ func (v *Service) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64
 		// Trusted membership takes priority over failure cooldown.
 		if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 			log.Printf("trusted-bypass: approve %d in %d failed (%v) — falling back to normal verification", uid, gid, err)
-			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 是可信群 %d 的成员,但在群 %d 免验证批准失败(%v);将改用常规验证流程", uid, src, gid, err))
+			alert := v.messages.Verification.Admin.TrustedBypassFailed.Render(v.groupLanguage(gid), uid, src, gid, err)
+			v.adminAlert(c, bot, alert)
 			return false, true
 		}
 		v.clearVerifyFails(gid, uid) // a now-trusted member starts with a clean slate
@@ -736,7 +738,8 @@ func (v *Service) alertPendingCap(c context.Context, bot verifyBot, gid int64) {
 	}
 	v.pendingCapAlertAt = now
 	v.mu.Unlock()
-	v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 待验证队列已达上限(全局 %d,单群 %d);群 %d 的新申请将保留给管理员手动审核。", pendingGlobalCap, pendingPerGroupCap, gid))
+	admin := &v.messages.Verification.Admin
+	v.failAlert(c, bot, gid, admin.PendingCap.Render(v.groupLanguage(gid), pendingGlobalCap, pendingPerGroupCap, gid))
 }
 
 // OnJoinRequest starts verification for one eligible group join request.
@@ -1060,28 +1063,31 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 	gid, _ := strconv.ParseInt(parts[1], 10, 64)
 	target, _ := strconv.ParseInt(parts[2], 10, 64)
 
+	l := v.groupLanguage(gid)
+	admin := &v.messages.Verification.Admin
 	if !v.isGroupAdmin(c, bot, gid, cq.From.ID) {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("⛔ 仅群管理员可操作。").WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.OnlyGroupAdmin.For(l)).WithShowAlert())
 		return nil
 	}
 	switch action {
 	case "pass":
 		p, ok := v.claimPending(gid, target)
 		if !ok {
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理或无法批准。"))
+			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.CannotApprove.For(l)))
 			return nil
 		}
-		// Acknowledge before approval; failures reopen the pending and alert admins.
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 已直接通过"))
+		// Acknowledge the pending action; failures reopen the request and alert admins.
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Approving.For(l)))
 		v.executeApprove(c, bot, gid, target, p)
 	case "ban":
 		p, ok := v.consume(gid, target)
 		if !ok {
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理。"))
+			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.AlreadyHandled.For(l)))
 			return nil
 		}
-		// Acknowledge before ban; failures remain visible and the request stays declined.
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", verificationBanDurationText(v.verificationBanDuration(gid)))))
+		// Acknowledge the pending action; failures remain visible and the request stays declined.
+		duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(gid))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Banning.Render(l, duration)))
 		v.executeBan(c, bot, gid, target, p)
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
@@ -1258,12 +1264,12 @@ func (v *Service) channelAccessAlert(c context.Context, bot verifyBot, l i18n.La
 	}
 	v.chanAlert[channelID] = time.Now()
 	v.mu.Unlock()
-	mode := "正在批准已通过答题的申请人(fail-open)" // matches the default
+	admin := &v.messages.Verification.Admin
+	mode := admin.ChannelFailOpen.For(l)
 	if !v.cfg.FailOpenChannel() {
-		mode = "正在拒绝这些申请,请申请人稍后重试(fail-closed)"
+		mode = admin.ChannelFailClosed.For(l)
 	}
-	_ = l
-	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必需关注频道 %d 的成员状态(可能已不再是该频道管理员)——频道门槛暂时无法核验,%s。请重新把机器人设为该频道管理员。", channelID, mode))
+	v.adminAlert(c, bot, admin.ChannelAccessFailed.Render(l, channelID, mode))
 }
 
 // Keep claimed approvals in the map so network failure can reopen them; consume deletes final claims.
@@ -1312,7 +1318,8 @@ func (v *Service) approve(c context.Context, bot verifyBot, gid, uid int64) bool
 func (v *Service) executeApprove(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		log.Printf("approve %d in %d: %v", uid, gid, err)
-		v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 批准用户 %d 加入群 %d 失败(可能缺权限):%v;已保留申请,可重试或等待超时", uid, gid, err))
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 		v.reopenPending(bot, gid, uid, p) // restore as retryable (re-arm the timeout)
 		return false
 	}
@@ -1351,14 +1358,30 @@ func (v *Service) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 
 // Wrong-answer feedback distinguishes automatic ban from cooldown retry.
 func (v *Service) wrongAnswerText(groupID int64, l i18n.Lang, banned bool) string {
-	result := &(*v.messages).Verification.Result
+	result := &v.messages.Verification.Result
 	if banned {
-		return result.WrongBanned.For(l)
+		return v.bannedResultText(groupID, l)
 	}
 	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
 		return result.WrongRetry.Render(l, seconds)
 	}
 	return result.WrongNoWait.For(l)
+}
+
+func (v *Service) agentCaughtText(groupID int64, l i18n.Lang, banned bool) string {
+	result := &v.messages.Verification.Result
+	if banned {
+		return v.bannedResultText(groupID, l)
+	}
+	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
+		return result.AICaught.Render(l, seconds)
+	}
+	return result.AICaughtNoWait.For(l)
+}
+
+func (v *Service) bannedResultText(groupID int64, l i18n.Lang) string {
+	duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(groupID))
+	return v.messages.Verification.Result.WrongBanned.Render(l, v.verifyMaxFails(groupID), duration)
 }
 
 // Bot-caused failures receive a meaningful strike-free retry window.
@@ -1396,16 +1419,20 @@ func (v *Service) finishDecline(c context.Context, bot verifyBot, gid, uid int64
 	}
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		log.Printf("decline %d in %d failed: %v", uid, gid, err)
-		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 拒绝用户 %d 加入群 %d 失败(可能缺权限):%v;该申请仍需管理员手动处理", uid, gid, err))
+		admin := &v.messages.Verification.Admin
+		v.adminAlert(c, bot, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 	}
 	if doBan {
 		secs := v.verificationBanDuration(gid)
 		if err := v.applyVerificationBan(c, bot, gid, uid, secs, false); err != nil {
 			log.Printf("verify auto-ban %d in %d: %v", uid, gid, err)
-			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 在群 %d 验证连续失败 %d 次,自动封禁失败(可能缺权限):%v", uid, gid, count, err))
+			admin := &v.messages.Verification.Admin
+			v.adminAlert(c, bot, admin.AutoBanFailed.Render(v.groupLanguage(gid), uid, gid, count, err))
 			banned = false
 		} else {
-			v.adminAlert(c, bot, fmt.Sprintf("🚫 用户 %d 在群 %d 验证连续失败 %d 次,已自动封禁(%s)", uid, gid, count, verificationBanDurationText(secs)))
+			l := v.groupLanguage(gid)
+			duration := verificationBanDurationText(v.messages, l, secs)
+			v.adminAlert(c, bot, v.messages.Verification.Admin.AutoBanned.Render(l, uid, gid, count, duration))
 			banned = true
 		}
 		if banned {
@@ -1441,7 +1468,8 @@ func (v *Service) executeBan(c context.Context, bot verifyBot, gid, uid int64, p
 	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil { // Honor /bantime like the other ban paths.
 		banned = false
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
-		v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 封禁用户 %d(群 %d)失败(可能缺权限):%v;申请已拒绝,请手动封禁", uid, gid, err))
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
 	}
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	v.recordDecision(false)

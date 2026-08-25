@@ -7,7 +7,11 @@ import (
 )
 
 func TestParseBanDuration(t *testing.T) {
-	valid := map[string]int{"0": 0, "perm": 0, "permanent": 0, "永久": 0, "30s": 30, "30m": 1800, "2h": 7200, "7d": 604800, "3600": 3600}
+	valid := map[string]int{
+		"0": 0, "perm": 0, "permanent": 0,
+		i18n.Messages.Moderate.Duration.PermanentInput.For(i18n.LangZH): 0,
+		"30s": 30, "30m": 1800, "2h": 7200, "7d": 604800, "3600": 3600,
+	}
 	for input, want := range valid {
 		if got, ok := parseBanDuration(input); !ok || got != want {
 			t.Errorf("parseBanDuration(%q) = (%d,%v), want (%d,true)", input, got, ok, want)
@@ -31,7 +35,14 @@ func TestParseBanDuration(t *testing.T) {
 }
 
 func TestBanDurationText(t *testing.T) {
-	for seconds, want := range map[int]string{0: "永久", -1: "永久", 604800: "7 天", 43200: "12 小时", 1800: "30 分钟", 90: "90 秒"} {
+	for seconds, want := range map[int]string{
+		0:      i18n.Messages.Moderate.Duration.Permanent.For(i18n.LangZH),
+		-1:     i18n.Messages.Moderate.Duration.Permanent.For(i18n.LangZH),
+		604800: i18n.Messages.Moderate.Duration.Days.Render(i18n.LangZH, 7),
+		43200:  i18n.Messages.Moderate.Duration.Hours.Render(i18n.LangZH, 12),
+		1800:   i18n.Messages.Moderate.Duration.Minutes.Render(i18n.LangZH, 30),
+		90:     i18n.Messages.Moderate.Duration.Seconds.Render(i18n.LangZH, 90),
+	} {
 		if got := banDurationText(i18n.LangZH, seconds); got != want {
 			t.Errorf("banDurationText(%d) = %q, want %q", seconds, got, want)
 		}

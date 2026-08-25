@@ -1,1 +1,41 @@
-{}
+{
+  "menu": {
+    "member": {
+      "help": "查看可用指令",
+      "pkg": "搜尋 Gentoo 套件",
+      "use": "查看套件資訊與 USE flag",
+      "bug": "查詢 Gentoo Bugzilla",
+      "news": "查看或搜尋 Gentoo 新聞",
+      "wiki": "搜尋 Gentoo Wiki、ArchWiki",
+      "bbs": "搜尋 Linux 論壇（中文優先）",
+      "pkgs": "比較各發行版的套件版本",
+      "distro": "/pkgs 的別名",
+      "arm": "查看 Gentoo arm64 keyword",
+      "arm_pkgs": "比較各發行版的 arm64 支援情況",
+      "ping": "查看機器人狀態與運作時間",
+      "stats": "查看今日通過、拒絕人數"
+    },
+    "admin": {
+      "start": "【管理】開啟加入群組驗證",
+      "stop": "【管理】關閉加入群組驗證",
+      "mute": "【管理】回覆並禁言（預設 1h）",
+      "unmute": "【管理】回覆並解除禁言",
+      "purge": "【管理】回覆、封禁並清除訊息",
+      "ban": "【管理】回覆、封禁並移出群組",
+      "warn": "【管理】回覆並警告（滿 %[1]d 次移出群組）",
+      "clear_warn": "【管理】回覆並清除警告",
+      "channel": "【管理】管理頻道身分發言",
+      "rich_text": "【管理】切換 /pkg、/use 富文字",
+      "name_spoiler": "【管理】切換新成員姓名遮蔽",
+      "verification_mode": "【管理】切換驗證方式",
+      "auto_delete": "【管理】切換自動刪除查詢結果",
+      "ban_time": "【管理】設定封禁時長"
+    }
+  },
+  "lifecycle": {
+    "unauthorized_chat": "🚪 已自動退出未授權聊天：%[1]s（ID：%[2]d，類型：%[3]s）。"
+  },
+  "direct_message": {
+    "auto_reply": "👋 這是 Gentoo 中文社群的加入群組驗證與 Gentoo/Linux 助手機器人。\n\n• 申請加入群組：請返回群組提出加入申請，再點選群組內機器人訊息中的「✅ 開始驗證」，並在此完成驗證。\n• 查詢指令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私訊中使用。私訊每分鐘最多 %[1]d 次，群組內不限次數。\n• 審核與管理指令僅可在群組內使用。"
+  }
+}

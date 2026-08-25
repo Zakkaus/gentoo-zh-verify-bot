@@ -343,14 +343,14 @@ func TestOutageText(t *testing.T) {
 		8 * time.Hour:    "8 小时",
 	}
 	for d, want := range cases {
-		if got := outageText(i18n.LangZH, d); got != want {
+		if got := outageText(&i18n.Messages, i18n.LangZH, d); got != want {
 			t.Errorf("outageText(zh, %v) = %q, want %q", d, got, want)
 		}
 	}
-	if got := outageText(i18n.LangZHHant, 3*time.Minute); got != "3 分鐘" {
+	if got := outageText(&i18n.Messages, i18n.LangZHHant, 3*time.Minute); got != "3 分鐘" {
 		t.Errorf("outageText(zh-hant, 3m) = %q, want %q", got, "3 分鐘")
 	}
-	if got := outageText(i18n.LangEN, 8*time.Hour); got != "8 hours" {
+	if got := outageText(&i18n.Messages, i18n.LangEN, 8*time.Hour); got != "8 hours" {
 		t.Errorf("outageText(en, 8h) = %q, want %q", got, "8 hours")
 	}
 }

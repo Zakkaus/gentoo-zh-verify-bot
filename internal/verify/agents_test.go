@@ -43,7 +43,7 @@ func TestRecordAgentTally(t *testing.T) {
 		t.Errorf("gpt-5 count = %d, want 3", v.agents.Counts["gpt-5"])
 	}
 	line := v.AgentStatsText(i18n.LangZH)
-	if !strings.Contains(line, "5 次") || !strings.HasPrefix(strings.TrimPrefix(line, "🤖 拦截 AI 代答:5 次("), "gpt-5 3") {
+	if !strings.Contains(line, "5 次") || !strings.HasPrefix(strings.TrimPrefix(line, "🤖 拦截 AI 代答：5 次（"), "gpt-5 3") {
 		t.Errorf("stats line should lead with the busiest model: %q", line)
 	}
 

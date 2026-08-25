@@ -1,1 +1,49 @@
-{}
+{
+  "arm": {
+    "heading": "🦾 <a href=\"%[1]s\">%[2]s</a> keyword status on arm64 (AArch64):",
+    "keyword_unavailable": "⚠️ Keyword status is temporarily unavailable. Try again later or open the link above.",
+    "no_keyword": "❌ No arm64 keyword is set. This usually means the package does not support arm64 yet or has not been tested. Open the link above to check its current support status.",
+    "not_found": "❓ “%[1]s” was not found in the Gentoo official tree. Check the package name or use /pkg %[1]s for a fuzzy search.",
+    "official_unavailable": "The Gentoo official tree is temporarily unavailable. Try again later.",
+    "stable_only": "\n✅ stable keyword (arm64): %[1]s",
+    "stable_testing": "\n✅ stable keyword (arm64): %[1]s\n🧪 testing keyword (~arm64): %[2]s",
+    "testing_only": "\n🧪 testing keyword only (~arm64): %[1]s (there is no arm64 stable keyword; to install it, accept ~arm64 in package.accept_keywords)",
+    "usage": "Usage: /arm <package>. Example: /arm firefox. View the package's Gentoo arm64 (AArch64) keyword status."
+  },
+  "pkg": {
+    "keyword_legend": "Official tree: no marker means an amd64 stable keyword; ~ means the newest version has no amd64 stable keyword and does not imply ~amd64. Overlay: ~ only marks the newest ebuild and does not imply a ~arch keyword.",
+    "not_found": "No matching package was found. Try a shorter search term.",
+    "official_heading": "Gentoo official tree",
+    "overlay_count": " (%[1]d matches)",
+    "results_heading": "Search results for %[1]s",
+    "unavailable": "The following sources are temporarily unavailable: %[1]s. Matching packages cannot be confirmed. Try again later.",
+    "usage": "Usage: /pkg <package>. Example: /pkg vim. You can also paste a link: /pkg https://packages.gentoo.org/packages/app-editors/vim"
+  },
+  "source": {
+    "gentoo_official_tree": "Gentoo official tree",
+    "list_separator": ", ",
+    "overlay": "overlay %[1]s",
+    "partial_results": "The following sources are temporarily unavailable: %[1]s. These results may be incomplete. Try again later."
+  },
+  "use": {
+    "also_in_overlay": "Also available in these overlays: %[1]s",
+    "count": " (%[1]d)",
+    "global_flags": "global USE flags",
+    "info_unavailable": "Information for %[1]s is temporarily unavailable. Try again later.",
+    "local_flags": "local USE flags",
+    "multiple_matches": "Multiple packages match. Specify one full package name (category/package):",
+    "no_flags": "(This package has no USE flags.)",
+    "not_found": "No package exactly matches “%[1]s”. Use /pkg %[1]s for a fuzzy search.",
+    "official_legend": "+ marks a USE flag enabled by default; ~ before a version means there is no amd64 stable keyword and does not imply ~amd64.",
+    "overlay_legend": "overlay · USE flags come from the newest ebuild and may be incomplete; + marks a flag enabled by default.",
+    "partial_matches": "The following sources are temporarily unavailable: %[1]s. These matches may be incomplete. Try again later.",
+    "source_label": " (%[1]s)",
+    "truncated_count": " … (%[1]d total)",
+    "unavailable": "The following sources are temporarily unavailable: %[2]s. An exact match for “%[1]s” cannot be confirmed. Try again later.",
+    "usage": "Usage: /use <package>. Example: /use vim or /use app-editors/vim. You can also paste a packages.gentoo.org link.",
+    "value_separator": ": ",
+    "version_latest": "Version: ~%[1]s",
+    "version_stable": "Version: %[1]s",
+    "version_stable_latest": "Versions: %[1]s  ~%[2]s"
+  }
+}

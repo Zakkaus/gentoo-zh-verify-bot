@@ -126,7 +126,7 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 	}
 
 	v.sendQuizzes(context.Background(), bot, userID)
-	if !strings.Contains(bot.lastSendText, "完成入群驗證") {
+	if !strings.Contains(bot.lastSendText, "完成加入群組驗證") {
 		t.Fatalf("applicant DM did not retain zh-Hant: %q", bot.lastSendText)
 	}
 	if p.timer != nil {
@@ -500,6 +500,80 @@ func TestOnAnswer(t *testing.T) {
 	}
 }
 
+func TestAdminCallbackReportsActionInProgress(t *testing.T) {
+	const gid, uid, adminID = int64(-100), int64(5), int64(9)
+	tests := []struct {
+		action       string
+		wantText     string
+		wantApproves int
+		wantBans     int
+	}{
+		{
+			action:       "pass",
+			wantText:     i18n.Messages.Verification.Admin.Approving.For(i18n.LangZH),
+			wantApproves: 1,
+		},
+		{
+			action:   "ban",
+			wantText: i18n.Messages.Verification.Admin.Banning.Render(i18n.LangZH, "1 小时"),
+			wantBans: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.action, func(t *testing.T) {
+			v := newTestService(&config.Config{BanSeconds: 3600})
+			v.pend[pkey{gid, uid}] = livePending(42)
+			bot := newFakeVerifyBot()
+			bot.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+			update := telego.Update{CallbackQuery: &telego.CallbackQuery{
+				ID: "admin", From: telego.User{ID: adminID},
+				Data: AdminCallbackPrefix + tt.action + ":-100:5",
+			}}
+
+			runFakeHandler(t, newAPITestBot(t, bot), v.OnAdminAction, update)
+
+			if bot.approves != tt.wantApproves || bot.bans != tt.wantBans {
+				t.Errorf("actions = approve %d, ban %d; want %d, %d",
+					bot.approves, bot.bans, tt.wantApproves, tt.wantBans)
+			}
+			if len(bot.callbackAnswers) != 1 {
+				t.Fatalf("callback answers = %d, want 1", len(bot.callbackAnswers))
+			}
+			if got := bot.callbackAnswers[0].Text; got != tt.wantText {
+				t.Errorf("callback text = %q, want in-progress text %q", got, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestFailureCopyNamesDecisionAndRetry(t *testing.T) {
+	const gid = int64(-100)
+	v := newTestService(&config.Config{
+		BanSeconds:         86400,
+		VerifyMaxFails:     3,
+		VerifyRetrySeconds: 600,
+	})
+
+	retry := v.wrongAnswerText(gid, i18n.LangZH, false)
+	for _, want := range []string{"入群申请已被拒绝", "600 秒后"} {
+		if !strings.Contains(retry, want) {
+			t.Errorf("wrong-answer retry omits %q: %s", want, retry)
+		}
+	}
+	banned := v.wrongAnswerText(gid, i18n.LangZH, true)
+	for _, want := range []string{"连续 3 次", "入群申请已被拒绝", "1 天", "封禁到期后"} {
+		if !strings.Contains(banned, want) {
+			t.Errorf("ban result omits %q: %s", want, banned)
+		}
+	}
+	agent := v.agentCaughtText(gid, i18n.LangEN, false)
+	for _, want := range []string{"automated-answer check", "join request was declined", "600 seconds"} {
+		if !strings.Contains(agent, want) {
+			t.Errorf("automated-answer result omits %q: %s", want, agent)
+		}
+	}
+}
+
 func TestApproveSuccess(t *testing.T) {
 	v := newTestService(&config.Config{})
 	key := pkey{-100, 5}
@@ -771,7 +845,7 @@ func TestTrustedBypass(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
 	mkV := func() *Service {
-		return &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{},
+		return &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{}, messages: &i18n.Messages,
 			cfg: &config.Config{Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
 	}
 
@@ -818,7 +892,7 @@ func TestJoinGate(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
 	mkV := func() *Service {
-		return &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{},
+		return &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{}, messages: &i18n.Messages,
 			cfg: &config.Config{VerifyRetrySeconds: 600, Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
 	}
 	cooldown := func(v *Service) { v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()} }
@@ -945,10 +1019,11 @@ func TestReopenPendingRestoresRetryable(t *testing.T) {
 func TestDeclineFailureAlertsAdmins(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
 	v := &Service{
-		cfg:   &config.Config{AdminLogChatID: -200},
-		loc:   time.UTC,
-		pend:  map[pkey]*pending{{gid, uid}: livePending(42)},
-		vfail: map[pkey]*vfailRec{},
+		cfg:      &config.Config{AdminLogChatID: -200},
+		loc:      time.UTC,
+		messages: &i18n.Messages,
+		pend:     map[pkey]*pending{{gid, uid}: livePending(42)},
+		vfail:    map[pkey]*vfailRec{},
 	}
 	fb := &fakeVerifyBot{declineErr: errors.New("Forbidden: missing can_invite_users")}
 	handled, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")

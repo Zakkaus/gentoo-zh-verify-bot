@@ -173,6 +173,7 @@ func testSettings(t *testing.T, cfg *config.Config) *store.Settings {
 		VerifyMaxFails:          store.BaselineValue[int]{Value: 3},
 		VerifyRetrySeconds:      store.BaselineValue[int]{Value: 180},
 		AntispamEnabled:         store.BaselineValue[bool]{Value: cfg.BlockChannelSenders},
+		Lang:                    store.BaselineValue[string]{Value: cfg.Lang},
 		ChannelWhitelist:        store.BaselineValue[[]int64]{Value: append([]int64(nil), cfg.ChannelWhitelist...)},
 		TrustedMemberGroupIDs:   store.BaselineValue[[]int64]{Value: append([]int64(nil), cfg.TrustedMemberGroupIDs...)},
 		KnownChatIDs:            store.BaselineValue[[]int64]{Value: append([]int64(nil), cfg.KnownChatIDs...)},

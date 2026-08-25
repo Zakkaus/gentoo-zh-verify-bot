@@ -26,6 +26,53 @@ func TestFeedLanguageResolution(t *testing.T) {
 	}
 }
 
+func TestFormatBugCatalogueLabels(t *testing.T) {
+	bug := recentBug{
+		ID:           42,
+		Summary:      "summary",
+		Status:       "RESOLVED",
+		Resolution:   "FIXED",
+		Product:      "Gentoo Linux",
+		Component:    "Current packages",
+		Priority:     "P1",
+		Severity:     "normal",
+		Keywords:     []string{"STABLEREQ"},
+		CreationTime: "2026-08-24T12:00:00Z",
+		Atoms:        "app-misc/example",
+		AssignedTo:   bugUser{RealName: "Assignee"},
+		Creator:      bugUser{RealName: "Reporter"},
+	}
+
+	for _, lang := range i18n.Languages() {
+		t.Run(lang.String(), func(t *testing.T) {
+			got := formatBug(bug, lang)
+			labels := i18n.Messages.Feed.Bug
+			for _, label := range []i18n.Text{
+				labels.Status,
+				labels.ProductComponent,
+				labels.Priority,
+				labels.Severity,
+				labels.Keywords,
+				labels.Packages,
+				labels.Assignee,
+				labels.Reporter,
+				labels.CreationDate,
+			} {
+				want := "<b>" + label.For(lang) + "</b>" + labels.FieldSeparator.For(lang)
+				if !strings.Contains(got, want) {
+					t.Errorf("formatted bug does not contain catalogue field %q: %q", want, got)
+				}
+			}
+			wantStatus := lookup.TranslateBugValue(lang, bug.Status) +
+				labels.StatusResolutionSeparator.For(lang) +
+				lookup.TranslateBugValue(lang, bug.Resolution)
+			if !strings.Contains(got, wantStatus) {
+				t.Errorf("formatted bug status = %q, want substring %q", got, wantStatus)
+			}
+		})
+	}
+}
+
 // TestBugSilent verifies status-aware notifications: UNCONFIRMED bugs post silently (a
 // fresh report may be a false alarm), confirmed bugs notify, and silent_bugs=true forces
 // every bug silent.
@@ -770,8 +817,9 @@ func TestConfirmNotice(t *testing.T) {
 	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, feedLanguage("en")); !strings.Contains(got, "IN_PROGRESS") {
 		t.Errorf("en IN_PROGRESS notice should name the status, got %q", got)
 	}
-	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, feedLanguage("zh")); !strings.Contains(got, "处理中") {
-		t.Errorf("zh IN_PROGRESS notice should localize the status, got %q", got)
+	want := lookup.TranslateBugValue(i18n.LangZH, "IN_PROGRESS")
+	if got := confirmNotice(recentBug{ID: 5, Status: "IN_PROGRESS"}, feedLanguage("zh")); !strings.Contains(got, want) {
+		t.Errorf("zh IN_PROGRESS notice should contain catalogue status %q, got %q", want, got)
 	}
 	if got := confirmNotice(recentBug{ID: 5, Status: "CONFIRMED"}, feedLanguage("en")); !strings.Contains(got, "CONFIRMED") {
 		t.Errorf("en CONFIRMED notice should name the status, got %q", got)

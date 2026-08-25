@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 // writeConfig writes a temp config.json and returns its path (cleaned up by t).
@@ -160,6 +162,40 @@ func TestLoadConfigLanguages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestControlGroupAllowedLocalizesRefusal(t *testing.T) {
+	for _, lang := range i18n.Languages() {
+		t.Run(lang.String(), func(t *testing.T) {
+			cfg := &Config{ControlGroupID: -100, Lang: lang.String()}
+			allowed, got := cfg.ControlGroupAllowed(-200)
+			want := i18n.Messages.Feed.Config.ControlGroupOnly.Render(lang, int64(-100))
+			if allowed || got != want {
+				t.Errorf("ControlGroupAllowed(-200) = (%v, %q), want (false, %q)", allowed, got, want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigLeavesPrivateReplyForRenderer(t *testing.T) {
+	value := map[string]any{"group_ids": []int{-100}, "verify_mode": ModeKernel}
+	loaded, err := LoadConfig(writeConfig(t, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PrivateReply != "" {
+		t.Fatalf("default private_reply = %q, want empty catalogue fallback", loaded.PrivateReply)
+	}
+
+	const override = "Use this configured reply verbatim."
+	value["private_reply"] = override
+	loaded, err = LoadConfig(writeConfig(t, value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PrivateReply != override {
+		t.Errorf("configured private_reply = %q, want %q", loaded.PrivateReply, override)
 	}
 }
 

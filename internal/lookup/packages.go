@@ -57,7 +57,6 @@ func configurePkg(cfg *config.Config) {
 const pkgCacheTTL = 6 * time.Hour
 const verCacheTTL = 6 * time.Hour
 const maxHitsPerSource = 8
-const pkgKeywordLegend = "官方树：~ 为无 amd64 稳定 keyword 的最新版，无符号为 amd64 稳定版；overlay：~ 仅标记 overlay 版本"
 
 // Bound caches keyed by user input; exceptional overflow clears them wholesale.
 const pkgCacheMax = 2000
@@ -93,6 +92,25 @@ func (a pkgLookupAvailability) anyUnavailable() bool {
 		}
 	}
 	return false
+}
+
+func (a pkgLookupAvailability) unavailableSources(l i18n.Lang) string {
+	messages := i18n.Messages.LookupPackages.Source
+	sources := make([]string, 0, len(a.overlays)+1)
+	if !a.official {
+		sources = append(sources, messages.GentooOfficialTree.For(l))
+	}
+	unavailableOverlays := make([]string, 0, len(a.overlays))
+	for name, ok := range a.overlays {
+		if !ok {
+			unavailableOverlays = append(unavailableOverlays, name)
+		}
+	}
+	sort.Strings(unavailableOverlays)
+	for _, name := range unavailableOverlays {
+		sources = append(sources, messages.Overlay.Render(l, html.EscapeString(name)))
+	}
+	return strings.Join(sources, messages.ListSeparator.For(l))
 }
 
 func isPkgPath(p string) bool {
@@ -585,7 +603,7 @@ func (v *Service) OnPkg(ctx *th.Context, update telego.Update) error {
 
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/pkg <包名>,例如 /pkg vim,或粘贴链接 /pkg https://packages.gentoo.org/packages/app-editors/vim")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupPackages.Pkg.Usage.For(l))
 		return nil
 	}
 	q = normalizeQuery(q)
@@ -623,14 +641,15 @@ func (v *Service) OnPkg(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-func renderPkg(_ i18n.Lang, q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
+func renderPkg(l i18n.Lang, q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
 	esc := html.EscapeString
+	messages := i18n.Messages.LookupPackages.Pkg
 	var b strings.Builder
-	fmt.Fprintf(&b, "🔎 <b>%s</b> 的搜索结果", esc(q))
+	fmt.Fprintf(&b, "🔎 %s", messages.ResultsHeading.Render(l, "<b>"+esc(q)+"</b>"))
 	found := false
 	if len(mainRes) > 0 {
 		found = true
-		b.WriteString("\n\n📦 <b>官方树 gentoo</b>")
+		fmt.Fprintf(&b, "\n\n📦 <b>%s</b>", messages.OfficialHeading.For(l))
 		for _, a := range mainRes {
 			ver := ""
 			if vm[a][0] != "" {
@@ -660,28 +679,29 @@ func renderPkg(_ i18n.Lang, q string, mainRes []string, vm map[string][2]string,
 	}
 	if !found {
 		if availability.anyUnavailable() {
-			b.WriteString("\n\n部分来源暂时无法查询，目前无法确认是否有匹配的包，请稍后重试。")
+			fmt.Fprintf(&b, "\n\n%s", messages.Unavailable.Render(l, availability.unavailableSources(l)))
 		} else {
-			b.WriteString("\n\n没找到匹配的包,换个更短的关键词试试?")
+			fmt.Fprintf(&b, "\n\n%s", messages.NotFound.For(l))
 		}
 	} else {
-		b.WriteString("\n\n<i>" + pkgKeywordLegend + "</i>")
+		fmt.Fprintf(&b, "\n\n<i>%s</i>", messages.KeywordLegend.For(l))
 		if availability.anyUnavailable() {
-			b.WriteString("\n<i>部分来源暂时无法查询，以上结果可能不完整。</i>")
+			fmt.Fprintf(&b, "\n<i>%s</i>", i18n.Messages.LookupPackages.Source.PartialResults.Render(l, availability.unavailableSources(l)))
 		}
 	}
 	return b.String()
 }
 
 // Rich messages require block tags because newlines are ignored.
-func renderPkgRich(_ i18n.Lang, q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
+func renderPkgRich(l i18n.Lang, q string, mainRes []string, vm map[string][2]string, ovRes map[string][]string, availability pkgLookupAvailability) string {
 	esc := html.EscapeString
+	messages := i18n.Messages.LookupPackages.Pkg
 	var b strings.Builder
-	fmt.Fprintf(&b, "<h3>🔎 %s 的搜索结果</h3>", esc(q))
+	fmt.Fprintf(&b, "<h3>🔎 %s</h3>", messages.ResultsHeading.Render(l, esc(q)))
 	found := false
 	if len(mainRes) > 0 {
 		found = true
-		b.WriteString("<h4>📦 官方树 gentoo</h4><ul>")
+		fmt.Fprintf(&b, "<h4>📦 %s</h4><ul>", messages.OfficialHeading.For(l))
 		for _, a := range mainRes {
 			ver := ""
 			if vm[a][0] != "" {
@@ -700,7 +720,12 @@ func renderPkgRich(_ i18n.Lang, q string, mainRes []string, vm map[string][2]str
 			continue
 		}
 		found = true
-		fmt.Fprintf(&b, "<details><summary>🧩 <b>%s</b>(%d)</summary><ul>", esc(o.name), len(hits))
+		fmt.Fprintf(
+			&b,
+			"<details><summary>🧩 <b>%s</b>%s</summary><ul>",
+			esc(o.name),
+			messages.OverlayCount.Render(l, len(hits)),
+		)
 		for _, a := range hits {
 			ver := ""
 			if vv := pkgC.overlayVer(o.name, a); vv != "" {
@@ -713,14 +738,14 @@ func renderPkgRich(_ i18n.Lang, q string, mainRes []string, vm map[string][2]str
 	}
 	if !found {
 		if availability.anyUnavailable() {
-			b.WriteString("<p>部分来源暂时无法查询，目前无法确认是否有匹配的包，请稍后重试。</p>")
+			fmt.Fprintf(&b, "<p>%s</p>", messages.Unavailable.Render(l, availability.unavailableSources(l)))
 		} else {
-			b.WriteString("<p>没找到匹配的包,换个更短的关键词试试?</p>")
+			fmt.Fprintf(&b, "<p>%s</p>", messages.NotFound.For(l))
 		}
 	} else {
-		b.WriteString("<footer><i>" + pkgKeywordLegend + "</i></footer>")
+		fmt.Fprintf(&b, "<footer><i>%s</i></footer>", messages.KeywordLegend.For(l))
 		if availability.anyUnavailable() {
-			b.WriteString("<footer><i>部分来源暂时无法查询，以上结果可能不完整。</i></footer>")
+			fmt.Fprintf(&b, "<footer><i>%s</i></footer>", i18n.Messages.LookupPackages.Source.PartialResults.Render(l, availability.unavailableSources(l)))
 		}
 	}
 	return b.String()
@@ -948,14 +973,15 @@ func useLink(f useFlag) string {
 	return flagMark(f) + fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(f.name))
 }
 
-func writeLocalFlags(b *strings.Builder, _ i18n.Lang, flags []useFlag) {
+func writeLocalFlags(b *strings.Builder, l i18n.Lang, flags []useFlag) {
 	if len(flags) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "\n<b>本地 USE</b>(%d)", len(flags))
+	messages := i18n.Messages.LookupPackages.Use
+	fmt.Fprintf(b, "\n<b>%s</b>%s", messages.LocalFlags.For(l), messages.Count.Render(l, len(flags)))
 	for i, f := range flags {
 		if i >= 12 && len(flags) > 12 {
-			fmt.Fprintf(b, "\n …(共 %d 个)", len(flags))
+			fmt.Fprintf(b, "\n%s", messages.TruncatedCount.Render(l, len(flags)))
 			break
 		}
 		if d := shortDesc(f.desc); d != "" {
@@ -966,7 +992,7 @@ func writeLocalFlags(b *strings.Builder, _ i18n.Lang, flags []useFlag) {
 	}
 }
 
-func writeGlobalFlags(b *strings.Builder, _ i18n.Lang, flags []useFlag) {
+func writeGlobalFlags(b *strings.Builder, l i18n.Lang, flags []useFlag) {
 	if len(flags) == 0 {
 		return
 	}
@@ -974,14 +1000,23 @@ func writeGlobalFlags(b *strings.Builder, _ i18n.Lang, flags []useFlag) {
 	for _, f := range flags {
 		links = append(links, useLink(f))
 	}
-	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
+	messages := i18n.Messages.LookupPackages.Use
+	fmt.Fprintf(
+		b,
+		"\n<b>%s</b>%s%s%s",
+		messages.GlobalFlags.For(l),
+		messages.Count.Render(l, len(flags)),
+		messages.ValueSeparator.For(l),
+		strings.Join(links, " "),
+	)
 }
 
 // Bound compact USE_EXPAND output; l10n commonly exceeds 100 values.
 const expandCap = 16
 
 // Compact output truncates values; the rich view retains full descriptions.
-func writeExpandFlags(b *strings.Builder, _ i18n.Lang, groups []useExpandGroup) {
+func writeExpandFlags(b *strings.Builder, l i18n.Lang, groups []useExpandGroup) {
+	messages := i18n.Messages.LookupPackages.Use
 	for _, g := range groups {
 		if len(g.flags) == 0 {
 			continue
@@ -995,9 +1030,17 @@ func writeExpandFlags(b *strings.Builder, _ i18n.Lang, groups []useExpandGroup) 
 		}
 		more := ""
 		if len(g.flags) > expandCap {
-			more = fmt.Sprintf(" …(共 %d)", len(g.flags))
+			more = messages.TruncatedCount.Render(l, len(g.flags))
 		}
-		fmt.Fprintf(b, "\n<b>%s</b>(%d):%s%s", html.EscapeString(strings.ToUpper(g.name)), len(g.flags), strings.Join(names, " "), more)
+		fmt.Fprintf(
+			b,
+			"\n<b>%s</b>%s%s%s%s",
+			html.EscapeString(strings.ToUpper(g.name)),
+			messages.Count.Render(l, len(g.flags)),
+			messages.ValueSeparator.For(l),
+			strings.Join(names, " "),
+			more,
+		)
 	}
 }
 
@@ -1011,7 +1054,7 @@ func overlayByName(name string) (overlay, bool) {
 }
 
 // overlayRefs renders linked overlay names for the cross-source footer.
-func overlayRefs(alsoIn []string, atom string) string {
+func overlayRefs(l i18n.Lang, alsoIn []string, atom string) string {
 	refs := make([]string, 0, len(alsoIn))
 	for _, ovName := range alsoIn {
 		ref := html.EscapeString(ovName)
@@ -1020,15 +1063,16 @@ func overlayRefs(alsoIn []string, atom string) string {
 		}
 		refs = append(refs, ref)
 	}
-	return strings.Join(refs, ", ")
+	return strings.Join(refs, i18n.Messages.LookupPackages.Source.ListSeparator.For(l))
 }
 
 func renderUse(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
+	messages := i18n.Messages.LookupPackages.Use
 	var b strings.Builder
 	label := ""
 	if srcLabel != "" { // only overlay packages get a source label; official tree is implied
-		label = "(" + esc(srcLabel) + ")"
+		label = messages.SourceLabel.Render(l, esc(srcLabel))
 	}
 	if pkgURL != "" {
 		fmt.Fprintf(&b, "🧩 <a href=\"%s\"><b>%s</b></a>%s", esc(pkgURL), esc(info.atom), label)
@@ -1043,25 +1087,25 @@ func renderUse(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overlay b
 	}
 	switch {
 	case info.stable != "" && info.latest != "" && info.latest != info.stable:
-		fmt.Fprintf(&b, "\n版本:%s  ~%s", esc(info.stable), esc(info.latest))
+		fmt.Fprintf(&b, "\n%s", messages.VersionStableLatest.Render(l, esc(info.stable), esc(info.latest)))
 	case info.stable != "":
-		fmt.Fprintf(&b, "\n版本:%s", esc(info.stable))
+		fmt.Fprintf(&b, "\n%s", messages.VersionStable.Render(l, esc(info.stable)))
 	case info.latest != "":
-		fmt.Fprintf(&b, "\n版本:~%s", esc(info.latest))
+		fmt.Fprintf(&b, "\n%s", messages.VersionLatest.Render(l, esc(info.latest)))
 	}
 	writeLocalFlags(&b, l, info.local)
 	writeGlobalFlags(&b, l, info.global)
 	writeExpandFlags(&b, l, info.expand)
 	if len(info.local) == 0 && len(info.global) == 0 && len(info.expand) == 0 {
-		b.WriteString("\n(该包无 USE 标志)")
+		fmt.Fprintf(&b, "\n%s", messages.NoFlags.For(l))
 	}
 	if len(alsoIn) > 0 {
-		fmt.Fprintf(&b, "\n<i>overlay 也有此包:%s</i>", overlayRefs(alsoIn, info.atom))
+		fmt.Fprintf(&b, "\n<i>%s</i>", messages.AlsoInOverlay.Render(l, overlayRefs(l, alsoIn, info.atom)))
 	}
 	if overlay {
-		b.WriteString("\n\n<i>overlay · USE 取自最新 ebuild,可能不完整;+ 表示默认启用</i>")
+		fmt.Fprintf(&b, "\n\n<i>%s</i>", messages.OverlayLegend.For(l))
 	} else {
-		b.WriteString("\n\n<i>+ 表示默认启用;~ 表示测试 keyword</i>")
+		fmt.Fprintf(&b, "\n\n<i>%s</i>", messages.OfficialLegend.For(l))
 	}
 	return b.String()
 }
@@ -1069,10 +1113,11 @@ func renderUse(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overlay b
 // Rich output keeps full flag descriptions in collapsible sections.
 func renderUseRich(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
+	messages := i18n.Messages.LookupPackages.Use
 	var b strings.Builder
 	label := ""
 	if srcLabel != "" {
-		label = " (" + esc(srcLabel) + ")"
+		label = messages.SourceLabel.Render(l, esc(srcLabel))
 	}
 	if pkgURL != "" {
 		fmt.Fprintf(&b, "<h3>🧩 <a href=\"%s\">%s</a>%s</h3>", esc(pkgURL), esc(info.atom), label)
@@ -1089,41 +1134,42 @@ func renderUseRich(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overl
 	}
 	switch {
 	case info.stable != "" && info.latest != "" && info.latest != info.stable:
-		hdr = append(hdr, "版本:"+esc(info.stable)+"  ~"+esc(info.latest))
+		hdr = append(hdr, messages.VersionStableLatest.Render(l, esc(info.stable), esc(info.latest)))
 	case info.stable != "":
-		hdr = append(hdr, "版本:"+esc(info.stable))
+		hdr = append(hdr, messages.VersionStable.Render(l, esc(info.stable)))
 	case info.latest != "":
-		hdr = append(hdr, "版本:~"+esc(info.latest))
+		hdr = append(hdr, messages.VersionLatest.Render(l, esc(info.latest)))
 	}
 	if len(hdr) > 0 {
 		fmt.Fprintf(&b, "<p>%s</p>", strings.Join(hdr, "<br>"))
 	}
-	writeFlagsRich(&b, l, "本地 USE", info.local, false)
-	writeFlagsRich(&b, l, "全局 USE", info.global, true)
+	writeFlagsRich(&b, l, messages.LocalFlags.For(l), info.local, false)
+	writeFlagsRich(&b, l, messages.GlobalFlags.For(l), info.global, true)
 	writeExpandFlagsRich(&b, l, info.expand)
 	if len(info.local) == 0 && len(info.global) == 0 && len(info.expand) == 0 {
-		b.WriteString("<p>(该包无 USE 标志)</p>")
+		fmt.Fprintf(&b, "<p>%s</p>", messages.NoFlags.For(l))
 	}
 	if len(alsoIn) > 0 {
-		fmt.Fprintf(&b, "<p>overlay 也有此包:%s</p>", overlayRefs(alsoIn, info.atom))
+		fmt.Fprintf(&b, "<p>%s</p>", messages.AlsoInOverlay.Render(l, overlayRefs(l, alsoIn, info.atom)))
 	}
 	if overlay {
-		b.WriteString("<footer><i>overlay · USE 取自最新 ebuild,可能不完整;+ 表示默认启用</i></footer>")
+		fmt.Fprintf(&b, "<footer><i>%s</i></footer>", messages.OverlayLegend.For(l))
 	} else {
-		b.WriteString("<footer><i>+ 表示默认启用;~ 表示测试 keyword</i></footer>")
+		fmt.Fprintf(&b, "<footer><i>%s</i></footer>", messages.OfficialLegend.For(l))
 	}
 	return b.String()
 }
 
 // Rich messages require block structure; newlines are whitespace.
-func writeFlagsRich(b *strings.Builder, _ i18n.Lang, title string, flags []useFlag, collapse bool) {
+func writeFlagsRich(b *strings.Builder, l i18n.Lang, title string, flags []useFlag, collapse bool) {
 	if len(flags) == 0 {
 		return
 	}
+	count := i18n.Messages.LookupPackages.Use.Count.Render(l, len(flags))
 	if collapse {
-		fmt.Fprintf(b, "<details><summary><b>%s</b>(%d)</summary><ul>", title, len(flags))
+		fmt.Fprintf(b, "<details><summary><b>%s</b>%s</summary><ul>", title, count)
 	} else {
-		fmt.Fprintf(b, "<p><b>%s</b>(%d)</p><ul>", title, len(flags))
+		fmt.Fprintf(b, "<p><b>%s</b>%s</p><ul>", title, count)
 	}
 	for _, f := range flags {
 		if f.desc != "" {
@@ -1139,12 +1185,17 @@ func writeFlagsRich(b *strings.Builder, _ i18n.Lang, title string, flags []useFl
 }
 
 // Each large USE_EXPAND group gets its own collapsible section.
-func writeExpandFlagsRich(b *strings.Builder, _ i18n.Lang, groups []useExpandGroup) {
+func writeExpandFlagsRich(b *strings.Builder, l i18n.Lang, groups []useExpandGroup) {
 	for _, g := range groups {
 		if len(g.flags) == 0 {
 			continue
 		}
-		fmt.Fprintf(b, "<details><summary><b>%s</b>(%d)</summary><ul>", html.EscapeString(strings.ToUpper(g.name)), len(g.flags))
+		fmt.Fprintf(
+			b,
+			"<details><summary><b>%s</b>%s</summary><ul>",
+			html.EscapeString(strings.ToUpper(g.name)),
+			i18n.Messages.LookupPackages.Use.Count.Render(l, len(g.flags)),
+		)
 		for _, f := range g.flags {
 			if f.desc != "" {
 				fmt.Fprintf(b, "<li>%s%s — %s</li>", flagMark(f), html.EscapeString(f.name), html.EscapeString(f.desc))
@@ -1247,20 +1298,22 @@ func resolveUseSourcesWith(
 	return srcs, availability
 }
 
-func renderUseLookupMiss(_ i18n.Lang, q string, availability pkgLookupAvailability) string {
+func renderUseLookupMiss(l i18n.Lang, q string, availability pkgLookupAvailability) string {
+	messages := i18n.Messages.LookupPackages.Use
 	if availability.anyUnavailable() {
-		return fmt.Sprintf("部分来源暂时无法查询，目前无法确认是否有精确匹配「%s」的包，请稍后重试。", q)
+		return messages.Unavailable.Render(l, q, availability.unavailableSources(l))
 	}
-	return fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q)
+	return messages.NotFound.Render(l, q)
 }
 
-func appendUseAvailabilityNote(_ i18n.Lang, plain, rich string, availability pkgLookupAvailability) (string, string) {
+func appendUseAvailabilityNote(l i18n.Lang, plain, rich string, availability pkgLookupAvailability) (string, string) {
 	if !availability.anyUnavailable() {
 		return plain, rich
 	}
-	plain += "\n\n<i>部分来源暂时无法查询，以上结果可能不完整。</i>"
+	note := i18n.Messages.LookupPackages.Source.PartialResults.Render(l, availability.unavailableSources(l))
+	plain += "\n\n<i>" + note + "</i>"
 	if rich != "" {
-		rich += "<footer><i>部分来源暂时无法查询，以上结果可能不完整。</i></footer>"
+		rich += "<footer><i>" + note + "</i></footer>"
 	}
 	return plain, rich
 }
@@ -1279,7 +1332,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	q := commandArg(msg.Text)
 	if q == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/use <包名>,例如 /use vim、/use app-editors/vim,或粘贴 packages.gentoo.org 链接")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupPackages.Use.Usage.For(l))
 		return nil
 	}
 	q = normalizeQuery(q)
@@ -1302,12 +1355,12 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		}
 		sort.Strings(atoms)
 		var b strings.Builder
-		b.WriteString("匹配到多个包,请用完整名指定其一:")
+		b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
 		for _, a := range atoms {
 			fmt.Fprintf(&b, "\n • /use %s", a)
 		}
 		if availability.anyUnavailable() {
-			b.WriteString("\n部分来源暂时无法查询，以上匹配结果可能不完整。")
+			fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))
 		}
 		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 		return nil
@@ -1341,7 +1394,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if out == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("暂时无法获取 %s 的信息,请稍后重试。", atom))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupPackages.Use.InfoUnavailable.Render(l, atom))
 		return nil
 	}
 	out, outRich = appendUseAvailabilityNote(l, out, outRich, availability)
@@ -1386,17 +1439,18 @@ func arm64Keywords(versions []pkgVersionJSON) (stable, testing string) {
 // Failed searches remain distinct from authoritative package misses.
 func lookupArm(
 	ctx context.Context,
-	_ i18n.Lang,
+	l i18n.Lang,
 	name string,
 	search func(context.Context, string) ([]string, bool),
 	status func(context.Context, string) (string, string, bool),
 ) (body string, useHTML bool) {
+	messages := i18n.Messages.LookupPackages.Arm
 	atoms, available := search(ctx, name)
 	if !available {
-		return "暂时无法查询 Gentoo 官方树，请稍后重试。", false
+		return messages.OfficialUnavailable.For(l), false
 	}
 	if len(atoms) == 0 {
-		return fmt.Sprintf("❓ Gentoo 官方树里没找到「%s」。", name), false
+		return messages.NotFound.Render(l, name), false
 	}
 	atom := atoms[0]
 	stable, testing, ok := status(ctx, atom)
@@ -1404,18 +1458,18 @@ func lookupArm(
 	esc := html.EscapeString
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "🦾 <a href=\"%s\">%s</a> 在 arm64 (aarch64) 上:", esc(url), esc(atom))
+	b.WriteString(messages.Heading.Render(l, esc(url), esc(atom)))
 	switch {
 	case !ok:
-		b.WriteString("\n⚠️ 暂时无法获取 keyword 信息,请稍后重试,或直接查看上面的链接。")
+		b.WriteString("\n" + messages.KeywordUnavailable.For(l))
 	case stable != "" && testing != "" && stable != testing:
-		fmt.Fprintf(&b, "\n✅ 稳定(arm64):%s\n🧪 测试(~arm64):%s", esc(stable), esc(testing))
+		b.WriteString(messages.StableTesting.Render(l, esc(stable), esc(testing)))
 	case stable != "":
-		fmt.Fprintf(&b, "\n✅ 稳定(arm64):%s", esc(stable))
+		b.WriteString(messages.StableOnly.Render(l, esc(stable)))
 	case testing != "":
-		fmt.Fprintf(&b, "\n🧪 仅测试(~arm64):%s(尚无 arm64 稳定版,需在 package.accept_keywords 中接受 ~arm64)", esc(testing))
+		b.WriteString(messages.TestingOnly.Render(l, esc(testing)))
 	default:
-		b.WriteString("\n❌ 未设置 arm64 keyword —— Gentoo 官方树未给该包标记 arm64(可能尚不支持,或未经测试)。")
+		b.WriteString("\n" + messages.NoKeyword.For(l))
 	}
 	return b.String(), true
 }
@@ -1434,7 +1488,7 @@ func (v *Service) OnArm(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	name := commandArg(msg.Text)
 	if name == "" {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, "用法:/arm <包名>,例如 /arm firefox。查该包在 arm64 (aarch64) 上的 Gentoo keyword 状态。")
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, i18n.Messages.LookupPackages.Arm.Usage.For(l))
 		return nil
 	}
 	hc, cancel := context.WithTimeout(c, 20*time.Second)

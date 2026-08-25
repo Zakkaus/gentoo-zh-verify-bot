@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 )
 
@@ -59,10 +60,13 @@ func TestBCAllowUpdatesOnlyInvokingGroup(t *testing.T) {
 	groups := []int64{-100, -200, -300}
 	for _, test := range []struct {
 		name      string
+		lang      string
 		failUnban bool
 	}{
 		{name: "unban succeeds"},
 		{name: "unban failure is reported", failUnban: true},
+		{name: "English notice", lang: "en"},
+		{name: "Traditional Chinese failure notice", lang: "zh-Hant", failUnban: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := &config.Config{
@@ -70,6 +74,7 @@ func TestBCAllowUpdatesOnlyInvokingGroup(t *testing.T) {
 				Groups:           []config.GroupConfig{{ID: -100}, {ID: -200}, {ID: -300}},
 				ControlGroupID:   -100,
 				NotifyTTLSeconds: -1,
+				Lang:             test.lang,
 			}
 			telegram := newFakeMod()
 			telegram.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
@@ -97,8 +102,13 @@ func TestBCAllowUpdatesOnlyInvokingGroup(t *testing.T) {
 			if call.ChatID.ID != -200 || call.SenderChatID != senderID {
 				t.Errorf("unban call = chat %d sender %d, want chat -200 sender %d", call.ChatID.ID, call.SenderChatID, senderID)
 			}
-			if test.failUnban != strings.Contains(telegram.lastSendText, "解封失败") {
-				t.Errorf("failure notice = %q, want failure %v", telegram.lastSendText, test.failUnban)
+			l := i18n.FromStored(test.lang)
+			wantNotice := i18n.Messages.Moderate.Antispam.Allowed.Render(l, senderID)
+			if test.failUnban {
+				wantNotice = i18n.Messages.Moderate.Antispam.AllowedUnbanFailed.Render(l, senderID)
+			}
+			if telegram.lastSendText != wantNotice {
+				t.Errorf("notice = %q, want %q", telegram.lastSendText, wantNotice)
 			}
 		})
 	}

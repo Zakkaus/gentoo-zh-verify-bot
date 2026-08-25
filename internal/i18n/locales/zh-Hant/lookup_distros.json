@@ -1,7 +1,7 @@
 {
   "pkgs": {
-    "repology_unavailable": "暫時無法查詢 Repology 中「%[1]s」的跨發行版資訊。請稍後再試。",
-    "repology_not_found": "❓ Repology 中沒有與「%[1]s」相符的跨發行版套件。請輸入更精確的套件名稱。",
+    "repology_unavailable": "暫時無法查詢 Repology 中「%[1]s」的跨發行版資訊。請稍後重試。",
+    "repology_not_found": "❓ Repology 中沒有與「%[1]s」相符的跨發行版套件。請嘗試更精確的套件名稱。",
     "usage": "用法：/pkgs <套件名稱>。範例：/pkgs firefox。比較 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream 和 openSUSE 等發行版的套件版本；Debian 等顯示 stable/testing 通道，RHEL 資料來自 AlmaLinux 和 Rocky Linux。",
     "no_supported_distro": "未在 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream、EPEL 或 openSUSE 中找到「%[1]s」的套件版本。此套件可能只由其他發行版提供。",
     "heading": "📦 <a href=\"%[1]s\">%[2]s</a> 跨發行版版本",
@@ -17,7 +17,7 @@
     "usage": "用法：/armpkgs <套件名稱>。範例：/armpkgs htop。比較此套件在 Gentoo、Debian、Ubuntu、Fedora、Arch Linux ARM 和 AUR 的 arm64（AArch64）支援情況。",
     "heading": "🦾 <b>%[1]s</b> · arm64（AArch64）跨發行版支援",
     "row": "\n • <a href=\"%[1]s\">%[2]s</a>：%[3]s",
-    "footer": "<i>⚠️「查詢失敗」表示對應來源暫時無法使用，請稍後再試。Gentoo 未設定 arm64 keyword 時，即使其他發行版有套件，也不能據此判斷該 ebuild 可用。請先測試；如需嘗試，再於 package.accept_keywords 中只對該套件接受 **。</i>",
+    "footer": "<i>⚠️「查詢失敗」表示對應來源暫時無法使用。請稍後重試。Gentoo 未設定 arm64 keyword 時，即使其他發行版有套件，也不能據此判斷該 ebuild 可用。請先測試；如需嘗試，再於 package.accept_keywords 中只對該套件接受 **。</i>",
     "query_failed": "⚠️ 查詢失敗",
     "not_in_official_tree": "❌ 不在官方樹",
     "stable_testing": "✅ stable %[1]s · 🧪 ~%[2]s",
@@ -29,7 +29,7 @@
     "available": "✅ %[1]s %[2]s",
     "not_in_fedora": "❌ 不在 Fedora",
     "fedora_query_failed": "⚠️ Fedora 查詢失敗",
-    "fedora_rawhide": "✅ rawhide %[1]s",
+    "fedora_rawhide": "✅ Rawhide %[1]s",
     "pkgbuild_parse_failed": "⚠️ 無法剖析 PKGBUILD，請開啟 AUR 連結檢查",
     "any_architecture": "✅ any（架構無關）",
     "declares_aarch64": "✅ 宣告 aarch64",

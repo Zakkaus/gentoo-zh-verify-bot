@@ -40,9 +40,15 @@ func TestParseAutoDelArg(t *testing.T) {
 	}
 }
 
-func TestMemberHelpIncludesDistroAlias(t *testing.T) {
-	const helpLine = "/distro <包名> — /pkgs 的别名"
-	if !strings.Contains(memberHelpText(i18n.LangZH), helpLine) {
-		t.Errorf("member help is missing %q", helpLine)
+func TestMemberHelpUsesCatalogue(t *testing.T) {
+	for _, language := range i18n.Languages() {
+		got := memberHelpText(language)
+		want := i18n.Messages.Panel.Help.Member.For(language)
+		if got != want {
+			t.Errorf("member help for %s = %q, want catalogue text %q", language, got, want)
+		}
+		if !strings.Contains(got, "/distro") {
+			t.Errorf("member help for %s is missing the /distro alias", language)
+		}
 	}
 }

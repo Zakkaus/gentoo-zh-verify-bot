@@ -144,7 +144,7 @@ func (v *Service) loadAgents() {
 }
 
 // AgentStatsText returns the six busiest claimed models or an empty string before the first catch.
-func (v *Service) AgentStatsText(_ i18n.Lang) string {
+func (v *Service) AgentStatsText(l i18n.Lang) string {
 	v.agentMu.Lock()
 	total := v.agents.Total
 	counts := copyCounts(v.agents.Counts)
@@ -173,7 +173,7 @@ func (v *Service) AgentStatsText(_ i18n.Lang) string {
 	for _, e := range list {
 		parts = append(parts, fmt.Sprintf("%s %d", e.model, e.n))
 	}
-	return fmt.Sprintf("🤖 拦截 AI 代答:%d 次(%s)", total, strings.Join(parts, "、"))
+	return v.messages.Verification.Admin.AgentStats.Render(l, total, strings.Join(parts, "、"))
 }
 
 // vfailRec drives both retry cooldowns and automatic bans.
@@ -528,6 +528,7 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	}
 	// Keep channel navigation inside the DM verification flow.
 	group := &(*v.messages).Verification.Group
+	admin := &(*v.messages).Verification.Admin
 	channelHint := ""
 	if v.RequiredChannelID(gid) != 0 {
 		channelHint = group.ChannelHint.Render(l, html.EscapeString(v.channelDisplay(gid)))
@@ -543,13 +544,13 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: group.VerifyButton.For(l), URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
-		telego.InlineKeyboardButton{Text: "👮 管理员直接通过", CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: "🚫 拒绝并封禁", CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: admin.ApproveButton.For(l), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: admin.BanButton.For(l), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
 	))
 	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	if err != nil {
 		log.Printf("join %d in %d: post challenge failed: %v", uid, gid, err)
-		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 群 %d 未能发出用户 %d 的入群验证消息:%v;请手动处理该申请", gid, uid, err))
+		v.adminAlert(c, bot, admin.ChallengePostFailed.Render(l, gid, uid, err))
 		return 0
 	}
 	return msgID(sent)
@@ -684,7 +685,7 @@ func (v *Service) onRecovery(c context.Context, bot verifyBot, outage time.Durat
 // Re-notify without holding v.mu, then update only the still-current pending's message ID.
 func (v *Service) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
 	ul := p.lang
-	notice := v.messages.Verification.Recovery.Renotify.Render(ul, outageText(ul, outage))
+	notice := v.messages.Verification.Recovery.Renotify.Render(ul, outageText(v.messages, ul, outage))
 	_, _ = bot.SendMessage(c, htmlMessage(uid, notice))
 	newMsg := v.postGroupChallenge(c, bot, gid, uid, name, v.groupLanguage(gid))
 	if oldMsg != 0 && oldMsg != newMsg {
@@ -698,21 +699,15 @@ func (v *Service) renotifyPending(c context.Context, bot verifyBot, gid, uid int
 }
 
 // Render whole seconds, minutes, or hours in the applicant's locale.
-func outageText(l i18n.Lang, d time.Duration) string {
-	units := [3]string{" 秒", " 分钟", " 小时"}
-	switch l {
-	case i18n.LangZHHant:
-		units = [3]string{" 秒", " 分鐘", " 小時"}
-	case i18n.LangEN:
-		units = [3]string{" seconds", " minutes", " hours"}
-	}
+func outageText(messages *i18n.Catalog, l i18n.Lang, d time.Duration) string {
+	recovery := &messages.Verification.Recovery
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%d%s", int(d.Seconds()), units[0])
+		return recovery.OutageSeconds.Render(l, int(d.Seconds()))
 	case d < time.Hour:
-		return fmt.Sprintf("%d%s", int(d.Minutes()), units[1])
+		return recovery.OutageMinutes.Render(l, int(d.Minutes()))
 	default:
-		return fmt.Sprintf("%d%s", int(d.Hours()), units[2])
+		return recovery.OutageHours.Render(l, int(d.Hours()))
 	}
 }
 

@@ -1,1 +1,49 @@
-{}
+{
+  "state": {
+    "enabled": "enabled",
+    "disabled": "disabled"
+  },
+  "status": {
+    "ping": "🏓 pong | Version: %[1]s | Uptime: %[2]s | Verification: %[3]s",
+    "stats": "📊 Today (%[1]s)\n✅ Approved: %[2]d\n❌ Rejected: %[3]d\nVerification: %[4]s | Uptime: %[5]s"
+  },
+  "verification": {
+    "started": "✅ Join verification is enabled.",
+    "stopped": "⏸ Join verification is disabled. New requests will not be verified automatically; administrators must review them manually."
+  },
+  "rich_text": {
+    "enabled": "🎨 Rich text output is enabled. /pkg and /use will send rich text messages; older or third-party clients may not display them correctly.",
+    "disabled": "📄 Rich text output is disabled. /pkg and /use will send plain text messages."
+  },
+  "name_spoiler": {
+    "enabled": "🫥 Name hiding for new members is enabled. Names will use spoiler formatting so advertising names are not shown directly in the group.",
+    "disabled": "👁 Name hiding for new members is disabled. Names will be shown normally."
+  },
+  "verification_mode": {
+    "config_source": "configuration file",
+    "runtime_source": "/vmode setting",
+    "current": "🔐 Current join verification mode: %[1]s (source: %[2]s).\nUsage: /vmode kernel uses the Linux kernel version; /vmode quiz uses a multiple-choice question; /vmode mixed picks either at random; /vmode auto restores the configuration file setting.",
+    "kernel_set": "🔐 Join verification now uses the Linux kernel version. Applicants must run uname -r in a terminal and send their current Linux kernel version.",
+    "set": "🔐 Join verification mode changed to %[1]s.",
+    "auto_set": "🔐 Restored the configuration file setting. The current join verification mode is %[1]s.",
+    "usage": "Usage: /vmode kernel|quiz|mixed|auto. Omit the argument to view the current setting."
+  },
+  "auto_delete": {
+    "current_enabled": "🧹 Automatic deletion of lookup results is enabled. The result and original query will be deleted after %[1]d minutes.\nUsage: /autodel off disables it; /autodel <minutes> changes the delay.",
+    "current_disabled": "Automatic deletion of lookup results is disabled.\nUsage: /autodel on enables it; /autodel <minutes> sets the delay and enables it.",
+    "disabled": "Automatic deletion of lookup results is disabled. Replies and original queries for /pkg, /use, /bug, /news, /wiki, /bbs, /pkgs, /arm, and /armpkgs will be kept.",
+    "enabled": "🧹 Automatic deletion of lookup results is enabled. Results and original queries are retained for %[1]d minutes.",
+    "set": "🧹 The deletion delay is set to %[1]d minutes for results and original queries.",
+    "usage": "Usage: /autodel on|off or /autodel <minutes> (1–1440)."
+  },
+  "help": {
+    "member": "🤖 Available commands:\n/pkg <package> — Search Gentoo packages (official tree, gentoo-zh, GURU)\n/use <package> — Show package details and USE flags\n/arm <package> — Show Gentoo arm64 keyword status\n\n/pkgs <package> — Compare versions across distributions (also available as /distro <package>)\n/armpkgs <package> — Compare arm64 support across distributions\n/bug <number> — Look up a Gentoo Bugzilla issue\n/news [keywords] — Browse or search Gentoo news\n/wiki <keywords> — Search Gentoo Wiki and ArchWiki, including Chinese pages\n/bbs <keywords> — Search Linux forums, prioritizing Chinese results\n\n/ping — Show bot status and uptime\n/stats — Show today's approvals and rejections\n/help — Show this list",
+    "group_state": "Join verification: %[1]s",
+    "admin": "👮 Administrators (reply to the target message):\n/mute [duration] — Mute the user; defaults to 1h, for example /mute 30m\n/unmute — Unmute the user\n/ban — Ban and remove the user; delete only the replied message\n/sb — Ban and remove the user; also delete all messages from that user\n/warn — Warn the user; remove them automatically after %[1]d warnings\n/clearwarn — Clear warnings\n\nOther administration commands:\n/bantime <duration> — Set the ban duration; 0 means permanent, for example 7d, 12h, or 30m\n/autodel [on|off|minutes] — Configure automatic deletion of lookup results\n/rich — Toggle rich text for /pkg and /use\n/spoiler — Toggle name hiding for new members\n/vmode <mode> — Set the verification mode: kernel, quiz, mixed, or auto\n/bc — Toggle sender-channel blocking; use /bc allow|deny <channel ID> to manage the allowlist\n/start or /stop — Enable or disable join verification",
+    "direct_message_note": "The lookup commands above also work in direct messages, with a limit of %[1]d queries per minute. Review and administration commands only work in the group."
+  },
+  "error": {
+    "save_settings": "❌ Unable to save the setting. Try again later.",
+    "admin_only": "⛔ This command is restricted to group administrators. Ask a group administrator to change the setting."
+  }
+}

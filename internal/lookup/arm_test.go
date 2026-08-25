@@ -35,44 +35,60 @@ func TestArm64Keywords(t *testing.T) {
 }
 
 func TestLookupArmAvailability(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		atoms     []string
-		available bool
-		want      string
-		notWant   string
-		wantHTML  bool
-	}{
-		{
-			name:    "search unavailable",
-			want:    "暂时无法查询 Gentoo 官方树",
-			notWant: "没找到",
-		},
-		{
-			name:      "answered miss",
-			available: true,
-			want:      "官方树里没找到",
-			notWant:   "暂时无法查询",
-		},
-		{
-			name:      "package found",
-			atoms:     []string{"www-client/firefox"},
-			available: true,
-			want:      "稳定(arm64):140.12.0",
-			wantHTML:  true,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, useHTML := lookupArm(context.Background(), i18n.LangZH, "firefox", func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available }, func(context.Context, string) (string, string, bool) { return "140.12.0", "", true })
-			if useHTML != tc.wantHTML {
-				t.Errorf("lookupArm() useHTML = %v, want %v", useHTML, tc.wantHTML)
-			}
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("lookupArm() = %q, want substring %q", got, tc.want)
-			}
-			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
-				t.Errorf("lookupArm() = %q, unwanted substring %q", got, tc.notWant)
-			}
-		})
+	for _, l := range i18n.Languages() {
+		for _, tc := range []struct {
+			name      string
+			atoms     []string
+			available bool
+			want      func() string
+			notWant   func() string
+			wantHTML  bool
+		}{
+			{
+				name: "search unavailable",
+				want: func() string {
+					return i18n.Messages.LookupPackages.Arm.OfficialUnavailable.For(l)
+				},
+				notWant: func() string {
+					return i18n.Messages.LookupPackages.Arm.NotFound.Render(l, "firefox")
+				},
+			},
+			{
+				name:      "answered miss",
+				available: true,
+				want: func() string {
+					return i18n.Messages.LookupPackages.Arm.NotFound.Render(l, "firefox")
+				},
+				notWant: func() string {
+					return i18n.Messages.LookupPackages.Arm.OfficialUnavailable.For(l)
+				},
+			},
+			{
+				name:      "package found",
+				atoms:     []string{"www-client/firefox"},
+				available: true,
+				want: func() string {
+					return i18n.Messages.LookupPackages.Arm.StableOnly.Render(l, "140.12.0")
+				},
+				wantHTML: true,
+			},
+		} {
+			t.Run(l.String()+"/"+tc.name, func(t *testing.T) {
+				got, useHTML := lookupArm(context.Background(), l, "firefox", func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available }, func(context.Context, string) (string, string, bool) { return "140.12.0", "", true })
+				if useHTML != tc.wantHTML {
+					t.Errorf("lookupArm() useHTML = %v, want %v", useHTML, tc.wantHTML)
+				}
+				want := tc.want()
+				if !strings.Contains(got, want) {
+					t.Errorf("lookupArm() = %q, want substring %q", got, want)
+				}
+				if tc.notWant != nil {
+					notWant := tc.notWant()
+					if strings.Contains(got, notWant) {
+						t.Errorf("lookupArm() = %q, unwanted substring %q", got, notWant)
+					}
+				}
+			})
+		}
 	}
 }

@@ -40,6 +40,14 @@ type VerificationCatalog struct {
 	Channel VerificationChannelCatalog
 	// Recovery contains outage recovery notices.
 	Recovery VerificationRecoveryCatalog
+	// Mode contains operator-facing challenge mode labels.
+	Mode VerificationModeCatalog
+	// Input contains localized phrases recognized in applicant replies.
+	Input VerificationInputCatalog
+	// Duration contains verification ban duration text.
+	Duration VerificationDurationCatalog
+	// Admin contains administrator controls and operational notices.
+	Admin VerificationAdminCatalog
 }
 
 // VerificationGroupCatalog contains public group challenge text.
@@ -76,20 +84,24 @@ type VerificationChallengeCatalog struct {
 	FallbackWrong Format
 	// FallbackQuestions contains the built-in answer-hidden questions.
 	FallbackQuestions [2]Question
+	// AgentTrap formats the hidden automated-agent instruction.
+	AgentTrap Format
 }
 
 // VerificationResultCatalog contains applicant outcomes and callback alerts.
 type VerificationResultCatalog struct {
-	// AICaught reports automated-agent interception.
-	AICaught Text
+	// AICaught formats automated-agent interception and its retry delay.
+	AICaught Format
+	// AICaughtNoWait reports interception when the applicant may retry immediately.
+	AICaughtNoWait Text
 	// Approved reports successful verification.
 	Approved Text
 	// WrongRetry formats the retry cooldown.
 	WrongRetry Format
 	// WrongNoWait reports rejection without a cooldown.
 	WrongNoWait Text
-	// WrongBanned reports a terminal verification ban.
-	WrongBanned Text
+	// WrongBanned formats a terminal verification ban and its duration.
+	WrongBanned Format
 	// AlreadyHandled reports a settled or expired request.
 	AlreadyHandled Text
 	// StaleQuestion reports an expired question.
@@ -122,4 +134,86 @@ type VerificationChannelCatalog struct {
 type VerificationRecoveryCatalog struct {
 	// Renotify formats a restarted verification window notice.
 	Renotify Format
+	// OutageSeconds formats an outage shorter than one minute.
+	OutageSeconds Format
+	// OutageMinutes formats an outage shorter than one hour.
+	OutageMinutes Format
+	// OutageHours formats an outage of at least one hour.
+	OutageHours Format
+}
+
+// VerificationModeCatalog contains operator-facing challenge mode labels.
+type VerificationModeCatalog struct {
+	// Kernel labels manual Linux kernel version verification.
+	Kernel Text
+	// Quiz labels multiple-choice verification.
+	Quiz Text
+	// Mixed labels random kernel and multiple-choice verification.
+	Mixed Text
+}
+
+// VerificationInputCatalog contains phrases recognized in applicant replies.
+type VerificationInputCatalog struct {
+	// OtherOSPhrases identifies replies that mention another operating system.
+	OtherOSPhrases StringList
+	// NoLinuxPhrases identifies replies from applicants without Linux.
+	NoLinuxPhrases StringList
+}
+
+// VerificationDurationCatalog contains verification ban duration text.
+type VerificationDurationCatalog struct {
+	// Permanent labels a ban without an expiry.
+	Permanent Text
+	// Days formats a whole-day duration.
+	Days Format
+	// Hours formats a whole-hour duration.
+	Hours Format
+	// Minutes formats a whole-minute duration.
+	Minutes Format
+	// Seconds formats a duration in seconds.
+	Seconds Format
+}
+
+// VerificationAdminCatalog contains administrator controls and operational notices.
+type VerificationAdminCatalog struct {
+	// AgentCaught formats an automated-answer interception alert.
+	AgentCaught Format
+	// AgentStats formats the lifetime automated-answer tally.
+	AgentStats Format
+	// TrustedBypassFailed formats a failed trusted-member approval.
+	TrustedBypassFailed Format
+	// PendingCap formats a pending-queue capacity alert.
+	PendingCap Format
+	// OnlyGroupAdmin rejects an unauthorized callback.
+	OnlyGroupAdmin Text
+	// CannotApprove reports a settled or unapprovable request.
+	CannotApprove Text
+	// AlreadyHandled reports a settled request.
+	AlreadyHandled Text
+	// Approving acknowledges that approval is in progress.
+	Approving Text
+	// Banning formats a decline and ban in progress.
+	Banning Format
+	// ChannelFailOpen describes the configured fail-open action.
+	ChannelFailOpen Text
+	// ChannelFailClosed describes the configured fail-closed action.
+	ChannelFailClosed Text
+	// ChannelAccessFailed formats an unreadable required-channel alert.
+	ChannelAccessFailed Format
+	// ApproveFailed formats a failed approval alert.
+	ApproveFailed Format
+	// DeclineFailed formats a failed decline alert.
+	DeclineFailed Format
+	// AutoBanFailed formats a failed automatic ban alert.
+	AutoBanFailed Format
+	// AutoBanned formats a successful automatic ban alert.
+	AutoBanned Format
+	// BanFailed formats a failed administrator-requested ban alert.
+	BanFailed Format
+	// ApproveButton labels the direct-approval button.
+	ApproveButton Text
+	// BanButton labels the decline-and-ban button.
+	BanButton Text
+	// ChallengePostFailed formats a failed public challenge alert.
+	ChallengePostFailed Format
 }

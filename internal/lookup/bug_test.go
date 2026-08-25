@@ -66,7 +66,11 @@ func TestFetchBugLookupState(t *testing.T) {
 }
 
 func TestBugLookupFailureMessage(t *testing.T) {
-	const link = "https://bugs.gentoo.org/123"
+	const (
+		id   = "123"
+		link = "https://bugs.gentoo.org/123"
+	)
+	l := i18n.LangZH
 	tests := []struct {
 		name  string
 		state bugLookupState
@@ -75,17 +79,17 @@ func TestBugLookupFailureMessage(t *testing.T) {
 		{
 			name:  "not found",
 			state: bugLookupNotFound,
-			want:  "❓ Bug 123 不存在。",
+			want:  i18n.Messages.LookupContent.Bug.NotFound.Render(l, id),
 		},
 		{
 			name:  "temporary failure",
 			state: bugLookupUnavailable,
-			want:  "❓ 暂时无法获取 Bug 123 的详情，请稍后重试。可直接查看：https://bugs.gentoo.org/123",
+			want:  i18n.Messages.LookupContent.Bug.Unavailable.Render(l, id, link),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := bugLookupFailureMessage(i18n.LangZH, "123", link, tt.state); got != tt.want {
+			if got := bugLookupFailureMessage(l, id, link, tt.state); got != tt.want {
 				t.Errorf("bugLookupFailureMessage() = %q, want %q", got, tt.want)
 			}
 		})
@@ -93,14 +97,27 @@ func TestBugLookupFailureMessage(t *testing.T) {
 }
 
 func TestBugLabels(t *testing.T) {
+	l := i18n.LangZH
 	tests := []struct {
 		name string
 		got  string
 		want string
 	}{
-		{name: "removed package resolution", got: bugResolutionZH["PKGREMOVED"], want: "软件包已移除"},
-		{name: "upstream resolution", got: bugResolutionZH["UPSTREAM"], want: "需向上游报告"},
-		{name: "enhancement severity", got: bugSeverityZH["enhancement"], want: "功能请求"},
+		{
+			name: "removed package resolution",
+			got:  bugResolutionZH["PKGREMOVED"],
+			want: i18n.Messages.LookupContent.Bug.Resolution.PackageRemoved.For(l),
+		},
+		{
+			name: "upstream resolution",
+			got:  bugResolutionZH["UPSTREAM"],
+			want: i18n.Messages.LookupContent.Bug.Resolution.Upstream.For(l),
+		},
+		{
+			name: "enhancement severity",
+			got:  bugSeverityZH["enhancement"],
+			want: i18n.Messages.LookupContent.Bug.Severity.Enhancement.For(l),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

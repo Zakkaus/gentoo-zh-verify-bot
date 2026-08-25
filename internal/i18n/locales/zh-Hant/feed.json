@@ -1,1 +1,18 @@
-{}
+{
+  "bug": {
+    "field_separator": "：",
+    "status_resolution_separator": " · ",
+    "status": "狀態",
+    "product_component": "產品／元件",
+    "priority": "優先順序",
+    "severity": "嚴重性",
+    "keywords": "關鍵字",
+    "packages": "套件",
+    "assignee": "負責人",
+    "reporter": "回報者",
+    "creation_date": "建立日期"
+  },
+  "config": {
+    "control_group_only": "⛔ 此指令只能在控制群組（ID %[1]d）中使用。"
+  }
+}

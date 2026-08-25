@@ -3,7 +3,6 @@ package panel
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -72,8 +71,8 @@ func TestSettingsCommandReportsWriteFailure(t *testing.T) {
 		From:      &telego.User{ID: 7},
 		Text:      "/stop",
 	}})
-	if !strings.Contains(fake.lastSendText, "无法保存设置") {
-		t.Fatalf("write failure notice = %q", fake.lastSendText)
+	if got, want := fake.lastSendText, i18n.Messages.Panel.Error.SaveSettings.For(i18n.LangZH); got != want {
+		t.Fatalf("write failure notice = %q, want %q", got, want)
 	}
 	if !verification.IsEnabled(cfg.GroupIDs[0]) {
 		t.Fatal("failed settings write changed effective state")

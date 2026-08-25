@@ -10,31 +10,37 @@ import (
 
 func TestWriteExpandFlags(t *testing.T) {
 	many := make([]useFlag, 0, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		many = append(many, useFlag{name: "lang" + string(rune('a'+i))})
 	}
 	groups := []useExpandGroup{
 		{name: "llvm_slot", flags: []useFlag{{name: "20"}, {name: "21", def: true}, {name: "22"}}},
 		{name: "l10n", flags: many},
 	}
-	var b strings.Builder
-	writeExpandFlags(&b, i18n.LangZH, groups)
-	out := b.String()
+	for _, l := range i18n.Languages() {
+		var b strings.Builder
+		writeExpandFlags(&b, l, groups)
+		out := b.String()
+		messages := i18n.Messages.LookupPackages.Use
 
-	if !strings.Contains(out, "<b>LLVM_SLOT</b>(3):") {
-		t.Errorf("missing uppercased llvm_slot header with count: %q", out)
-	}
-	if !strings.Contains(out, "+21") {
-		t.Errorf("a default value must be marked +21: %q", out)
-	}
-	if !strings.Contains(out, "<b>L10N</b>(20):") {
-		t.Errorf("missing l10n header with full count 20: %q", out)
-	}
-	if !strings.Contains(out, "…(共 20)") {
-		t.Errorf("a group past expandCap must truncate with a tail: %q", out)
-	}
-	if n := strings.Count(out, "lang"); n != expandCap {
-		t.Errorf("l10n should render exactly expandCap=%d values, got %d", expandCap, n)
+		llvmHeader := "<b>LLVM_SLOT</b>" + messages.Count.Render(l, 3) + messages.ValueSeparator.For(l)
+		if !strings.Contains(out, llvmHeader) {
+			t.Errorf("missing uppercased llvm_slot header with count %q: %q", llvmHeader, out)
+		}
+		if !strings.Contains(out, "+21") {
+			t.Errorf("a default value must be marked +21: %q", out)
+		}
+		l10nHeader := "<b>L10N</b>" + messages.Count.Render(l, 20) + messages.ValueSeparator.For(l)
+		if !strings.Contains(out, l10nHeader) {
+			t.Errorf("missing l10n header with full count %q: %q", l10nHeader, out)
+		}
+		truncatedCount := messages.TruncatedCount.Render(l, 20)
+		if !strings.Contains(out, truncatedCount) {
+			t.Errorf("a group past expandCap must truncate with tail %q: %q", truncatedCount, out)
+		}
+		if n := strings.Count(out, "lang"); n != expandCap {
+			t.Errorf("l10n should render exactly expandCap=%d values, got %d", expandCap, n)
+		}
 	}
 }
 
@@ -47,7 +53,7 @@ func TestRenderUseIncludesExpand(t *testing.T) {
 	if !strings.Contains(out, "L10N") {
 		t.Errorf("renderUse should include the L10N use_expand group: %q", out)
 	}
-	if strings.Contains(out, "该包无 USE 标志") {
+	if strings.Contains(out, i18n.Messages.LookupPackages.Use.NoFlags.For(i18n.LangZH)) {
 		t.Error("a package with use_expand must not be reported as having no USE flags")
 	}
 }
@@ -106,61 +112,76 @@ func TestResolveUseSourcesAvailability(t *testing.T) {
 }
 
 func TestRenderUseLookupMiss(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		availability pkgLookupAvailability
-		want         string
-		notWant      string
-	}{
-		{
-			name:         "answered miss",
-			availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": true}},
-			want:         "没找到精确匹配",
-			notWant:      "暂时无法查询",
-		},
-		{
-			name:         "source unavailable",
-			availability: pkgLookupAvailability{overlays: map[string]bool{"guru": true}},
-			want:         "目前无法确认是否有精确匹配",
-			notWant:      "没找到精确匹配",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := renderUseLookupMiss(i18n.LangZH, "vim", tc.availability)
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("renderUseLookupMiss() = %q, want substring %q", got, tc.want)
-			}
-			if strings.Contains(got, tc.notWant) {
-				t.Errorf("renderUseLookupMiss() = %q, unwanted substring %q", got, tc.notWant)
-			}
-		})
+	for _, l := range i18n.Languages() {
+		for _, tc := range []struct {
+			name         string
+			availability pkgLookupAvailability
+			want         func(pkgLookupAvailability) string
+			notWant      func(pkgLookupAvailability) string
+		}{
+			{
+				name:         "answered miss",
+				availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": true}},
+				want: func(_ pkgLookupAvailability) string {
+					return i18n.Messages.LookupPackages.Use.NotFound.Render(l, "vim")
+				},
+				notWant: func(availability pkgLookupAvailability) string {
+					return i18n.Messages.LookupPackages.Use.Unavailable.Render(l, "vim", availability.unavailableSources(l))
+				},
+			},
+			{
+				name:         "source unavailable",
+				availability: pkgLookupAvailability{overlays: map[string]bool{"guru": true}},
+				want: func(availability pkgLookupAvailability) string {
+					return i18n.Messages.LookupPackages.Use.Unavailable.Render(l, "vim", availability.unavailableSources(l))
+				},
+				notWant: func(_ pkgLookupAvailability) string {
+					return i18n.Messages.LookupPackages.Use.NotFound.Render(l, "vim")
+				},
+			},
+		} {
+			t.Run(l.String()+"/"+tc.name, func(t *testing.T) {
+				got := renderUseLookupMiss(l, "vim", tc.availability)
+				want := tc.want(tc.availability)
+				if got != want {
+					t.Errorf("renderUseLookupMiss() = %q, want %q", got, want)
+				}
+				notWant := tc.notWant(tc.availability)
+				if strings.Contains(got, notWant) {
+					t.Errorf("renderUseLookupMiss() = %q, unwanted text %q", got, notWant)
+				}
+			})
+		}
 	}
 }
 
 func TestAppendUseAvailabilityNote(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		availability pkgLookupAvailability
-		wantNote     bool
-	}{
-		{
-			name:         "all answered",
-			availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": true}},
-		},
-		{
-			name:         "overlay failed",
-			availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": false}},
-			wantNote:     true,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			plain, rich := appendUseAvailabilityNote(i18n.LangZH, "plain result", "<p>rich result</p>", tc.availability)
-			for label, got := range map[string]string{"plain": plain, "rich": rich} {
-				hasNote := strings.Contains(got, "结果可能不完整")
-				if hasNote != tc.wantNote {
-					t.Errorf("%s output %q contains partial note=%v, want %v", label, got, hasNote, tc.wantNote)
+	for _, l := range i18n.Languages() {
+		for _, tc := range []struct {
+			name         string
+			availability pkgLookupAvailability
+			wantNote     bool
+		}{
+			{
+				name:         "all answered",
+				availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": true}},
+			},
+			{
+				name:         "overlay failed",
+				availability: pkgLookupAvailability{official: true, overlays: map[string]bool{"guru": false}},
+				wantNote:     true,
+			},
+		} {
+			t.Run(l.String()+"/"+tc.name, func(t *testing.T) {
+				plain, rich := appendUseAvailabilityNote(l, "plain result", "<p>rich result</p>", tc.availability)
+				note := i18n.Messages.LookupPackages.Source.PartialResults.Render(l, tc.availability.unavailableSources(l))
+				for label, got := range map[string]string{"plain": plain, "rich": rich} {
+					hasNote := strings.Contains(got, note)
+					if hasNote != tc.wantNote {
+						t.Errorf("%s output %q contains partial note=%v, want %v", label, got, hasNote, tc.wantNote)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }

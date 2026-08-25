@@ -108,11 +108,11 @@ func (s *Service) setChannelWhitelist(groupID, senderID int64, allow bool) error
 	return err
 }
 
-func channelSenderAlert(_ i18n.Lang, banned bool, title string, senderID, groupID int64) string {
+func channelSenderAlert(l i18n.Lang, banned bool, title string, senderID, groupID int64) string {
 	if banned {
-		return fmt.Sprintf("🛡 已删除消息并封禁以频道身份发言的「%s」(id %d,群 %d)。如属误封,用 /bc allow %d 解除封禁并加入白名单。", title, senderID, groupID, senderID)
+		return i18n.Messages.Moderate.Antispam.SenderBannedAlert.Render(l, title, senderID, groupID, senderID)
 	}
-	return fmt.Sprintf("🛡 已删除「%s」以频道身份发送的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", title, senderID, groupID)
+	return i18n.Messages.Moderate.Antispam.SenderBanFailedAlert.Render(l, title, senderID, groupID)
 }
 
 // FilterChannelSenders drops untrusted sender-channel posts when BotFather privacy mode is disabled.
@@ -152,7 +152,7 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 	l := s.groupLanguage(groupID)
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
 	if !s.isGroupAdmin(requestCtx, groupID, msg.From.ID) {
-		s.notify(requestCtx, groupID, "⛔ /bc 只能由群管理员使用。")
+		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Common.CommandAdminOnly.Render(l, "/bc"))
 		return nil
 	}
 
@@ -165,14 +165,14 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 			return nil
 		}
 		if enabled {
-			s.notify(requestCtx, groupID, "🛡 频道身份发言封禁:已开启(需在 BotFather 关闭 bot 隐私模式,机器人才能收到这类消息)。")
+			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.Enabled.For(l))
 		} else {
-			s.notify(requestCtx, groupID, "频道身份发言封禁:已关闭。")
+			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.Disabled.For(l))
 		}
 	case (fields[0] == "allow" || fields[0] == "deny") && len(fields) >= 2:
 		senderID, ok := parseChannelID(fields[1])
 		if !ok {
-			s.notify(requestCtx, groupID, "频道 id 不对,应为数字 —— 完整形式 -1001234567890,或不带 -100 前缀的纯数字 1234567890 都行。")
+			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.InvalidChannelID.For(l))
 			return nil
 		}
 		allow := fields[0] == "allow"
@@ -181,17 +181,17 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 			return nil
 		}
 		if !allow {
-			s.notify(requestCtx, groupID, fmt.Sprintf("已把频道 %d 移出本群白名单。", senderID))
+			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.Removed.Render(l, senderID))
 			return nil
 		}
 		if err := s.telegram.UnbanSenderChat(requestCtx, groupID, senderID); err != nil {
 			log.Printf("/bc allow: unban sender_chat %d in %d: %v", senderID, groupID, err)
-			s.notify(requestCtx, groupID, fmt.Sprintf("✅ 频道 %d 已加入本群白名单,但解封失败。请确认机器人具有「封禁用户」权限后手动解封。", senderID))
+			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.AllowedUnbanFailed.Render(l, senderID))
 			return nil
 		}
-		s.notify(requestCtx, groupID, fmt.Sprintf("✅ 频道 %d 已加入本群白名单,并在本群解封。", senderID))
+		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.Allowed.Render(l, senderID))
 	default:
-		s.notify(requestCtx, groupID, "用法:/bc 开关封禁;/bc allow <频道id> 加入本群白名单并解封;/bc deny <频道id> 移出本群白名单。")
+		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.Usage.For(l))
 	}
 	return nil
 }

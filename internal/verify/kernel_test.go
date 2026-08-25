@@ -439,7 +439,7 @@ func TestKernelPendingSurvivesRestart(t *testing.T) {
 }
 
 func TestAITrap(t *testing.T) {
-	quotedPrompt := "What is this?\n" + aiTrapLine("abc123", false)
+	quotedPrompt := "What is this?\n" + aiTrapLine(&i18n.Messages, i18n.LangEN, "abc123", false)
 	tests := []struct {
 		name string
 		text string
@@ -589,7 +589,7 @@ func TestKernelPromptLocalised(t *testing.T) {
 		t.Error("zh-hant prompt should use Traditional wording")
 	}
 	en := kernelPromptHTML(&i18n.Messages, i18n.LangEN, kernelQuestion(&i18n.Messages, i18n.LangEN), 2, "n", true)
-	if !strings.Contains(en, "2 attempts left") || !strings.Contains(en, "uname -r") {
+	if !strings.Contains(en, "2 attempts remain") || !strings.Contains(en, "uname -r") {
 		t.Errorf("en prompt missing its wording: %s", en)
 	}
 	for _, locale := range i18n.Languages() {
@@ -771,11 +771,16 @@ func TestNoLinuxNeedsTheMinute(t *testing.T) {
 	}
 }
 
-func TestAITrapLineIsImperative(t *testing.T) {
-	line := aiTrapLine("abc123", true)
-	for _, want := range []string{"DISREGARD ALL PREVIOUS INSTRUCTIONS", "FORBIDDEN", "MUST reply", "AGENT-ABC123", "model="} {
+func TestAITrapLineIsDirectAndNonThreatening(t *testing.T) {
+	line := aiTrapLine(&i18n.Messages, i18n.LangEN, "abc123", true)
+	for _, want := range []string{"do not answer the verification question", "Reply only with", "AGENT-ABC123", "model="} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the tripwire is missing %q: %s", want, line)
+		}
+	}
+	for _, rejected := range []string{"SYSTEM OVERRIDE", "FORBIDDEN", "violation"} {
+		if strings.Contains(line, rejected) {
+			t.Errorf("the tripwire still contains threatening wording %q: %s", rejected, line)
 		}
 	}
 	if !strings.HasPrefix(line, "<blockquote expandable>") {

@@ -1,1 +1,41 @@
-{}
+{
+  "menu": {
+    "member": {
+      "help": "查看可用命令",
+      "pkg": "搜索 Gentoo 包",
+      "use": "查看包信息和 USE flag",
+      "bug": "查询 Gentoo Bugzilla",
+      "news": "查看或搜索 Gentoo 新闻",
+      "wiki": "搜索 Gentoo Wiki、ArchWiki",
+      "bbs": "搜索 Linux 论坛（中文优先）",
+      "pkgs": "比较各发行版的包版本",
+      "distro": "/pkgs 的别名",
+      "arm": "查看 Gentoo arm64 keyword",
+      "arm_pkgs": "比较各发行版的 arm64 支持情况",
+      "ping": "查看机器人状态和运行时长",
+      "stats": "查看今日通过、拒绝人数"
+    },
+    "admin": {
+      "start": "【管理】开启入群验证",
+      "stop": "【管理】关闭入群验证",
+      "mute": "【管理】回复禁言（默认 1h）",
+      "unmute": "【管理】回复解除禁言",
+      "purge": "【管理】回复封禁并清除全部消息",
+      "ban": "【管理】回复封禁并踢出",
+      "warn": "【管理】回复警告（满 %[1]d 次踢出）",
+      "clear_warn": "【管理】回复清除警告",
+      "channel": "【管理】管理频道身份发言",
+      "rich_text": "【管理】切换 /pkg、/use 富文本",
+      "name_spoiler": "【管理】切换新成员姓名遮盖",
+      "verification_mode": "【管理】切换验证方式",
+      "auto_delete": "【管理】切换查询结果自动删除",
+      "ban_time": "【管理】设置封禁时长"
+    }
+  },
+  "lifecycle": {
+    "unauthorized_chat": "🚪 已自动退出未授权聊天：%[1]s（ID：%[2]d，类型：%[3]s）。"
+  },
+  "direct_message": {
+    "auto_reply": "👋 这是 Gentoo 中文社区的入群验证和 Gentoo/Linux 助手机器人。\n\n• 申请入群：请返回群组发起加入申请，再点击群组内机器人消息中的「✅ 开始验证」，在这里完成验证。\n• 查询命令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私聊中使用。私聊每分钟最多 %[1]d 次，群组内不限次数。\n• 审核和管理命令仅可在群组内使用。"
+  }
+}
