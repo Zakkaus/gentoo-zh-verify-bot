@@ -193,7 +193,7 @@ func (v *Service) OnBug(ctx *th.Context, update telego.Update) error {
 
 // NewsItem is one parsed Gentoo news index entry.
 type NewsItem struct {
-	// Date is the publication date encoded in the news URL.
+	// Date is the publication date shown by the news index.
 	Date string
 	// Title is the upstream news title.
 	Title string
@@ -215,8 +215,12 @@ func configureNews(cfg *config.Config) {
 	}
 }
 
-// Gentoo news links encode the publication date in their path.
-var newsRe = regexp.MustCompile(`href="(/support/news-items/(\d{4}-\d{2}-\d{2})-[^"]+\.html)"[^>]*>([^<]+)<`)
+var (
+	// The index date is authoritative: a few historical URL slugs encode a different date.
+	newsRowRe = regexp.MustCompile(`(?s)<tr>\s*<td>\s*(\d{4}-\d{2}-\d{2})\s*</td>\s*<td>\s*<a href="(/support/news-items/\d{4}-\d{2}-\d{2}-[^"]+\.html)"[^>]*>([^<]+)</a>`)
+	// Keep configurable simple link indexes working when they do not provide table dates.
+	newsRe = regexp.MustCompile(`href="(/support/news-items/(\d{4}-\d{2}-\d{2})-[^"]+\.html)"[^>]*>([^<]+)<`)
+)
 
 var newsC = struct {
 	mu      sync.Mutex
@@ -242,13 +246,20 @@ func FetchNews(c context.Context) ([]NewsItem, error) {
 func parseNews(body []byte) []NewsItem {
 	seen := map[string]bool{}
 	var items []NewsItem
-	for _, m := range newsRe.FindAllStringSubmatch(string(body), -1) {
-		path, date, title := m[1], m[2], strings.TrimSpace(m[3])
+	add := func(path, date, title string) {
+		title = strings.TrimSpace(title)
 		if seen[path] || title == "" {
-			continue
+			return
 		}
 		seen[path] = true
 		items = append(items, NewsItem{Date: date, Title: title, URL: newsBase + path})
+	}
+	text := string(body)
+	for _, m := range newsRowRe.FindAllStringSubmatch(text, -1) {
+		add(m[2], m[1], m[3])
+	}
+	for _, m := range newsRe.FindAllStringSubmatch(text, -1) {
+		add(m[1], m[2], m[3])
 	}
 	return items
 }

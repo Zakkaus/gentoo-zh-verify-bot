@@ -49,6 +49,13 @@ All notable changes to this project are documented here. The format is based on
   govulncheck v1.7.0, and gosec v2.28.0.
 
 ### Fixed
+- **External lookups now follow captured upstream contracts.** Package searches reject unrelated
+  single-result redirects; Gentoo masks suppress stable and arm64 availability; Bugzilla feeds
+  request the base user fields required for detail objects; Gentoo news uses the index date;
+  Debian arm64 results skip testing and unstable suites; Fedora arm64 results reject x86_64-only
+  metadata; and Arch Linux ARM checks no longer reject valid pages for exceeding 1 KiB. Offline
+  fixtures now cover these sources plus Repology, MediaWiki, release CSVs, Madison, AUR, GitHub
+  trees, and Arch Linux CN search responses.
 - **Runtime-registered groups now activate without a service restart.** Verification, lookup
   authorization, pending restoration, panel command guards, control-group policy, locale selection,
   and command menus read the live settings owner. Registration completion now directs the

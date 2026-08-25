@@ -224,6 +224,14 @@ func debianTesting(label string) bool {
 	return relInfo.debian[label] == "testing"
 }
 
+// Known unreleased Debian suites, including sid, are development channels.
+func debianDevSuite(series string) bool {
+	relInfo.mu.Lock()
+	defer relInfo.mu.Unlock()
+	released, known := relInfo.debianSer[strings.ToLower(series)]
+	return known && !released
+}
+
 // releaseLabel removes the family prefix; exact rolling repos have no label.
 func releaseLabel(repo string, prefixes []string) string {
 	s := repo
@@ -241,7 +249,7 @@ func releaseLabel(repo string, prefixes []string) string {
 	return strings.ReplaceAll(s, "_", ".")
 }
 
-// A Repology 404 may fall back to search; other failures remain unavailable.
+// A Repology 404 or empty direct result may fall back to search; other failures remain unavailable.
 func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repologyPkg, alts []string, exact, available bool) {
 	return fetchRepologyWith(ctx, name, func(ctx context.Context, url string, dst any) error {
 		return GetJSON(ctx, url, nil, dst)
@@ -540,9 +548,17 @@ func fedoraArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
 	return fedoraArmStatusWith(ctx, l, pkg, func(ctx context.Context, url string) (string, error) {
 		var r struct {
 			Version string `json:"version"`
+			Arch    string `json:"arch"`
 		}
-		err := GetJSON(ctx, url, nil, &r)
-		return r.Version, err
+		if err := GetJSON(ctx, url, nil, &r); err != nil {
+			return "", err
+		}
+		// mdapi currently serves x86_64 metadata for this route. Only an
+		// aarch64 or architecture-independent record can prove arm64 support.
+		if r.Arch != "aarch64" && r.Arch != "noarch" {
+			return "", fmt.Errorf("Fedora mdapi returned architecture %q", r.Arch)
+		}
+		return r.Version, nil
 	})
 }
 
@@ -600,7 +616,11 @@ func (v *Service) aurArmStatus(ctx context.Context, l i18n.Lang, pkg string) str
 
 // Only an Arch Linux ARM 404 proves absence.
 func alarmArmStatus(ctx context.Context, l i18n.Lang, pkg string) string {
-	if _, err := httpGetBody(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), 1<<10); err != nil {
+	resp, err := httpGet(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), nil)
+	if err == nil {
+		err = resp.Body.Close()
+	}
+	if err != nil {
 		if httpStatusCode(err) == 404 {
 			return i18n.Messages.LookupDistros.Armpkgs.NotPackaged.For(l)
 		}
@@ -628,7 +648,7 @@ func (v *Service) OnArmpkgs(ctx *th.Context, update telego.Update) error {
 	}
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
-	ensureReleaseInfo(hc, time.Now()) // load Ubuntu series status so an unreleased dev suite is flagged
+	ensureReleaseInfo(hc, time.Now()) // load Debian and Ubuntu series status so development suites are skipped
 	pe := neturl.PathEscape(name)
 
 	sources := []struct {
@@ -637,7 +657,7 @@ func (v *Service) OnArmpkgs(ctx *th.Context, update telego.Update) error {
 	}{
 		{"Gentoo", func() (string, string) { return v.gentooArmStatus(hc, l, name) }},
 		{"Debian", func() (string, string) {
-			return madisonArmStatus(hc, l, "https://qa.debian.org/madison.php?package=", name, nil), "https://tracker.debian.org/pkg/" + pe
+			return madisonArmStatus(hc, l, "https://qa.debian.org/madison.php?package=", name, debianDevSuite), "https://tracker.debian.org/pkg/" + pe
 		}},
 		{"Ubuntu", func() (string, string) {
 			return madisonArmStatus(hc, l, "https://people.canonical.com/~ubuntu-archive/madison.cgi?package=", name, ubuntuDevSuite), "https://launchpad.net/ubuntu/+source/" + pe
@@ -693,6 +713,7 @@ var (
 var relInfo = struct {
 	mu         sync.Mutex
 	debian     map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
+	debianSer  map[string]bool   // Debian series codename ("trixie") -> already released?
 	ubuntu     map[string]bool   // Ubuntu version ("24.04") -> is it an LTS?
 	ubuntuRel  map[string]bool   // Ubuntu version ("24.04") -> already released (date in the past)?
 	ubuntuEOL  map[string]bool   // Ubuntu version ("18.04") -> past the standard-support end date?
@@ -723,10 +744,10 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	ubu, ubuRel, ubuEOL, ubuSer := fetchUbuntuFn(ctx, now)
 
 	// Empty HTTP-200 parses indicate upstream errors or schema drift; never replace good data.
-	debOK, ubuOK := len(deb) > 0, len(ubu) > 0
+	debOK, ubuOK := len(deb.roles) > 0, len(ubu) > 0
 	relInfo.mu.Lock()
 	if debOK {
-		relInfo.debian = deb
+		relInfo.debian, relInfo.debianSer = deb.roles, deb.series
 	}
 	if ubuOK {
 		relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = ubu, ubuRel, ubuEOL, ubuSer
@@ -758,24 +779,33 @@ func parseDistroInfo(body string) (rows [][]string) {
 	return rows
 }
 
-func fetchDebianStatus(ctx context.Context, now time.Time) map[string]string {
-	body, err := httpGetBody(ctx, "https://debian.pages.debian.net/distro-info-data/debian.csv", 1<<20)
-	if err != nil {
-		return nil
-	}
-	return deriveDebianStatus(string(body), now)
+type debianReleaseData struct {
+	roles  map[string]string
+	series map[string]bool
 }
 
-// Derive stable generations and the next testing release from dates.
+func fetchDebianStatus(ctx context.Context, now time.Time) debianReleaseData {
+	body, err := httpGetBody(ctx, "https://debian.pages.debian.net/distro-info-data/debian.csv", 1<<20)
+	if err != nil {
+		return debianReleaseData{}
+	}
+	return deriveDebianReleaseData(string(body), now)
+}
+
 func deriveDebianStatus(body string, now time.Time) map[string]string {
+	return deriveDebianReleaseData(body, now).roles
+}
+
+// Derive stable generations, the next testing release, and suite release state from dates.
+func deriveDebianReleaseData(body string, now time.Time) debianReleaseData {
 	type rel struct {
 		ver      string
 		released bool
 	}
 	var rels []rel
+	series := map[string]bool{}
 	for _, c := range parseDistroInfo(body) {
-		// Testing rows may omit the release column; versionless rows are sid/experimental.
-		if len(c) < 4 || c[0] == "" { // skip sid/experimental (no version) and malformed rows
+		if len(c) < 4 {
 			continue
 		}
 		released := false
@@ -784,25 +814,33 @@ func deriveDebianStatus(body string, now time.Time) map[string]string {
 				released = true
 			}
 		}
+		if name := strings.ToLower(strings.TrimSpace(c[2])); name != "" {
+			series[name] = released
+		}
+		if c[0] == "" {
+			continue // sid/experimental have no numbered release role
+		}
 		rels = append(rels, rel{c[0], released})
 	}
-	out := map[string]string{}
+	roles := map[string]string{}
 	// Released versions, newest first: stable, oldstable, oldoldstable.
-	var rel0 []string
+	var releasedVersions []string
 	for _, r := range rels {
 		if r.released {
-			rel0 = append(rel0, r.ver)
+			releasedVersions = append(releasedVersions, r.ver)
 		}
 	}
-	sort.Slice(rel0, func(i, j int) bool { return verLess(rel0[j], rel0[i]) }) // desc
-	for i, st := range []string{"stable", "oldstable", "oldoldstable"} {
-		if i < len(rel0) {
-			out[rel0[i]] = st
+	sort.Slice(releasedVersions, func(i, j int) bool {
+		return verLess(releasedVersions[j], releasedVersions[i])
+	})
+	for i, status := range []string{"stable", "oldstable", "oldoldstable"} {
+		if i < len(releasedVersions) {
+			roles[releasedVersions[i]] = status
 		}
 	}
 	// The lowest not-yet-released version above stable is "testing".
-	if len(rel0) > 0 {
-		stable := rel0[0]
+	if len(releasedVersions) > 0 {
+		stable := releasedVersions[0]
 		testing := ""
 		for _, r := range rels {
 			if !r.released && verLess(stable, r.ver) && (testing == "" || verLess(r.ver, testing)) {
@@ -810,10 +848,10 @@ func deriveDebianStatus(body string, now time.Time) map[string]string {
 			}
 		}
 		if testing != "" {
-			out[testing] = "testing"
+			roles[testing] = "testing"
 		}
 	}
-	return out
+	return debianReleaseData{roles: roles, series: series}
 }
 
 // Ubuntu maps track LTS, release, standard-support end, and codename release state.

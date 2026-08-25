@@ -11,18 +11,19 @@ import (
 func TestEnsureReleaseInfoEmptyDoesNotOverwrite(t *testing.T) {
 	relInfo.mu.Lock()
 	relInfo.debian = map[string]string{"13": "stable"}
+	relInfo.debianSer = map[string]bool{"trixie": true}
 	relInfo.ubuntu = map[string]bool{"24.04": true}
 	relInfo.fetched, relInfo.refreshing = time.Time{}, false // stale => ensureReleaseInfo will refetch
 	relInfo.mu.Unlock()
 	t.Cleanup(func() {
 		relInfo.mu.Lock()
-		relInfo.debian, relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = nil, nil, nil, nil, nil
+		relInfo.debian, relInfo.debianSer, relInfo.ubuntu, relInfo.ubuntuRel, relInfo.ubuntuEOL, relInfo.ubuntuSer = nil, nil, nil, nil, nil, nil
 		relInfo.fetched, relInfo.refreshing = time.Time{}, false
 		relInfo.mu.Unlock()
 	})
 
 	od, ou := fetchDebianStatusFn, fetchUbuntuFn
-	fetchDebianStatusFn = func(context.Context, time.Time) map[string]string { return map[string]string{} }
+	fetchDebianStatusFn = func(context.Context, time.Time) debianReleaseData { return debianReleaseData{} }
 	fetchUbuntuFn = func(context.Context, time.Time) (map[string]bool, map[string]bool, map[string]bool, map[string]bool) {
 		return map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	}
@@ -33,7 +34,7 @@ func TestEnsureReleaseInfoEmptyDoesNotOverwrite(t *testing.T) {
 
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
-	if relInfo.debian["13"] != "stable" || !relInfo.ubuntu["24.04"] {
+	if relInfo.debian["13"] != "stable" || !relInfo.debianSer["trixie"] || !relInfo.ubuntu["24.04"] {
 		t.Error("an empty (malformed-200) fetch must NOT overwrite previously-good cached release data")
 	}
 	if relInfo.fetched.Equal(now) {
@@ -55,6 +56,10 @@ func TestDeriveDebianStatus(t *testing.T) {
 		if got[ver] != want {
 			t.Errorf("now=2026: status[%s] = %q, want %q", ver, got[ver], want)
 		}
+	}
+	series := deriveDebianReleaseData(csv, now).series
+	if !series["trixie"] || series["forky"] || series["sid"] {
+		t.Errorf("now=2026: Debian series release state = %v", series)
 	}
 
 	// After Forky releases (its row now carries a release date), stable becomes 14 with no

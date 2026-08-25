@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en-US" dir="ltr">
+  <head>
+  <meta charset="utf-8">
+  <title>::gentoo news items – Gentoo Linux</title>
+  
+  <meta name="theme-color" content="#54487a">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta property="og:title" content="::gentoo news items – Gentoo Linux">
+  <meta property="og:image" content="https://www.gentoo.org/assets/img/og-image.jpg">
+  <meta property="og:description" content="News and information from Gentoo Linux">
+  <meta name="twitter:image" content="https://www.gentoo.org/assets/img/logo/gentoo-g.png">
+  <link rel="apple-touch-icon" href="https://www.gentoo.org/assets/img/logo/icon-192.png">
+  <link rel="icon" sizes="192x192" href="https://www.gentoo.org/assets/img/logo/icon-192.png">
+  <link href="https://assets.gentoo.org/tyrian/v1/bootstrap.min.css" rel="stylesheet" media="screen">
+  <link href="https://assets.gentoo.org/tyrian/v1/tyrian.min.css" rel="stylesheet" media="screen">
+  <link href="/assets/css/screen.css" rel="stylesheet" media="screen">
+  
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="search" type="application/opensearchdescription+xml" href="https://www.gentoo.org/search/www-gentoo-org.xml" title="Gentoo Website">
+  <link rel="search" type="application/opensearchdescription+xml" href="https://www.gentoo.org/search/forums-gentoo-org.xml" title="Gentoo Forums">
+  <link rel="search" type="application/opensearchdescription+xml" href="https://www.gentoo.org/search/bugs-gentoo-org.xml" title="Gentoo Bugzilla">
+  <link rel="search" type="application/opensearchdescription+xml" href="https://www.gentoo.org/search/packages-gentoo-org.xml" title="Gentoo Packages">
+  <link rel="search" type="application/opensearchdescription+xml" href="https://www.gentoo.org/search/archives-gentoo-org.xml" title="Gentoo List Archives">
+  
+</head>
+
+  <body class="">
+    <header>
+  <div class="site-title">
+    <div class="container">
+      <div class="row">
+        <div class="site-title-buttons">
+          <div class="btn-group btn-group-sm">
+            <a href="https://get.gentoo.org/" role="button" class="btn get-gentoo"><span class="fa fa-fw fa-download"></span> <strong>Get Gentoo!</strong></a>
+            <div class="btn-group btn-group-sm">
+              <a class="btn gentoo-org-sites dropdown-toggle" data-toggle="dropdown" data-target="#" href="#">
+                <span class="fa fa-fw fa-map-o"></span> <span class="hidden-xs">gentoo.org sites</span> <span class="caret"></span>
+              </a>
+              <ul class="dropdown-menu dropdown-menu-right">
+                <li><a href="https://www.gentoo.org/" title="Gentoo's main website"><span class="fa fa-home fa-fw"></span> gentoo.org</a></li>
+                <li><a href="https://wiki.gentoo.org/" title="Find and contribute documentation"><span class="fa fa-file-text-o fa-fw"></span> Wiki</a></li>
+                <li><a href="https://bugs.gentoo.org/" title="Discover and report issues with Gentoo"><span class="fa fa-bug fa-fw"></span> Bugs</a></li>
+                <li><a href="https://packages.gentoo.org/" title="Find software to install"><span class="fa fa-hdd-o fa-fw"></span> Packages</a></li>
+                <li><a href="https://forums.gentoo.org/" title="Discuss with the community"><span class="fa fa-comments-o fa-fw"></span> Forums</a></li>
+                <li class="divider"></li>
+                <li><a href="https://planet.gentoo.org/" title="Find out what's going on in the dev community"><span class="fa fa-rss fa-fw"></span> Planet</a></li>
+                <li><a href="https://archives.gentoo.org/" title="Read up on past discussions"><span class="fa fa-archive fa-fw"></span> Archives</a></li>
+                <li><a href="https://devmanual.gentoo.org/" title="Read the development guide"><span class="fa fa-book fa-fw"></span> Devmanual</a></li>
+                <li><a href="https://gitweb.gentoo.org/" title="Browse our source code in Gitweb"><span class="fa fa-code fa-fw"></span> Gitweb</a></li>
+                <li class="divider"></li>
+                <li><a href="https://infra-status.gentoo.org/" title="Get updates on the services provided by the Gentoo infra team"><span class="fa fa-server fa-fw"></span> Infra status</a></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <div class="logo">
+          <a href="/" title="Back to the homepage" class="site-logo">
+            <img src="https://assets.gentoo.org/tyrian/v1/site-logo.png" alt="Gentoo Linux logo" srcset="https://assets.gentoo.org/tyrian/v1/site-logo.svg">
+          </a>
+          
+        </div>
+      </div>
+    </div>
+  </div>
+  <nav class="tyrian-navbar" role="navigation">
+    <div class="container">
+      <div class="row">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-main-collapse">
+            <span class="sr-only">Toggle navigation</span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+          </button>
+        </div>
+        <div class="collapse navbar-collapse navbar-main-collapse">
+          <ul class="nav navbar-nav">
+            <li class=""><a href="/">Home</a></li>
+<li class=""><a href="/get-started/">Get started</a></li>
+<li class=""><a href="/downloads/">Downloads</a></li>
+<li class=""><a href="/inside-gentoo/">Inside Gentoo</a></li>
+<li class="active"><a href="/support/">Support</a></li>
+<li class=""><a href="/get-involved/">Get involved</a></li>
+
+          </ul>
+          <ul class="nav navbar-nav navbar-right">
+            <li class=""><a href="/donate/"><span class="fa fa-heart" style="color:#d9534f;"></span> Donate</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </nav>
+  
+  <nav class="navbar navbar-grey navbar-stick" role="navigation">
+    <div class="container">
+      <div class="row">
+        <div class="navbar-header">
+          <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-secondary-collapse">
+              <span class="sr-only">Toggle secondary navigation</span>
+              <span class="icon-bar"></span>
+              <span class="icon-bar"></span>
+              <span class="icon-bar"></span>
+          </button>
+        </div>
+        <div class="collapse navbar-collapse navbar-secondary-collapse">
+          <ul class="nav navbar-nav">
+            <li class=""><a href="/support/consulting/">Consulting</a></li>
+<li class=""><a href="/support/documentation/">Documentation</a></li>
+<li class=""><a href="https://packages.gentoo.org/">Package database <span class="fa fa-fw fa-external-link-square external-link" title="This link will leave www.gentoo.org."></span></a></li>
+<li class="active"><a href="/support/news-items/">Repository news items</a></li>
+<li class=""><a href="/support/security/">Security</a></li>
+<li class=""><a href="/support/use-flags/">USE flags</a></li>
+<li class=""><a href="/support/rsync-mirrors/">rsync mirrors</a></li>
+
+          </ul>
+        </div>
+      </div>
+    </div>
+  </nav>
+  
+</header>
+
+
+    <div class="container">
+      <div class="row">
+        <div id="content" class="col-md-12">
+          <h1 class="first-header">::gentoo news items</h1>
+
+<p class="lead">
+  Important news regarding packages available via Gentoo's <a href="https://gitweb.gentoo.org/repo/gentoo.git">main ebuild repository</a> are published via <em>news items</em>. They can be found below.
+</p>
+
+<div class="alert alert-info">
+  <strong>Which items affect me?</strong>
+  <p>
+  This page lists <strong>all</strong> available news items for the main Gentoo ebuild repository (::gentoo); sometimes items do not affect a system because the relevant package is not installed or the news item only affects certain architecture(s).
+  <br>
+  The <kbd>emerge</kbd> command provides notifications after each operation if there are news items affecting the system configuration:
+  </p>
+  <p>
+  <pre>
+  * IMPORTANT: 2 news items need reading for repository 'gentoo'.
+  * Use eselect news to read news items.</pre>
+  </p>
+  Use <kbd>eselect news read new</kbd> to read the pending items and mark them as read.
+</div>
+
+<p>
+  For more information on the "Critical News" publication system, please see <a href="https://www.gentoo.org/glep/glep-0042.html">GLEP 42</a>.
+</p>
+
+<h2>Published news items</h2>
+
+<table class="table table-condensed table-striped">
+  <tr>
+    <th>Date</th>
+    <th>Title</th>
+  </tr>
+  
+    <tr>
+      <td>2026-06-28</td>
+      <td><a href="/support/news-items/2026-06-28-removal-32bit-s390.html">32-bit s390 support dropped</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-05-23</td>
+      <td><a href="/support/news-items/2026-05-23-kdepim-sql-backend-change.html">KDE PIM 26.04.1 default backend changes to sqlite</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-05-08</td>
+      <td><a href="/support/news-items/2026-05-08-dracut-hostonly-cmdline.html">Dracut changed default for hostonly_cmdline setting</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-05-03</td>
+      <td><a href="/support/news-items/2026-05-03-portage-binpkg-changes.html">Portage binpkg changes</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-04-26</td>
+      <td><a href="/support/news-items/2026-04-26-selinux-policy-eapi-8.html">SELinux Policy EAPI 8 Migration</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-04-16</td>
+      <td><a href="/support/news-items/2026-04-16-python3-14.html">Python 3.14 to become the default on 2026-06-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-03-31</td>
+      <td><a href="/support/news-items/2026-03-31-varnish-renamed.html">Varnish Renamed</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-03-15</td>
+      <td><a href="/support/news-items/2026-03-15-chromium-slotting.html">www-client/chromium slotted installation</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-03-15</td>
+      <td><a href="/support/news-items/2026-03-15-postfix-database-change.html">mail-mta/postfix-3.11.0: Default database change</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-02-11</td>
+      <td><a href="/support/news-items/2026-02-11-sssd-2_12-keywording.html">sssd to run as a dedicated user</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-01-15</td>
+      <td><a href="/support/news-items/2026-01-15-desktop-profile-pipewire.html">Desktop Profile to enable PipeWire support</a></td>
+    </tr>
+  
+    <tr>
+      <td>2026-01-08</td>
+      <td><a href="/support/news-items/2026-01-08-dovecot-2_4-stabilization.html">net-mail/dovecot-2.4.2 stabilization</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-11-30</td>
+      <td><a href="/support/news-items/2025-11-30-flexiblas-migration.html">FlexiBLAS migration imminent</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-11-01</td>
+      <td><a href="/support/news-items/2025-11-01-portage-git-sync-verify.html">Portage to verify git-synced ::gentoo per default</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-10-14</td>
+      <td><a href="/support/news-items/2025-10-14-zfs-merge.html">OpenZFS packages merged</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-10-07</td>
+      <td><a href="/support/news-items/2025-10-07-cache-enabled-mirrors-removal.html">Cache-enabled sync mirrors only for official repos</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-09-24</td>
+      <td><a href="/support/news-items/2025-10-23-tsm-init-changes.html">app-backup/tsm changes to scheduled backups</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-09-16</td>
+      <td><a href="/support/news-items/2025-09-16-encfs-is-unmaintained.html">encfs is unmaintained</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-09-04</td>
+      <td><a href="/support/news-items/2025-09-04-openrc-user-services.html">sys-apps/openrc user services introduction</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-09-01</td>
+      <td><a href="/support/news-items/2025-09-01-stable-sparc-keywords-removed.html">Stable sparc keywords removed</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-09-01</td>
+      <td><a href="/support/news-items/2025-09-01-stable-hppa-keywords-removed.html">Stable hppa keywords removed</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-07-05</td>
+      <td><a href="/support/news-items/2025-07-05-nginx-packaging-changes.html">Breaking changes in nginx packaging in Gentoo</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-05-24</td>
+      <td><a href="/support/news-items/2025-05-24-nftables-service.html">nftables systemd service change</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-05-23</td>
+      <td><a href="/support/news-items/2025-05-23-dovecot-2_4-upgrade.html">net-mail/dovecot-2.4.x may break on upgrade</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-04-14</td>
+      <td><a href="/support/news-items/2025-04-14-s390x-baseline-z10.html">Gentoo raises s390x baseline to z10</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-03-26</td>
+      <td><a href="/support/news-items/2025-03-26-selinux-policy-types.html">SELinux default POLICY_TYPES update</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-03-24</td>
+      <td><a href="/support/news-items/2025-03-24-python3-13.html">Python 3.13 to become the default on 2025-05-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-03-14</td>
+      <td><a href="/support/news-items/2025-03-14-certbot-rework.html">Certbot rework and transition</a></td>
+    </tr>
+  
+    <tr>
+      <td>2025-02-03</td>
+      <td><a href="/support/news-items/2025-02-03-dracut-hostonly.html">Dracut changed default for hostonly setting</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-09-29</td>
+      <td><a href="/support/news-items/2024-09-29-haskell-destabilization.html">Haskell destabilization</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-08-31</td>
+      <td><a href="/support/news-items/2024-08-31-kde-plasma6-gear-24-05-stable.html">KDE Plasma 6.1.4 and Gear 24.05.2 Upgrade</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-08-09</td>
+      <td><a href="/support/news-items/2024-08-09-dracut-crypt.html">dracut module config changes</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-08-07</td>
+      <td><a href="/support/news-items/2024-08-07-removal-ia64.html">Gentoo drops IA-64 support</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-06-05</td>
+      <td><a href="/support/news-items/2024-06-08-texlive-2023-bump.html">Upgrading to TeX Live 2023</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-05-17</td>
+      <td><a href="/support/news-items/2024-05-17-dracut-ext-kmods.html">Changes to dracut kernel module/microcode handling</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-05-09</td>
+      <td><a href="/support/news-items/2024-05-09-python3-12.html">Python 3.12 to become the default on 2024-06-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-05-07</td>
+      <td><a href="/support/news-items/2024-05-07-perl-features-use-expand.html">dev-lang/perl useflags become a PERL_FEATURES use-expand</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-05-06</td>
+      <td><a href="/support/news-items/2024-05-06-wireplumber-0_5-bump.html">media-video/wireplumber-0.5.2 may break on upgrade</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-03-22</td>
+      <td><a href="/support/news-items/2024-03-22-new-23-profiles.html">Profile upgrade to version 23.0 available</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-02-26</td>
+      <td><a href="/support/news-items/2024-03-12-debianutils-installkernel.html">installkernel is no longer implicitly installed</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-02-01</td>
+      <td><a href="/support/news-items/2024-02-01-grub-upgrades.html">GRUB upgrades</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-01-30</td>
+      <td><a href="/support/news-items/2024-02-01-installkernel-new-use-systemd-boot.html">installkernel new USE flag systemd-boot</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-01-18</td>
+      <td><a href="/support/news-items/2024-01-18-installkernel-merge.html">Merging of installkernel-gentoo and installkernel-systemd</a></td>
+    </tr>
+  
+    <tr>
+      <td>2024-01-05</td>
+      <td><a href="/support/news-items/2024-01-05-usr-initramfs.html">Separate /usr now requires an initramfs</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-12-28</td>
+      <td><a href="/support/news-items/2023-12-28-lxd-to-lose-access-for-its-image-server.html">LXD to lose access for its image server</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-11-20</td>
+      <td><a href="/support/news-items/2023-12-17-cups-filters.html">CUPS no longer directly depends on its filters</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-05-21</td>
+      <td><a href="/support/news-items/2023-05-20-kde-pipewire-wayland.html">Plasma Profile to enable PipeWire, Wayland support</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-05-11</td>
+      <td><a href="/support/news-items/2023-05-11-openssh.html">OpenSSH directory configuration changes</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-04-02</td>
+      <td><a href="/support/news-items/2023-04-02-python3-11.html">Python 3.11 to become the default on 2023-05-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-01-28</td>
+      <td><a href="/support/news-items/2023-01-28-rap-prefix-sysroot.html">Breaking changes to the RAP Prefix toolchain</a></td>
+    </tr>
+  
+    <tr>
+      <td>2023-01-01</td>
+      <td><a href="/support/news-items/2023-01-01-hardening-fortify-assertions.html">Hardened profiles improvements</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-12-27</td>
+      <td><a href="/support/news-items/2022-12-27-alternatives-introduction.html">Introduction of app-alternatives ebuilds</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-12-01</td>
+      <td><a href="/support/news-items/2022-12-01-systemd-usrmerge.html">/usr merge for systemd users</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-11-21</td>
+      <td><a href="/support/news-items/2022-11-21-tmpfiles-clean.html">systemd-tmpfiles --clean enabled by default</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-11-19</td>
+      <td><a href="/support/news-items/2022-11-19-lvm2-default-USE-flags.html">LVM2 default USE flag change</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-07-29</td>
+      <td><a href="/support/news-items/2022-07-29-pipewire-sound-server.html">PipeWire sound server migration</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-06-26</td>
+      <td><a href="/support/news-items/2022-06-26-mu-corruption.html">Mu 1.7.23 Causing Maildir Corruption</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-06-13</td>
+      <td><a href="/support/news-items/2022-06-13-python3-10.html">Python 3.10 to become the default on 2022-07-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-05-23</td>
+      <td><a href="/support/news-items/2022-05-23-borgmatic-config-changes.html">Breaking configuration changes in borgmatic-1.6.0</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-05-20</td>
+      <td><a href="/support/news-items/2022-05-26-apache-nginx-glep-81.html">Migration to GLEP-81 enabled webservers</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-04-19</td>
+      <td><a href="/support/news-items/2022-04-19-systemd-utils.html">Migration to sys-apps/systemd-utils</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-04-17</td>
+      <td><a href="/support/news-items/2022-04-17-systemd-utils-update-needed.html">sys-apps/systemd-utils update needed</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-04-12</td>
+      <td><a href="/support/news-items/2022-04-12-ccache-4_6-sandbox.html">Sandbox issue with ccache 4.6</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-03-30</td>
+      <td><a href="/support/news-items/2022-03-30-qt-5_15_3-bump.html">Qt 5.15.3 version bump with binary path changes</a></td>
+    </tr>
+  
+    <tr>
+      <td>2022-03-05</td>
+      <td><a href="/support/news-items/2022-03-05-singularity_to_apptainer.html">Transition from sys-cluster/singularity to app-containers/apptainer</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-11-23</td>
+      <td><a href="/support/news-items/2021-11-23-mariadb-database-restore-maybe-required.html">Full MariaDB database restore maybe required</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-10-30</td>
+      <td><a href="/support/news-items/2021-10-30-upgrade-to-net-news_rssguard-4_0.html">net-news/rssguard-4.0 upgrade</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-10-24</td>
+      <td><a href="/support/news-items/2021-10-24-netifrc-dhcp-client.html">netifrc DHCP client</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-10-18</td>
+      <td><a href="/support/news-items/2021-10-18-libxcrypt-migration-stable.html">migrating from glibc[crypt] to libxcrypt in stable</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-10-17</td>
+      <td><a href="/support/news-items/2021-10-17-openssl-bindist-removal.html">dev-libs/openssl USE=bindist removal</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-10-08</td>
+      <td><a href="/support/news-items/2021-10-08-openssh-rsa-sha1.html">OpenSSH RSA SHA-1 signatures</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-09-29</td>
+      <td><a href="/support/news-items/2021-09-29-possible-failure-to-preserve-libraries.html">Possible failure to preserve libraries</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-09-24</td>
+      <td><a href="/support/news-items/2021-09-24-busybox-removal-from-system-set.html">busybox removal from system set</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-09-05</td>
+      <td><a href="/support/news-items/2021-09-05-setuptools_scm-6_3_0-temporary-breakage.html">setuptools_scm-6.3.0 temporary runtime breakage</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-08-24</td>
+      <td><a href="/support/news-items/2021-08-24-eudev-retirement.html">eudev retirement on 2022-01-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-08-19</td>
+      <td><a href="/support/news-items/2021-08-19-mc-legacy-config-dirs.html">&gt;=app-misc/mc-4.8.27 to drop support for ~/.mc</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-08-18</td>
+      <td><a href="/support/news-items/2021-08-18-uclibc-ng-retirement.html">uClibc-ng retirement on 2022-01-01</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-08-11</td>
+      <td><a href="/support/news-items/2021-08-11-oauth2-creds-chromium.html">OAuth2 Credentials Removed from Chromium</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-08-01</td>
+      <td><a href="/support/news-items/2021-08-01-tcpd-disabled.html">USE=tcpd no longer globally enabled</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-07-20</td>
+      <td><a href="/support/news-items/2021-07-20-perl-5_34-upgrade.html">Perl 5.34 upgrade now stable</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-07-17</td>
+      <td><a href="/support/news-items/2021-07-17-new-ppc64-profiles.html">new ppc64 profiles</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-07-16</td>
+      <td><a href="/support/news-items/2021-07-16-pulseeffects-easyeffects.html">PulseEffects-5+ are now media-sound/easyeffects</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-07-15</td>
+      <td><a href="/support/news-items/2021-07-15-opentmpfiles-deprecation.html">systemd-tmpfiles replaces deprecated opentmpfiles</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-06-28</td>
+      <td><a href="/support/news-items/2021-06-28-use-pax_kernel-renamed.html">USE flag 'pax_kernel' to be renamed to 'pax-kernel'</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-06-20</td>
+      <td><a href="/support/news-items/2021-06-20-riscv-20-profile-migration.html">riscv upgrade to 20.0 profiles</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-05-30</td>
+      <td><a href="/support/news-items/2021-05-30-deprecate-old-bdb-slots.html">sys-libs/db old SLOT removal</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-05-18</td>
+      <td><a href="/support/news-items/2021-05-18-syncthing-tls-incompatibility.html">&gt;=net-p2p/syncthing-1.17.0 incompatibility warning</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-05-14</td>
+      <td><a href="/support/news-items/2021-05-14-darktable-drop-x86.html">x86 support to be dropped from media-gfx/darktable</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-05-04</td>
+      <td><a href="/support/news-items/2021-05-04-exim-transports-disallow-tainted.html">Exim&gt;=4.94 transports: tainted not permitted</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-01-30</td>
+      <td><a href="/support/news-items/2021-01-30-display-manager-init.html">New OpenRC Display Manager Initializer Scripts</a></td>
+    </tr>
+  
+    <tr>
+      <td>2021-01-05</td>
+      <td><a href="/support/news-items/2021-01-05-libressl-support-discontinued.html">LibreSSL support discontinued</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-10-06</td>
+      <td><a href="/support/news-items/2020-10-06-k8s-split-packages.html">kubernetes Split Packages Returning</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-09-06</td>
+      <td><a href="/support/news-items/2020-09-06-riscv-multilib-going-away.html">riscv multilib profile is going away</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-06-24</td>
+      <td><a href="/support/news-items/2020-06-24-xorg-server-dropping-default-suid.html">xorg-server dropping default suid</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-06-23</td>
+      <td><a href="/support/news-items/2020-06-23-upgrade-to-sys-libs_pam-1_4_0.html">sys-libs/pam-1.4.0 upgrade</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-04-22</td>
+      <td><a href="/support/news-items/2020-04-22-opencl-upgrade-file-collisions.html">Potential file collisions during OpenCL upgrade</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-04-14</td>
+      <td><a href="/support/news-items/2020-04-14-elogind-default.html">Desktop profile switching USE default to elogind</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-04-04</td>
+      <td><a href="/support/news-items/2020-04-04-new-ppc64le-profiles.html">new ppc64le (little-endian) profiles</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-04-03</td>
+      <td><a href="/support/news-items/2020-04-03-deprecation-of-legacy-x11-input-drivers.html">Deprecation of legacy X11 input drivers</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-02-20</td>
+      <td><a href="/support/news-items/2020-02-19-openssh-8_2-service-breakage.html">OpenSSH 8.2_p1 running sshd breakage</a></td>
+    </tr>
+  
+    <tr>
+      <td>2020-01-23</td>
+      <td><a href="/support/news-items/2020-01-23-stable-alpha-keywords-removed.html">Stable alpha keywords removed</a></td>
+    </tr>
+  
+    <tr>
+      <td>2019-12-30</td>
+      <td><a href="/support/news-items/2019-12-30-genkernel-4-default-filenames.html">Genkernel 4 changed default filenames</a></td>
+    </tr>
+  
+    <tr>
+      <td>2019-10-29</td>
+      <td><a href="/support/news-items/2019-10-29-cryfs-0_10-update.html">sys-fs/cryfs-0.10.2 update</a></td>
+    </tr>
+  
+    <tr>
+      <td>2019-09-11</td>
+      <td><a href="/support/news-items/2019-09-11-cpu_flags_ppc-introduction.html">new CPU_FLAGS_PPC USE_EXPAND</a></td>
+    </tr>
+  
+    <tr>
+      <td>2019-07-18</td>
+      <td><a href="/support/news-items/2019-07-18-syncthing-update-incompatibility.html">Syncthing 1.2.0 and newer do not interoperate with 0.14.45 and older</a></td>
+    </tr>
+  
+    <tr>
+      <td>2019-06-05</td>
+      <td><a href="/support/news-items/2019-06-05-amd64-17-1-profiles-are-now-stable.html">amd64 17.1 profiles are now stable</a></td>
+    </tr>
+  
+    <tr>
+      <td>2019-05-23</td>
+      <td><a href="/support/news-items/2019-05-23-accept_license.html">Change of ACCEPT_LICENSE default</a></td>
+    </tr>
+  
+    <tr>
+      <td>2018-08-07</td>
+      <td><a href="/support/news-items/2018-08-07-openssh-ldap-migration.html">Migration required for OpenSSH with LDAP</a></td>
+    </tr>
+  
+    <tr>
+      <td>2018-07-11</td>
+      <td><a href="/support/news-items/2018-07-11-portage-sync-allow-hardlinks.html">Portage rsync hardlink support</a></td>
+    </tr>
+  
+    <tr>
+      <td>2018-04-02</td>
+      <td><a href="/support/news-items/2018-04-08-radicale-2-requires-pre-install-migration.html">Radicale 2 requires pre-install migration</a></td>
+    </tr>
+  
+    <tr>
+      <td>2018-01-30</td>
+      <td><a href="/support/news-items/2018-01-30-portage-rsync-verification.html">Portage rsync tree verification</a></td>
+    </tr>
+  
+    <tr>
+      <td>2018-01-23</td>
+      <td><a href="/support/news-items/2018-01-23-systemd-blocker.html">systemd sysv-utils blocker resolution</a></td>
+    </tr>
+  
+    <tr>
+      <td>2018-01-14</td>
+      <td><a href="/support/news-items/2018-01-14-gnucash.html">GnuCash 2.7+ Breaking Change</a></td>
+    </tr>
+  
+    <tr>
+      <td>2017-11-30</td>
+      <td><a href="/support/news-items/2017-11-30-new-17-profiles.html">New 17.0 profiles in the Gentoo repository</a></td>
+    </tr>
+  
+    <tr>
+      <td>2017-09-19</td>
+      <td><a href="/support/news-items/2017-10-04-gentoolkit-dev-deprecation.html">app-portage/gentoolkit-dev deprecation and removal</a></td>
+    </tr>
+  
+    <tr>
+      <td>2017-08-19</td>
+      <td><a href="/support/news-items/2017-08-19-hardened-sources-removal.html">sys-kernel/hardened-sources removal</a></td>
+    </tr>
+  
+    <tr>
+      <td>2017-07-16</td>
+      <td><a href="/support/news-items/2017-07-16-systemd-rootprefix.html">systemd rootprefix migration</a></td>
+    </tr>
+  
+    <tr>
+      <td>2017-04-10</td>
+      <td><a href="/support/news-items/2017-04-10-split-and-slotted-wine.html">app-emulation/wine split and slotting</a></td>
+    </tr>
+  
+</table>
+
+        </div>
+      </div>
+    </div>
+
+    <footer>
+  <div class="container">
+    <div class="row">
+      <div class="col-xs-12 col-md-offset-2 col-md-7">
+        
+      </div>
+      <div class="col-xs-12 col-md-3">
+        <h3 class="footerhead">Questions or comments?</h3>
+        Please feel free to <a href="/inside-gentoo/contact/">contact us</a>.
+      </div>
+    </div>
+  </div>
+  <div class="container-sitemap">
+    <div class="container">
+      <div class="row row-sitemap hidden-sm hidden-xs">
+  <div class="col-xs-12 col-sm-4 col-md-2">
+    <h3 class="footerhead"><a href="/">Home</a></h3>
+    <ul class="sitemap">
+    <li class=""><a href="/news/">News</a></li>
+
+    </ul>
+  </div>
+  <div class="col-xs-12 col-sm-4 col-md-2">
+    <h3 class="footerhead"><a href="/get-started/">Get Started</a></h3>
+    <ul class="sitemap">
+    <li class=""><a href="/get-started/about/">About Gentoo</a></li>
+<li class=""><a href="/get-started/philosophy/">Philosophy</a></li>
+<li class=""><a href="/get-started/screenshots/">Screenshots</a></li>
+<li class=""><a href="https://wiki.gentoo.org/wiki/FAQ">FAQ <span class="fa fa-fw fa-external-link-square external-link" title="This link will leave www.gentoo.org."></span></a></li>
+
+    </ul>
+  </div>
+  <div class="col-xs-12 col-sm-4 col-md-2">
+    <h3 class="footerhead"><a href="/downloads/">Downloads</a></h3>
+    <ul class="sitemap">
+    <li class=""><a href="/downloads/alpha/">alpha</a></li>
+<li class=""><a href="/downloads/amd64/">amd64</a></li>
+<li class=""><a href="/downloads/arm/">arm</a></li>
+<li class=""><a href="/downloads/arm64/">arm64</a></li>
+<li class=""><a href="/downloads/hppa/">hppa</a></li>
+<li class=""><a href="/downloads/loong/">loong</a></li>
+<li class=""><a href="/downloads/m68k/">m68k</a></li>
+<li class=""><a href="/downloads/mips/">mips</a></li>
+<li class=""><a href="/downloads/ppc/">ppc</a></li>
+<li class=""><a href="/downloads/riscv/">riscv</a></li>
+<li class=""><a href="/downloads/s390/">s390</a></li>
+<li class=""><a href="/downloads/sparc/">sparc</a></li>
+<li class=""><a href="/downloads/x86/">x86</a></li>
+
+    </ul>
+  </div>
+  <div class="col-xs-12 col-sm-4 col-md-2">
+    <h3 class="footerhead"><a href="/inside-gentoo/">Inside Gentoo</a></h3>
+    <ul class="sitemap">
+    <li class=""><a href="/inside-gentoo/developers/">Developers</a></li>
+<li class=""><a href="https://wiki.gentoo.org/wiki/Project:Gentoo">Projects <span class="fa fa-fw fa-external-link-square external-link" title="This link will leave www.gentoo.org."></span></a></li>
+<li class=""><a href="/glep/">GLEPs</a></li>
+<li class=""><a href="/inside-gentoo/artwork/">Artwork</a></li>
+<li class=""><a href="/inside-gentoo/foundation/">Gentoo Foundation</a></li>
+<li class=""><a href="/inside-gentoo/sponsors/">Sponsors</a></li>
+<li class=""><a href="/inside-gentoo/stores/">Stores</a></li>
+<li class=""><a href="/inside-gentoo/contact/">Contact</a></li>
+
+    </ul>
+  </div>
+  <div class="col-xs-12 col-sm-4 col-md-2">
+    <h3 class="footerhead"><a href="/support/">Support</a></h3>
+    <ul class="sitemap">
+    <li class=""><a href="/support/consulting/">Consulting</a></li>
+<li class=""><a href="/support/documentation/">Documentation</a></li>
+<li class=""><a href="https://packages.gentoo.org/">Package database <span class="fa fa-fw fa-external-link-square external-link" title="This link will leave www.gentoo.org."></span></a></li>
+<li class=""><a href="/support/news-items/">Repository news items</a></li>
+<li class=""><a href="/support/security/">Security</a></li>
+<li class=""><a href="/support/use-flags/">USE flags</a></li>
+<li class=""><a href="/support/rsync-mirrors/">rsync mirrors</a></li>
+
+    </ul>
+  </div>
+  <div class="col-xs-12 col-sm-4 col-md-2">
+    <h3 class="footerhead"><a href="/get-involved/">Get Involved</a></h3>
+    <ul class="sitemap">
+    <li class=""><a href="/get-involved/irc-channels/">IRC channels</a></li>
+<li class=""><a href="https://forums.gentoo.org/">Forums <span class="fa fa-fw fa-external-link-square external-link" title="This link will leave www.gentoo.org."></span></a></li>
+<li class=""><a href="/get-involved/mailing-lists/">Mailing lists</a></li>
+<li class=""><a href="/get-involved/contribute/">Contribute</a></li>
+<li class=""><a href="/get-involved/become-developer/">Become a developer</a></li>
+<li class=""><a href="/get-involved/get-code/">Get the code</a></li>
+
+    </ul>
+  </div>
+</div>
+    </div>
+  </div>
+  <div class="container">
+    <div class="row">
+      <div class="col-xs-3 col-md-2">
+        <ul class="footerlinks three-icons">
+          <li><a href="https://twitter.com/gentoo" title="@Gentoo on Twitter"><span class="fa fa-twitter fa-fw"></span></a></li>
+          <li><a href="https://www.facebook.com/gentoo.org" title="Gentoo on Facebook"><span class="fa fa-facebook fa-fw"></span></a></li>
+          <li><a rel="me" href="https://fosstodon.org/@gentoo" title="Gentoo on Mastodon">m</a></li>
+          <li><a href="/feeds/news.xml" title="RSS feed for Gentoo News"><span class="fa fa-rss fa-fw"></span></a></li>
+        </ul>
+      <div>
+        <div class="sitemap text-center">
+          <a href="https://wiki.gentoo.org/wiki/Foundation:Privacy_Policy">Privacy Policy</a>
+        </div>
+      </div>
+      </div>
+      <div class="col-xs-8 col-md-8">
+        <strong>&copy; 2001-2026 Gentoo Authors</strong><br>
+        <small>
+          Gentoo is a trademark of the Gentoo Foundation, Inc. and of Förderverein Gentoo e.V.
+          The contents of this document, unless otherwise expressly stated, are licensed under the
+          <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="license">CC-BY-SA-4.0</a> license.
+          The <a href="/inside-gentoo/foundation/name-logo-guidelines.html">Gentoo Name and Logo Usage Guidelines</a> apply.
+        </small>
+      </div>
+      <div class="col-xs-1 col-md-1">
+        <strong class="text-dark">Version</strong><br />
+        <small>
+          <a class="text-dark" href="https://gitweb.gentoo.org/sites/www.git/commit/?id=57c568e
+">57c568e
+</a>
+        </small>
+        <strong class="text-dark">Generated</strong><br />
+        <small>
+          <span class="text-dark">Generated: 2026-08-25T05:15:34Z</span>
+        </small>
+      </div>
+    </div>
+  </div>
+</footer>
+
+
+    <script src="https://assets.gentoo.org/tyrian/v1/jquery.min.js"></script>
+    <script src="https://assets.gentoo.org/tyrian/v1/bootstrap.min.js"></script>
+    
+    
+  </body>
+</html>

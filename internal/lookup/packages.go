@@ -280,6 +280,9 @@ func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 	if err := GetJSON(ctx, u, hdr, &tree); err != nil {
 		return nil, err
 	}
+	if tree.Truncated {
+		return nil, fmt.Errorf("%s tree is truncated (%d entries)", o.repo, len(tree.Tree))
+	}
 	pkgs := map[string]string{}
 	for _, e := range tree.Tree {
 		if e.Type != "blob" {
@@ -291,9 +294,6 @@ func fetchOverlay(ctx context.Context, o overlay) (map[string]string, error) {
 		}
 		cur, seen := pkgs[atom]
 		pkgs[atom] = overlayPickVer(cur, seen, ver)
-	}
-	if tree.Truncated {
-		return nil, fmt.Errorf("%s tree is truncated (%d entries)", o.repo, len(tree.Tree))
 	}
 	return pkgs, nil
 }
@@ -427,8 +427,27 @@ var verC = struct {
 
 // pkgVersionJSON is one entry of packages.gentoo.org's package "versions" array.
 type pkgVersionJSON struct {
-	Version  string   `json:"version"`
-	Keywords []string `json:"keywords"`
+	Version  string        `json:"version"`
+	Keywords []string      `json:"keywords"`
+	Masks    []pkgMaskJSON `json:"masks"`
+}
+
+type pkgMaskJSON struct {
+	Arches []string `json:"arches"`
+}
+
+func (v pkgVersionJSON) maskedOn(arch string) bool {
+	for _, mask := range v.Masks {
+		if len(mask.Arches) == 0 {
+			return true
+		}
+		for _, maskedArch := range mask.Arches {
+			if maskedArch == "*" || maskedArch == arch {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Input is newest-first; 9999 is excluded from stable/latest releases.
@@ -440,7 +459,7 @@ func pickStableLatest(versions []pkgVersionJSON) (stable, latest string) {
 		if latest == "" {
 			latest = vv.Version
 		}
-		if stable == "" {
+		if stable == "" && !vv.maskedOn("amd64") {
 			for _, kw := range vv.Keywords {
 				if kw == "amd64" {
 					stable = vv.Version
@@ -484,7 +503,10 @@ func pkgVersion(ctx context.Context, atom string) (stable, latest string, availa
 	return stable, latest, true
 }
 
-var pkgHrefRe = regexp.MustCompile(`/packages/([a-z][a-z0-9-]+/[A-Za-z0-9][A-Za-z0-9+_.\-]*)`)
+var (
+	pkgHrefRe        = regexp.MustCompile(`/packages/([a-z][a-z0-9-]+/[A-Za-z0-9][A-Za-z0-9+_.\-]*)`)
+	pkgDetailTitleRe = regexp.MustCompile(`<title>([a-z][a-z0-9-]+/[A-Za-z0-9][A-Za-z0-9+_.\-]*)\s+–\s+Gentoo Packages</title>`)
+)
 
 // Availability prevents official-tree outages from rendering as "not found".
 func searchMainTree(ctx context.Context, name string) ([]string, bool) {
@@ -521,6 +543,14 @@ func searchMainTreeWith(
 func rankSearchHits(body []byte, name string) []string {
 	seen := map[string]bool{}
 	low := strings.ToLower(name)
+	// A one-result fuzzy search redirects to a package page. Accept that page only
+	// when its canonical atom still matches the query; otherwise it is a false hit.
+	if m := pkgDetailTitleRe.FindStringSubmatch(string(body)); m != nil {
+		if atom := m[1]; isPkgPath(atom) && pkgRelevance(atom, low) > 0 {
+			return []string{atom}
+		}
+		return nil
+	}
 	type scored struct {
 		atom  string
 		score int
@@ -1417,7 +1447,7 @@ func armStatus(ctx context.Context, atom string) (stable, testing string, ok boo
 // packages.gentoo.org returns newest first; live ebuilds are skipped.
 func arm64Keywords(versions []pkgVersionJSON) (stable, testing string) {
 	for _, vv := range versions {
-		if strings.HasPrefix(vv.Version, "9999") {
+		if strings.HasPrefix(vv.Version, "9999") || vv.maskedOn("arm64") {
 			continue
 		}
 		for _, kw := range vv.Keywords {

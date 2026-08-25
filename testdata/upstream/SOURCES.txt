@@ -1,0 +1,219 @@
+Captured on 2026-08-25 UTC with User-Agent: gentoo-zh-verify-bot. Bodies are stored verbatim; redirects were followed unless a non-200 response was the shape under test.
+
+firefox.json
+URL: https://packages.gentoo.org/packages/www-client/firefox.json
+Status: 200
+Content-Type: application/json
+Evidence: top-level "versions", "use", and "use_expand"; first use_expand group is {"name":"l10n","flags":[{"name":"ach","description":"Acoli"}, ...]}.
+
+croc.json
+URL: https://packages.gentoo.org/packages/net-misc/croc.json
+Status: 200
+Content-Type: application/json
+Evidence: version 10.2.7 includes "masks":[{"date":"2026-08-21T00:00:00Z",...,"arches":["*"]}].
+
+search-vim.html
+URL: https://packages.gentoo.org/packages/search?q=vim
+Status: 200
+Content-Type: text/html; charset=utf-8
+Evidence: package search result anchors use href="/packages/<category>/<package>".
+
+search-zero.html
+URL: https://packages.gentoo.org/packages/search?q=definitely-no-such-package-verifybot-20260825
+Status: 200
+Content-Type: text/html; charset=utf-8
+Evidence: authoritative zero-result search page.
+
+search-lib.html
+URL: https://packages.gentoo.org/packages/search?q=lib
+Status: 200
+Content-Type: text/html; charset=utf-8
+Evidence: 488814-byte large result page with no pagination, rel="next", or page= marker.
+
+search-oh-my-pi-bin.html
+URL: https://packages.gentoo.org/packages/search?q=oh-my-pi-bin
+Statuses: 301 then 200
+Redirect: /packages/app-doc/pms-bin
+Content-Type: text/html; charset=utf-8
+Evidence: final page title is "app-doc/pms-bin – Gentoo Packages" although the queried overlay package was oh-my-pi-bin.
+
+gentoozh-tree.json
+URL: https://api.github.com/repos/gentoo-zh/overlay/git/trees/master?recursive=1
+Status: 200
+Content-Type: application/json; charset=utf-8
+Rate limit: X-RateLimit-Limit: 60; X-RateLimit-Remaining: 57
+Evidence: "tree" has 2629 entries and "truncated":false.
+
+oh-my-pi-bin.ebuild
+URL: https://raw.githubusercontent.com/gentoo-zh/overlay/master/dev-util/oh-my-pi-bin/oh-my-pi-bin-18.0.4.ebuild
+Status: 200
+Content-Type: text/plain; charset=utf-8
+Evidence: real overlay-only ebuild used by overlayInfo.
+
+oh-my-pi-bin-metadata.xml
+URL: https://raw.githubusercontent.com/gentoo-zh/overlay/master/dev-util/oh-my-pi-bin/metadata.xml
+Status: 200
+Content-Type: text/plain; charset=utf-8
+Evidence: real metadata.xml used by overlayInfo.
+
+repology-vim.json
+URL: https://repology.org/api/v1/project/vim
+Status: 200
+Content-Type: application/json
+Evidence: 2069-row array; rows include string "repo" and "version" plus "status" values including "newest", "outdated", and "rolling".
+
+repology-search-vmi.json
+URL: https://repology.org/api/v1/projects/?search=vmi
+Status: 200
+Content-Type: application/json
+Evidence: object keyed by 33 project names; each value is an array of package rows.
+
+repology-vmi.json
+URL: https://repology.org/api/v1/project/vmi
+Status: 200
+Content-Type: application/json
+Evidence: body is [], which triggers the search fallback without an HTTP error.
+
+repology-search-zero.json
+URL: https://repology.org/api/v1/projects/?search=definitely-no-such-package-verifybot-20260825
+Status: 200
+Content-Type: application/json
+Evidence: body is {}.
+
+bug-wontfix.json
+URL: https://bugs.gentoo.org/rest/bug/981294?include_fields=summary,status,resolution,product,component,severity
+Status: 200
+Content-Type: application/json; charset=UTF-8
+Evidence: "status":"RESOLVED" and "resolution":"WONTFIX".
+
+bug-newest.json
+URL: https://bugs.gentoo.org/rest/bug?include_fields=id,summary,status,resolution,product,component,priority,severity,keywords,creation_time,cf_stabilisation_atoms,assigned_to_detail,creator_detail&order=bug_id%20DESC&limit=1
+Status: 200
+Content-Type: application/json; charset=UTF-8
+Evidence: the requested assigned_to_detail and creator_detail fields are absent when their base fields are omitted.
+
+bug-newest-users.json
+URL: https://bugs.gentoo.org/rest/bug?include_fields=id,summary,status,resolution,product,component,priority,severity,keywords,creation_time,cf_stabilisation_atoms,assigned_to,creator,assigned_to_detail,creator_detail&order=bug_id%20DESC&limit=1
+Status: 200
+Content-Type: application/json; charset=UTF-8
+Evidence: adding assigned_to and creator returns both detail objects; real_name values are "Gentoo Toolchain Maintainers" and "Nick Bowler".
+
+bug-by-id-users.json
+URL: https://bugs.gentoo.org/rest/bug?include_fields=id,summary,status,resolution,product,component,priority,severity,keywords,creation_time,cf_stabilisation_atoms,assigned_to,creator,assigned_to_detail,creator_detail&id=981377,981378
+Status: 200
+Content-Type: application/json; charset=UTF-8
+Evidence: two tracked-bug records include assigned_to_detail and creator_detail objects.
+
+bug-batch.json
+URL: https://bugs.gentoo.org/rest/bug?include_fields=id,summary,status,resolution,product,component,priority,severity,keywords,creation_time,cf_stabilisation_atoms,assigned_to,creator,assigned_to_detail,creator_detail&f1=bug_id&o1=greaterthan&v1=981278&order=bug_id%20ASC&limit=100
+Status: 200
+Content-Type: application/json; charset=UTF-8
+Evidence: exactly 100 ascending records, IDs 981279 through 981378, with no continuation field.
+
+bug-zero-users.json
+URL: https://bugs.gentoo.org/rest/bug?include_fields=id,summary,status,resolution,product,component,priority,severity,keywords,creation_time,cf_stabilisation_atoms,assigned_to,creator,assigned_to_detail,creator_detail&f1=bug_id&o1=greaterthan&v1=999999999&order=bug_id%20ASC&limit=100
+Status: 200
+Content-Type: application/json; charset=UTF-8
+Evidence: body is {"bugs":[]}.
+
+gentoo-wiki-search.json
+URL: https://wiki.gentoo.org/api.php?action=query&list=search&srsearch=Portage&srlimit=24&srprop=&format=json
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: "query.search" has 24 records and "continue":{"sroffset":24,"continue":"-||"}; totalhits is 176.
+
+gentoo-wiki-display.json
+URL: https://wiki.gentoo.org/api.php?action=query&prop=info&inprop=displaytitle&format=json&titles=Portage%2FHelp%2FUpgrading+Portage%7C%2Fvar%2Flib%2Fportage%7CPortage%2FHelp%2FBlockers%7CUseful+Portage+tools%2Fen
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: "query.pages" is an object keyed by numeric page IDs; each value has title and displaytitle strings.
+
+gentoo-wiki-zero.json
+URL: https://wiki.gentoo.org/api.php?action=query&list=search&srsearch=zqjxvkwt&srlimit=24&srprop=&format=json
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: "query.search" is an empty array and totalhits is 0.
+
+arch-wiki-systemd.json
+URL: https://wiki.archlinux.org/api.php?action=query&list=search&srsearch=systemd&srlimit=24&srprop=&format=json
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: "query.search" has 24 records, totalhits is 162, and continuation offset is 24.
+
+arch-wiki-display.json
+URL: https://wiki.archlinux.org/api.php?action=query&prop=info&inprop=displaytitle&format=json&titles=Systemd%7CSystemd%2FJournal%7CSystemd%2Ftimers%7CSystemd%2Ftimer
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: MediaWiki display-title response used by displayTitles.
+
+arch-wiki-zero.json
+URL: https://wiki.archlinux.org/api.php?action=query&list=search&srsearch=zqjxvkwt&srlimit=24&srprop=&format=json
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: "query.search" is an empty array and totalhits is 0.
+
+gentoo-news.html
+URL: https://www.gentoo.org/support/news-items/
+Status: 200
+Content-Type: text/html
+Evidence: current rows contain anchors such as href="/support/news-items/2026-06-28-removal-32bit-s390.html">32-bit s390 support dropped</a>. The 2025-09-24 row links to a slug dated 2025-10-23, so the row date is authoritative.
+
+archcn-search.json
+URL: https://forum.archlinuxcn.org/search.json?q=portage
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: top-level "topics" is an eight-element array; first topic has numeric id, string slug, and string title.
+
+archcn-zero.json
+URL: https://forum.archlinuxcn.org/search.json?q=definitely-no-such-topic-verifybot-20260825
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: authoritative zero-result Discourse response.
+
+debian.csv
+URL: https://debian.pages.debian.net/distro-info-data/debian.csv
+Status: 200
+Content-Type: text/csv; charset=utf-8
+Evidence: release 13 has date 2025-08-09; release 14 has no release date; release 15 is dated 2027-08-01.
+
+ubuntu.csv
+URL: https://debian.pages.debian.net/distro-info-data/ubuntu.csv
+Status: 200
+Content-Type: text/csv; charset=utf-8
+Evidence: 26.04 LTS is released on 2026-04-23; 26.10/stonking has release date 2026-10-15 and is in transition on the capture date.
+
+debian-madison-vim.txt
+URL: https://qa.debian.org/madison.php?package=vim&text=on&a=arm64
+Status: 200
+Content-Type: text/plain
+Evidence: pipe-delimited rows run from bullseye through forky and sid; security pocket rows include a hyphenated suite.
+
+debian-madison-zero.txt
+URL: https://qa.debian.org/madison.php?package=definitely-no-such-package-verifybot-20260825&text=on&a=arm64
+Status: 200
+Content-Type: text/plain
+Evidence: zero-byte body.
+
+ubuntu-madison-vim.txt
+URL: https://people.canonical.com/~ubuntu-archive/madison.cgi?package=vim&text=on&a=arm64
+Status: 200
+Content-Type: text/plain
+Evidence: pipe-delimited rows include released resolute and unreleased stonking plus stonking-proposed.
+
+fedora-curl.json
+URL: https://mdapi.fedoraproject.org/rawhide/pkg/curl
+Status: 200
+Content-Type: application/json; charset=utf-8
+Evidence: "version":"8.22.0~rc2" is a string, but "arch":"x86_64"; this endpoint does not prove arm64 availability.
+
+aur-yay.PKGBUILD
+URL: https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=yay
+Status: 200
+Content-Type: text/plain; charset=UTF-8
+Evidence: arch=('i686' 'pentium4' 'x86_64' 'arm' 'armv7h' 'armv6h' 'aarch64' 'riscv64').
+
+alarm-curl.html
+URL: https://archlinuxarm.org/packages/aarch64/curl
+Status: 200
+Content-Type: text/html; charset=utf-8
+Evidence: body length is 16529 bytes, larger than the parser's former 1024-byte body limit.

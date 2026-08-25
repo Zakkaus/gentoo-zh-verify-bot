@@ -219,8 +219,9 @@ type recentBug struct {
 
 // bugFields is the Bugzilla include_fields list shared by the newest-bugs poll and the
 // re-poll of tracked bugs (for in-place state-change edits), so both decode the same recentBug shape.
+// Bugzilla only emits each *_detail object when its base user field is requested too.
 const bugFields = "id,summary,status,resolution,product,component,priority,severity," +
-	"keywords,creation_time,cf_stabilisation_atoms,assigned_to_detail,creator_detail"
+	"keywords,creation_time,cf_stabilisation_atoms,assigned_to,creator,assigned_to_detail,creator_detail"
 
 type recentBugBatchFetcher func(context.Context, int) ([]recentBug, error)
 
