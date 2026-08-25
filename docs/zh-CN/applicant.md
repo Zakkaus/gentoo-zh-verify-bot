@@ -14,7 +14,7 @@
 
 ## 验证题发送方式
 
-**实现位置：**`internal/verify` 包；`internal/verify/state.go` 和 `internal/verify/service.go` 中的 `(*Service).attemptPrivateChallenge`、`(*Service).postGroupChallenge`、`(*Service).SendDMChallenge`、`(*Service).sendQuizzes`；`internal/panel` 包；`internal/panel/panel.go` 中的 `(*Panel).OnStart`。
+**实现位置：**`internal/verify` 包；`internal/verify/state.go` 和 `internal/verify/service.go` 中的 `(*Service).deliverPendingChallenge`、`(*Service).attemptPrivateChallenge`、`(*Service).postGroupChallenge`、`(*Service).SendDMChallenge`、`(*Service).sendQuizzes`；`internal/panel` 包；`internal/panel/panel.go` 中的 `(*Panel).OnStart`。
 
 程序先预留待验证记录，再应用该群组的 `delivery_mode`：
 
@@ -30,7 +30,7 @@
 
 已经发出的 `?start=verify` 旧链接继续采用原有行为：程序从 Go map 中选择一条有效记录执行初始频道检查，再由 `sendQuizzes` 发送全部有效题目。新的按群链接不依赖 map 顺序，也不会被其他群组的必加频道检查阻断。
 
-待验证记录会持久保存当前群内消息和私聊消息的 ID。旧记录缺少私聊消息 ID 时，表示没有可删除的私聊消息。申请处理完成或超时时，程序会分别删除两条消息；故障恢复重新通知只替换群内消息，并保留私聊消息 ID 供后续清理。
+待验证记录会持久保存当前群内消息和私聊消息的 ID。旧记录缺少私聊消息 ID 时，表示没有可删除的私聊消息。申请处理完成或超时时，程序会分别删除两条消息。故障恢复重新通知采用当前 `delivery_mode`；确认新的私聊验证消息送达后，程序记录其 ID，并在确认替代消息送达后删除两条旧消息。
 
 两种发送均无法确认时，记录到期仍按程序原因导致的发送故障处理：成功拒绝入群申请后不增加验证失败次数，也不启动冷却期。任一消息确认送达后，程序开始正常的完整答题时限。
 
@@ -73,3 +73,5 @@ Bot API 批准成功后，程序删除待验证记录，清除该群组和用户
 同一群组和用户的连续失败只在六小时滚动窗口内累积。记录失败后，`verify_retry_seconds` 会阻止过早重新申请；有效值不大于零时不启用冷却。正数 `verify_max_fails` 达到阈值后，程序按群组当前封禁时长自动封禁。封禁成功会清除失败记录；封禁失败会告警并保留阈值记录，下一次失败将再次尝试。负数阈值停用自动封禁；封禁时长为零表示永久。
 
 提示发送失败、批准失败后的重试、管理员封禁或拒绝失败后的重试、短暂重启期间已过期，以及故障恢复窗口都属于程序原因。这些记录的宽限计时结束时仍可能拒绝入群申请，但不会增加失败次数。故障期间的处理见[故障与恢复](outage-recovery.md)。
+
+第一次因 Telegram 不可达而延期的超时会启动持久保存的 48 小时上限，故障恢复和重启不会重置该时间。达到上限后，程序每分钟尝试一次 Telegram。Telegram 确认拒绝申请后，申请者会收到本地化提示，说明验证未能完成，可以重新提交入群申请。该处理会删除两条验证消息，但不会增加失败次数、启动冷却期或封禁申请者。

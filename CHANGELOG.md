@@ -30,6 +30,10 @@ All notable changes to this project are documented here. The format is based on
   without duplicating an uncertain private send; `group` retains group-only delivery. Schema-v2
   `dm_first` overrides migrate to the equivalent mode, and settings can also define global or
   per-group `delivery_mode` baselines.
+- **Verification outage deferral now ends after 48 hours.** The first unreachable expiry starts a
+  persisted accumulator that recovery and restart do not reset. At the limit, the bot declines
+  strike-free, clears both challenges, and tells the applicant to reapply; an unreachable Telegram
+  service is retried every 60 seconds instead of receiving another full verification window.
 - **Join floods have bounded memory use.** The pending queue is capped at 2,000 requests across the
   process and 500 per group. Requests beyond either cap remain for manual review, with an admin
   alert throttled to once every 10 minutes.
@@ -57,8 +61,11 @@ All notable changes to this project are documented here. The format is based on
   refreshes Telegram command scopes without a restart and adds `/enroll` and `/unregister` beside
   the member commands.
 - **Verification cleanup now tracks both challenge messages across restarts.** Settlement, timeout,
-  replacement, mid-delivery abandonment, and outage re-notification independently delete the
-  recorded group and private messages, so one missing or failed deletion does not block the other.
+  replacement, and mid-delivery abandonment independently delete the recorded group and private
+  messages, so one missing or failed deletion does not block the other.
+- **Outage re-notification now follows each group's delivery mode.** Recovery uses the initial
+  delivery decision for `group`, `dm`, and `both`, records a confirmed replacement private message,
+  and removes both stale challenges instead of leaving a live private button behind.
 - **External lookups now follow captured upstream contracts.** Package searches reject unrelated
   single-result redirects; Gentoo masks suppress stable and arm64 availability; Bugzilla feeds
   request the base user fields required for detail objects; Gentoo news uses the index date;

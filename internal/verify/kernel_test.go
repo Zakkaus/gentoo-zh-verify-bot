@@ -621,7 +621,7 @@ func TestUncertainFallbackPromptDeliveryDoesNotChargeAnswersBeforeRetry(t *testi
 	}
 
 	retry := newFakeVerifyBot()
-	active, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid)
+	active, _, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid, true)
 	if err != nil || !active {
 		t.Fatalf("fallback retry = active %v error %v, want confirmed delivery", active, err)
 	}

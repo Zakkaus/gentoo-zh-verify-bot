@@ -108,10 +108,12 @@ type pending struct {
 	nonce              string   // per-pending token; a quiz button only counts if its nonce matches
 	name               string   // applicant display name, kept so a post-outage re-notify can address them
 	deadline           time.Time
+	deferredSince      time.Time // first unreachable expiry; retained across recovery and restart
 	timer              *time.Timer
 	epoch              uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
 	lastRenotify       time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
 	failedAt           time.Time // claim time for rolling-window strike accounting
+	deferralCapReached bool      // persisted so the operator warning and short settlement retries survive restart
 	done               bool
 	removed            bool // group removal cancels an in-flight settlement without charging the applicant
 }
@@ -130,10 +132,10 @@ func (p *pending) messages() challengeMessages {
 // renotifyItem is one applicant to re-notify after an outage — snapshotted under the lock, then
 // messaged outside it. Shared by the runtime-recovery (onRecovery) and restart-recovery (load) paths.
 type renotifyItem struct {
-	gid, uid int64
-	name     string
-	oldMsg   int
-	p        *pending
+	gid, uid    int64
+	name        string
+	oldMessages challengeMessages
+	p           *pending
 }
 
 type pendingRec struct {
@@ -148,17 +150,19 @@ type pendingRec struct {
 	FallbackPending    bool     `json:"fallback_pending,omitempty"`
 	Prompted           bool     `json:"prompted,omitempty"` // the question was DM'd, so a reply counts as an answer
 	// Persist one-shot guards so process restarts cannot replenish free replies.
-	Hinted          bool     `json:"hinted,omitempty"`
-	SampleBounced   bool     `json:"sample_bounced,omitempty"`
-	NoLinuxReminded bool     `json:"no_linux_reminded,omitempty"`
-	OSClarified     bool     `json:"os_clarified,omitempty"`
-	Tries           int      `json:"tries,omitempty"`
-	QText           string   `json:"q_text"`
-	QOpts           []string `json:"q_opts"`
-	CorrectIdx      int      `json:"correct_idx"`
-	Nonce           string   `json:"nonce"`
-	Name            string   `json:"name,omitempty"`
-	Deadline        int64    `json:"deadline"`
+	Hinted             bool     `json:"hinted,omitempty"`
+	SampleBounced      bool     `json:"sample_bounced,omitempty"`
+	NoLinuxReminded    bool     `json:"no_linux_reminded,omitempty"`
+	OSClarified        bool     `json:"os_clarified,omitempty"`
+	Tries              int      `json:"tries,omitempty"`
+	QText              string   `json:"q_text"`
+	QOpts              []string `json:"q_opts"`
+	CorrectIdx         int      `json:"correct_idx"`
+	Nonce              string   `json:"nonce"`
+	Name               string   `json:"name,omitempty"`
+	Deadline           int64    `json:"deadline"`
+	DeferredSince      int64    `json:"deferred_since,omitempty"`
+	DeferralCapReached bool     `json:"deferral_cap_reached,omitempty"`
 }
 
 // Per-pending randomness makes stale quiz buttons unable to answer replacements.
@@ -715,6 +719,66 @@ func (v *Service) alertPendingCap(c context.Context, bot verifyBot, gid int64) {
 	v.failAlert(c, bot, gid, admin.PendingCap.Render(v.groupLanguage(gid), pendingGlobalCap, pendingPerGroupCap, gid))
 }
 
+type challengeDeliveryResult struct {
+	messages             challengeMessages
+	delivered            bool
+	active               bool
+	modeLabel            string
+	replacedPrivateMsgID int
+}
+
+// deliverPendingChallenge is the single delivery-mode decision for initial and recovery challenges.
+func (v *Service) deliverPendingChallenge(
+	c context.Context,
+	bot modBot,
+	gid, uid int64,
+	name string,
+) challengeDeliveryResult {
+	result := challengeDeliveryResult{active: true, modeLabel: v.DeliveryMode(gid)}
+	groupLang := v.groupLanguage(gid)
+	switch result.modeLabel {
+	case config.DeliveryGroup:
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+		result.delivered = result.messages.groupMsgID != 0
+	case config.DeliveryBoth:
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+		result.delivered = result.messages.groupMsgID != 0
+		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
+		result.messages.privateMsgID = outcome.privateMsgID
+		result.replacedPrivateMsgID = outcome.replacedPrivateMsgID
+		switch outcome.result {
+		case privateDelivered:
+			result.delivered = true
+			result.modeLabel = "both-delivered"
+		case privateRejected:
+			result.modeLabel = "group-private-rejected"
+		case privateUncertain:
+			result.modeLabel = "group-private-uncertain"
+		case privateGone:
+			result.active = false
+			v.deleteChallenges(c, bot, gid, uid, result.messages)
+		}
+	case config.DeliveryDM:
+		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
+		result.messages.privateMsgID = outcome.privateMsgID
+		result.replacedPrivateMsgID = outcome.replacedPrivateMsgID
+		switch outcome.result {
+		case privateDelivered:
+			result.delivered = true
+			result.modeLabel = "private"
+		case privateRejected:
+			result.modeLabel = "group-fallback"
+			result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+			result.delivered = result.messages.groupMsgID != 0
+		case privateUncertain:
+			result.modeLabel = "private-uncertain"
+		case privateGone:
+			result.active = false
+		}
+	}
+	return result
+}
+
 // OnJoinRequest starts verification for one eligible group join request.
 func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	jr := update.ChatJoinRequest
@@ -736,7 +800,6 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	if v.joinGate(c, bot, gid, uid, applicantLang) {
 		return nil
 	}
-	groupLang := v.groupLanguage(gid)
 	mode, text, opts, correctIdx := v.newChallenge(gid, applicantLang)
 	name := applicantDisplayName(&jr.From)
 	p := &pending{mode: mode, lang: applicantLang, qText: text, qOpts: opts, correctIdx: correctIdx,
@@ -753,54 +816,20 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	}
 	v.deleteChallenges(c, bot, gid, uid, oldMessages)
 
-	messages := challengeMessages{}
-	delivered := false
-	delivery := v.DeliveryMode(gid)
-	switch delivery {
-	case config.DeliveryGroup:
-		messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
-		delivered = messages.groupMsgID != 0
-	case config.DeliveryBoth:
-		messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
-		delivered = messages.groupMsgID != 0
-		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
-		messages.privateMsgID = outcome.privateMsgID
-		switch outcome.result {
-		case privateDelivered:
-			delivered = true
-			delivery = "both-delivered"
-		case privateRejected:
-			delivery = "group-private-rejected"
-		case privateUncertain:
-			delivery = "group-private-uncertain"
-		case privateGone:
-			v.deleteChallenges(c, bot, gid, uid, messages)
-			return nil
-		}
-	case config.DeliveryDM:
-		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
-		messages.privateMsgID = outcome.privateMsgID
-		switch outcome.result {
-		case privateDelivered:
-			delivered = true
-			delivery = "private"
-		case privateRejected:
-			delivery = "group-fallback"
-			messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
-			delivered = messages.groupMsgID != 0
-		case privateUncertain:
-			delivery = "private-uncertain"
-		case privateGone:
-			return nil
-		}
+	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name)
+	if !delivery.active {
+		return nil
 	}
-	if !v.finishPendingChallenge(bot, gid, uid, p, messages, delivered) {
-		v.deleteChallenges(c, bot, gid, uid, messages)
+	if delivery.replacedPrivateMsgID != 0 {
+		v.deleteChallenge(c, bot, uid, delivery.replacedPrivateMsgID)
+	}
+	if !v.finishPendingChallenge(bot, gid, uid, p, delivery.messages, delivery.delivered) {
+		v.deleteChallenges(c, bot, gid, uid, delivery.messages)
 		return nil // another action handled or replaced this request while delivery was in flight
 	}
 	v.save()
 	log.Printf("join %d (@%s) in group %d: pending (%s challenge), delivery=%s, group message=%d, private message=%d",
-		uid, jr.From.Username, gid, mode, delivery, messages.groupMsgID, messages.privateMsgID)
+		uid, jr.From.Username, gid, mode, delivery.modeLabel, delivery.messages.groupMsgID, delivery.messages.privateMsgID)
 	return nil
 }
 
@@ -871,9 +900,10 @@ type dmPrompt struct {
 }
 
 type dmSendResult struct {
-	messageID    int
-	current      bool
-	stateChanged bool
+	messageID         int
+	replacedMessageID int
+	current           bool
+	stateChanged      bool
 }
 
 func (v *Service) pendingDMChallenge(gid, uid int64) (dmPrompt, bool) {
@@ -918,6 +948,7 @@ func (v *Service) completeDMDelivery(
 	messageID int,
 	sendErr error,
 	question bool,
+	resetExpiry bool,
 ) (current, changed bool, oldPrivateMsgID int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -931,12 +962,14 @@ func (v *Service) completeDMDelivery(
 			p.fbAnswers = nil
 			p.fallbackPending = false
 			p.hinted = false
-			if p.timer != nil {
-				p.timer.Stop()
+			if resetExpiry {
+				if p.timer != nil {
+					p.timer.Stop()
+				}
+				delay := v.timeout(prompt.gid)
+				p.deadline = v.wallNow().Add(delay)
+				v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 			}
-			delay := v.timeout(prompt.gid)
-			p.deadline = v.wallNow().Add(delay)
-			v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 			return true, true, 0
 		}
 		return true, false, 0
@@ -944,7 +977,7 @@ func (v *Service) completeDMDelivery(
 	resetDeadline := false
 	if question && prompt.fallbackPending && p.fallbackPending {
 		p.fallbackPending = false
-		resetDeadline = true
+		resetDeadline = resetExpiry
 		changed = true
 	}
 	if messageID != 0 && p.privateMsgID != messageID {
@@ -954,7 +987,7 @@ func (v *Service) completeDMDelivery(
 	}
 	if !p.challengeDelivered {
 		p.challengeDelivered = true
-		resetDeadline = true
+		resetDeadline = resetExpiry
 		changed = true
 	}
 	if resetDeadline {
@@ -988,7 +1021,13 @@ func (v *Service) sendChannelPrompt(c context.Context, bot verifyBot, gid, uid i
 	return msgID(sent), err
 }
 
-func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, prompt dmPrompt) (dmSendResult, error) {
+func (v *Service) sendDMQuestionRetainingPrevious(
+	c context.Context,
+	bot verifyBot,
+	uid int64,
+	prompt dmPrompt,
+	resetExpiry bool,
+) (dmSendResult, error) {
 	var sent *telego.Message
 	var err error
 	if prompt.mode == config.ModeKernel {
@@ -1012,43 +1051,55 @@ func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, pr
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	}
 	messageID := msgID(sent)
-	current, changed, oldPrivateMsgID := v.completeDMDelivery(bot, uid, prompt, messageID, err, true)
-	if oldPrivateMsgID != 0 {
-		v.deleteChallenge(c, bot, uid, oldPrivateMsgID)
-	}
-	return dmSendResult{messageID: messageID, current: current, stateChanged: changed}, err
+	current, changed, oldPrivateMsgID := v.completeDMDelivery(bot, uid, prompt, messageID, err, true, resetExpiry)
+	return dmSendResult{
+		messageID:         messageID,
+		replacedMessageID: oldPrivateMsgID,
+		current:           current,
+		stateChanged:      changed,
+	}, err
 }
 
-// sendDMChallengeForGroup delivers only the named pending request.
-func (v *Service) sendDMChallengeForGroup(c context.Context, bot modBot, gid, uid int64) (active bool, privateMsgID int, err error) {
+func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, prompt dmPrompt) (dmSendResult, error) {
+	result, err := v.sendDMQuestionRetainingPrevious(c, bot, uid, prompt, true)
+	if result.replacedMessageID != 0 {
+		v.deleteChallenge(c, bot, uid, result.replacedMessageID)
+	}
+	return result, err
+}
+
+// sendDMChallengeForGroup delivers only the named pending request and lets its caller clean up the replaced message.
+func (v *Service) sendDMChallengeForGroup(
+	c context.Context,
+	bot modBot,
+	gid, uid int64,
+	resetExpiry bool,
+) (active bool, privateMsgID, replacedPrivateMsgID int, err error) {
 	prompt, ok := v.pendingDMChallenge(gid, uid)
 	if !ok {
-		return false, 0, nil
+		return false, 0, 0, nil
 	}
 	if v.RequiredChannelID(gid) != 0 && !v.isChannelMember(c, bot, gid, uid, v.groupLanguage(gid)) {
 		privateMsgID, err := v.sendChannelPrompt(c, bot, gid, uid, prompt.lang)
-		current, changed, oldPrivateMsgID := v.completeDMDelivery(bot, uid, prompt, privateMsgID, err, false)
-		if oldPrivateMsgID != 0 {
-			v.deleteChallenge(c, bot, uid, oldPrivateMsgID)
-		}
+		current, changed, oldPrivateMsgID := v.completeDMDelivery(bot, uid, prompt, privateMsgID, err, false, resetExpiry)
 		if changed {
 			v.save()
 		}
 		if !current {
 			v.deleteChallenge(c, bot, uid, privateMsgID)
-			return false, 0, err
+			return false, 0, 0, err
 		}
-		return true, privateMsgID, err
+		return true, privateMsgID, oldPrivateMsgID, err
 	}
-	result, err := v.sendDMQuestion(c, bot, uid, prompt)
+	result, err := v.sendDMQuestionRetainingPrevious(c, bot, uid, prompt, resetExpiry)
 	if result.stateChanged {
 		v.save()
 	}
 	if !result.current {
 		v.deleteChallenge(c, bot, uid, result.messageID)
-		return false, 0, err
+		return false, 0, 0, err
 	}
-	return true, result.messageID, err
+	return true, result.messageID, result.replacedMessageID, err
 }
 
 type privateDeliveryResult uint8
@@ -1061,18 +1112,23 @@ const (
 )
 
 type privateDeliveryOutcome struct {
-	result       privateDeliveryResult
-	privateMsgID int
+	result               privateDeliveryResult
+	privateMsgID         int
+	replacedPrivateMsgID int
 }
 
 // attemptPrivateChallenge classifies private delivery without assuming that ambiguous failures rejected the send.
 func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, uid int64) privateDeliveryOutcome {
-	active, privateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid)
+	active, privateMsgID, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid, false)
 	if !active {
 		return privateDeliveryOutcome{result: privateGone}
 	}
 	if err == nil {
-		return privateDeliveryOutcome{result: privateDelivered, privateMsgID: privateMsgID}
+		return privateDeliveryOutcome{
+			result:               privateDelivered,
+			privateMsgID:         privateMsgID,
+			replacedPrivateMsgID: replacedPrivateMsgID,
+		}
 	}
 	if tg.IsRateLimited(err) {
 		wait := tg.RetryAfter(err)
@@ -1081,12 +1137,16 @@ func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, ui
 			if !tg.Pace(c, wait) {
 				return privateDeliveryOutcome{result: privateUncertain}
 			}
-			active, privateMsgID, err = v.sendDMChallengeForGroup(c, bot, gid, uid)
+			active, privateMsgID, replacedPrivateMsgID, err = v.sendDMChallengeForGroup(c, bot, gid, uid, false)
 			if !active {
 				return privateDeliveryOutcome{result: privateGone}
 			}
 			if err == nil {
-				return privateDeliveryOutcome{result: privateDelivered, privateMsgID: privateMsgID}
+				return privateDeliveryOutcome{
+					result:               privateDelivered,
+					privateMsgID:         privateMsgID,
+					replacedPrivateMsgID: replacedPrivateMsgID,
+				}
 			}
 		}
 	}
@@ -1116,7 +1176,11 @@ func (v *Service) SendDMChallenge(c context.Context, bot *telego.Bot, uid int64,
 		if !v.challengeResendOK(groupID, uid) {
 			return
 		}
-		if _, _, err := v.sendDMChallengeForGroup(c, bot, groupID, uid); err != nil {
+		active, _, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, groupID, uid, true)
+		if active && replacedPrivateMsgID != 0 {
+			v.deleteChallenge(c, bot, uid, replacedPrivateMsgID)
+		}
+		if err != nil {
 			log.Printf("verify DM for %d in %d failed: %v", uid, groupID, err)
 		}
 		return
@@ -1655,7 +1719,8 @@ const noFaultGrace = 60 * time.Second
 // Timeouts and wrong answers strike; delivery, settlement, restart, and recovery failures do not.
 func strikesUser(reason string) bool {
 	switch reason {
-	case "approve-retry", "ban-retry", "decline-retry", "restart-lapsed", "recovered", "challenge-post-failed":
+	case "approve-retry", "ban-retry", "decline-retry", "restart-lapsed", "recovered",
+		"challenge-post-failed", deferredExpiryReason:
 		return false
 	default:
 		return true

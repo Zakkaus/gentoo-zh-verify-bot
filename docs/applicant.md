@@ -14,7 +14,7 @@ A new request for the same group and user replaces the old pending request, dele
 
 ## Challenge delivery modes
 
-**Implementation:** package `internal/verify`, `(*Service).attemptPrivateChallenge`, `(*Service).postGroupChallenge`, `(*Service).SendDMChallenge`, and `(*Service).sendQuizzes` in `internal/verify/state.go` and `internal/verify/service.go`; package `internal/panel`, `(*Panel).OnStart` in `internal/panel/panel.go`.
+**Implementation:** package `internal/verify`, `(*Service).deliverPendingChallenge`, `(*Service).attemptPrivateChallenge`, `(*Service).postGroupChallenge`, `(*Service).SendDMChallenge`, and `(*Service).sendQuizzes` in `internal/verify/state.go` and `internal/verify/service.go`; package `internal/panel`, `(*Panel).OnStart` in `internal/panel/panel.go`.
 
 The bot first reserves a pending record, then applies the group's `delivery_mode`:
 
@@ -30,7 +30,7 @@ The group challenge contains the applicant, a fresh full deadline, an optional r
 
 Bare `?start=verify` links already in flight retain the old behavior: one live pending is selected from the Go map for the initial channel gate, then `sendQuizzes` sends every live challenge. New group-scoped links do not depend on map order and cannot be diverted by another group's required-channel gate.
 
-The pending record persists the current group and private message IDs. A missing private ID in an older record means there is no private message to delete. Settlement and timeout delete both messages independently; outage re-notification replaces only the group message and retains the private ID for later cleanup.
+The pending record persists the current group and private message IDs. A missing private ID in an older record means there is no private message to delete. Settlement and timeout delete both messages independently. Outage re-notification uses the current `delivery_mode`, records a newly delivered private challenge, and deletes both stale challenges after replacement delivery is confirmed.
 
 If neither delivery can be confirmed, expiry is classified as a bot-caused delivery failure: a successful decline records no verification strike, and the applicant receives a localized timeout result without a cooldown. A confirmed delivery starts the normal full answer window.
 
@@ -73,3 +73,5 @@ Wrong quiz answers, the final failed kernel/fallback reply, the AI tripwire, and
 Failures from the same group and user accumulate only while consecutive failures remain within a six-hour rolling window. `verify_retry_seconds` blocks early re-application after any recorded failure; a nonpositive effective value disables the cooldown. An early re-application receives the current remaining seconds. An ordinary timeout reports whether the applicant may reapply immediately, must wait for the cooldown, or received an automatic ban. At `verify_max_fails`, a positive threshold triggers the effective verification ban. A successful automatic ban clears the strike record. A failed automatic ban is alerted and leaves the threshold strikes in place, so a later failure attempts the ban again. A negative threshold disables automatic bans. Ban duration follows the group’s effective ban setting; zero means permanent.
 
 Bot-caused reasons—failed challenge delivery; approval, administrator-ban, or decline retries; a lapsed deadline during a short restart; and recovery windows—may still decline the pending join request when their grace timer ends, but do not record a strike. Outage-specific deferral is covered in [Outage and recovery](outage-recovery.md).
+
+The first timeout deferred because Telegram is unreachable starts a persisted 48-hour deferral limit. Recovery and restart do not reset it. At the limit, the bot keeps trying Telegram once per minute; after Telegram confirms the decline, the applicant receives a localized notice that verification could not be completed and may submit another join request. This settlement deletes both challenge messages and adds no strike, cooldown, or ban.

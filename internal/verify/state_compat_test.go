@@ -24,31 +24,34 @@ var (
 	stateCompatKernelDeadline = time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC)
 	stateCompatQuizDeadline   = time.Date(2099, 1, 2, 4, 5, 6, 0, time.UTC)
 	stateCompatLegacyDeadline = time.Date(2099, 1, 3, 5, 6, 7, 0, time.UTC)
+	stateCompatDeferredSince  = time.Date(2099, 1, 1, 3, 4, 5, 0, time.UTC)
 	stateCompatHeartbeat      = time.Date(2026, 8, 24, 12, 34, 56, 0, time.UTC)
 	stateCompatStrikeA        = time.Date(2026, 8, 24, 10, 11, 12, 0, time.UTC)
 	stateCompatStrikeB        = time.Date(2026, 8, 24, 11, 12, 13, 0, time.UTC)
 )
 
 type stateCompatPendingWant struct {
-	userID          int64
-	groupID         int64
-	groupMsgID      int
-	privateMsgID    int
-	mode            string
-	lang            string
-	fbAnswers       []string
-	prompted        bool
-	hinted          bool
-	sampleBounced   bool
-	noLinuxReminded bool
-	osClarified     bool
-	tries           int
-	qText           string
-	qOpts           []string
-	correctIdx      int
-	nonce           string
-	name            string
-	deadline        time.Time
+	userID             int64
+	groupID            int64
+	groupMsgID         int
+	privateMsgID       int
+	mode               string
+	lang               string
+	fbAnswers          []string
+	prompted           bool
+	hinted             bool
+	sampleBounced      bool
+	noLinuxReminded    bool
+	osClarified        bool
+	tries              int
+	qText              string
+	qOpts              []string
+	correctIdx         int
+	nonce              string
+	name               string
+	deadline           time.Time
+	deferredSince      time.Time
+	deferralCapReached bool
 }
 
 func stateCompatConfig() *config.Config {
@@ -78,6 +81,7 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 		hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true, tries: 2,
 		qText: "Name the Gentoo Chinese community website", correctIdx: -1,
 		nonce: "kernel-compat-nonce", name: "Kernel Applicant", deadline: stateCompatKernelDeadline,
+		deferredSince: stateCompatDeferredSince,
 	}
 	pendingV.pend[pkey{stateCompatGroupB, 7002}] = &pending{
 		groupMsgID: 502, privateMsgID: 602, mode: config.ModeQuiz, lang: i18n.LangZHHant, prompted: true,
@@ -117,6 +121,7 @@ func TestStateCompatPending(t *testing.T) {
 			hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true, tries: 2,
 			qText: "Name the Gentoo Chinese community website", correctIdx: -1,
 			nonce: "kernel-compat-nonce", name: "Kernel Applicant", deadline: stateCompatKernelDeadline,
+			deferredSince: stateCompatDeferredSince,
 		},
 		{
 			userID: 7002, groupID: stateCompatGroupB, groupMsgID: 502, privateMsgID: 602, mode: "quiz", lang: "zh-hant",
@@ -317,7 +322,8 @@ func stateCompatAssertPending(t *testing.T, v *Service, want []stateCompatPendin
 			got.noLinuxReminded != expected.noLinuxReminded || got.osClarified != expected.osClarified ||
 			got.tries != expected.tries || got.qText != expected.qText || !reflect.DeepEqual(got.qOpts, expected.qOpts) ||
 			got.correctIdx != expected.correctIdx || got.nonce != expected.nonce || got.name != expected.name ||
-			!got.deadline.Equal(expected.deadline) {
+			!got.deadline.Equal(expected.deadline) || !got.deferredSince.Equal(expected.deferredSince) ||
+			got.deferralCapReached != expected.deferralCapReached {
 			t.Errorf("loaded pending group=%d user=%d = %+v, want %+v", expected.groupID, expected.userID, got, expected)
 		}
 		if expected.lang == "" && got.lang != i18n.LangZH {
