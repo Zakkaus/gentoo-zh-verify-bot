@@ -4,19 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"html"
 	"log"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -66,27 +66,55 @@ type modBot interface {
 	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
 }
 
+// verifyTransport is the caller-owned Telegram mechanics used by verification.
+type verifyTransport interface {
+	SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) bool
+	Delete(ctx context.Context, chatID int64, messageID int)
+	Alert(ctx context.Context, adminLogChatID int64, text string)
+	FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string)
+	Ban(ctx context.Context, chatID, userID int64, seconds int, revokeMessages bool) error
+}
+
+// moderationTransport extends verification transport with authorization and moderation mechanics.
+type moderationTransport interface {
+	verifyTransport
+	CachedAdmin(ctx context.Context, chatID, userID int64) (bool, error)
+	FreshAdmin(ctx context.Context, chatID, userID int64) (bool, error)
+	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
+	Mute(ctx context.Context, chatID, userID int64, seconds int) error
+	Unmute(ctx context.Context, chatID, userID int64) error
+}
+
 type pending struct {
-	groupMsgID      int
-	mode            string // challenge type this applicant got: modeKernel (typed answer) or modeQuiz (buttons)
-	lang            lang   // applicant's locale, from their Telegram language_code; every message they see uses it
-	qText           string
-	qOpts           []string
-	correctIdx      int
-	tries           int      // kernel mode: replies used so far (kernelMaxTries before the decline)
-	hinted          bool     // kernel mode: the "no Linux installed yet" fallback was already offered (deliberately not persisted — a restart may re-offer it, which costs nothing)
-	prompted        bool     // kernel mode: the question has actually been DM'd, so a reply can be graded as an answer
-	sampleBounced   bool     // kernel mode: the "you sent back our own example" nudge was already spent
-	noLinuxReminded bool     // kernel mode: the "no-Linux replies need the current minute" reminder was already spent
-	osClarified     bool     // kernel mode: the "you named another OS but sent a real kernel version" clarification was already spent
-	fbAnswers       []string // kernel mode: once the short-answer fallback replaced the kernel question, the answers it is graded against
-	nonce           string   // per-pending token; a quiz button only counts if its nonce matches
-	name            string   // applicant display name, kept so a post-outage re-notify can address them
-	deadline        time.Time
-	timer           *time.Timer
-	epoch           uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
-	lastRenotify    time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
-	done            bool
+	groupMsgID         int
+	mode               string    // challenge type this applicant got: config.ModeKernel (typed answer) or config.ModeQuiz (buttons)
+	lang               i18n.Lang // applicant locale from Telegram; every applicant message uses it
+	storedLang         string    // original persisted tag retained for byte-stable legacy round trips
+	preserveStoredLang bool
+	qText              string
+	qOpts              []string
+	correctIdx         int
+	tries              int      // kernel mode: replies used so far (kernelMaxTries before the decline)
+	hinted             bool     // kernel mode: the "no Linux installed yet" fallback was already offered (deliberately not persisted — a restart may re-offer it, which costs nothing)
+	prompted           bool     // kernel mode: the question has actually been DM'd, so a reply can be graded as an answer
+	sampleBounced      bool     // kernel mode: the "you sent back our own example" nudge was already spent
+	noLinuxReminded    bool     // kernel mode: the "no-Linux replies need the current minute" reminder was already spent
+	osClarified        bool     // kernel mode: the "you named another OS but sent a real kernel version" clarification was already spent
+	fbAnswers          []string // kernel mode: once the short-answer fallback replaced the kernel question, the answers it is graded against
+	nonce              string   // per-pending token; a quiz button only counts if its nonce matches
+	name               string   // applicant display name, kept so a post-outage re-notify can address them
+	deadline           time.Time
+	timer              *time.Timer
+	epoch              uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
+	lastRenotify       time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
+	done               bool
+}
+
+func (p *pending) persistedLang() string {
+	if p.preserveStoredLang {
+		return p.storedLang
+	}
+	return p.lang.String()
 }
 
 // renotifyItem is one applicant to re-notify after an outage — snapshotted under the lock, then
@@ -144,7 +172,7 @@ func (m *verifierStateMutex) Unlock() {
 
 // Verifier owns mutable runtime state; fields document their guarding mutex.
 type Verifier struct {
-	cfg               *Config
+	cfg               *config.Config
 	botUsername       string
 	botID             int64
 	statePath         string
@@ -182,9 +210,9 @@ type Verifier struct {
 	agents            agentTally            // tripped automated agents, counted per claimed model
 	agentPath         string                // persistence path for the automated-agent tally
 	settingsPath      string                // persistence path for runtime settings (verification enabled state)
-	adminMu           sync.Mutex            // guards adminCache
-	adminCache        map[pkey]time.Time    // group+user -> admin-status cache expiry; only ADMINS are cached (short TTL) so the verify/moderation admin checks skip a GetChatMember round-trip on repeat use
-	cleanupTimers     atomic.Int32          // outstanding transient-message deletion timers
+	tgMu              sync.Mutex            // guards telegramBot and telegramClient
+	telegramBot       *telego.Bot           // concrete handler bot wrapped by telegramClient
+	telegramClient    *tg.Client            // shared transport client; owns admin cache and cleanup timer counts
 	lastOnline        time.Time             // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
 	hbPath            string                // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
 	probe             liveProbe             // liveness prober (the bot) for reachable(); nil in tests => assume reachable
@@ -201,17 +229,12 @@ func loadStatsLoc(name string) *time.Location {
 
 // Standard outbound HTML disables link previews.
 func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
-	return tu.Message(tu.ID(chatID), text).
-		WithParseMode(telego.ModeHTML).
-		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})
+	return tg.HTMLMessage(chatID, text)
 }
 
 // Reply binding disambiguates concurrent slow lookups; zero means no binding.
 func replyParams(msgID int) *telego.ReplyParameters {
-	if msgID == 0 {
-		return nil
-	}
-	return &telego.ReplyParameters{MessageID: msgID}
+	return tg.ReplyParameters(msgID)
 }
 
 // Evict the least severe counters first; key order makes equal-count eviction deterministic.
@@ -243,13 +266,12 @@ func (v *Verifier) pruneWarnsLocked() {
 }
 
 // NewVerifier seeds runtime defaults and bounds mutable maps.
-func NewVerifier(cfg *Config) *Verifier {
+func NewVerifier(cfg *config.Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
 		pend: make(map[pkey]*pending), terminal: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
 		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, challengeAt: map[int64]time.Time{},
-		queryHits:  map[int64][]time.Time{},
-		adminCache: map[pkey]time.Time{},
-		vfail:      map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
+		queryHits: map[int64][]time.Time{},
+		vfail:     map[pkey]*vfailRec{}, banSecs: cfg.BanSeconds,
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders,
 		lastOnline:  time.Now(), // begin online; the heartbeat only flips us offline after missed contact
 		nameSpoiler: true}       // default ON: spam joiners often set their NAME to an advert; hide it behind a spoiler
@@ -270,6 +292,30 @@ func NewVerifier(cfg *Config) *Verifier {
 	return v
 }
 
+func (v *Verifier) telegram(bot *telego.Bot) *tg.Client {
+	v.tgMu.Lock()
+	defer v.tgMu.Unlock()
+	if v.telegramClient == nil || v.telegramBot != bot {
+		v.telegramBot = bot
+		v.telegramClient = tg.New(bot)
+	}
+	return v.telegramClient
+}
+
+func (v *Verifier) verificationTransport(bot verifyBot) verifyTransport {
+	if transport, ok := bot.(verifyTransport); ok {
+		return transport
+	}
+	return v.telegram(bot.(*telego.Bot))
+}
+
+func (v *Verifier) moderationTransport(bot modBot) moderationTransport {
+	if transport, ok := bot.(moderationTransport); ok {
+		return transport
+	}
+	return v.telegram(bot.(*telego.Bot))
+}
+
 func (v *Verifier) lookupAutoDelete() (time.Duration, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -288,43 +334,32 @@ func (v *Verifier) setLookupAutoDelete(ttl time.Duration, on bool) {
 // Delete group lookup commands and answers together using a fresh timer context.
 func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID, respMsgID int) {
 	ttl, on := v.lookupAutoDelete()
-	if !on || respMsgID == 0 || chatID >= 0 {
-		return // private chats have non-negative ids — nothing to keep tidy there
+	if !on {
+		ttl = 0
 	}
-	time.AfterFunc(ttl, func() {
-		_ = bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: respMsgID})
-		if cmdMsgID != 0 {
-			_ = bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: cmdMsgID})
-		}
-	})
+	v.telegram(bot).ScheduleCleanup(chatID, cmdMsgID, respMsgID, ttl)
 }
 
 func msgID(m *telego.Message) int {
-	if m == nil {
-		return 0
-	}
-	return m.MessageID
+	return tg.MessageID(m)
 }
 
 // Plain text preserves angle-bracket placeholders and still follows reply/cleanup semantics.
 func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID int64, replyTo int, text string) {
-	m := tu.Message(tu.ID(chatID), text)
-	if rp := replyParams(replyTo); rp != nil {
-		m = m.WithReplyParameters(rp)
+	ttl, on := v.lookupAutoDelete()
+	if !on {
+		ttl = 0
 	}
-	sent, _ := bot.SendMessage(c, m)
-	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
+	v.telegram(bot).ReplyPlain(c, chatID, replyTo, text, ttl)
 }
 
 // HTML lookup replies require callers to escape dynamic content.
 func (v *Verifier) replyLookupHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, htmlText string) *telego.Message {
-	m := htmlMessage(chatID, htmlText)
-	if rp := replyParams(replyTo); rp != nil {
-		m = m.WithReplyParameters(rp)
+	ttl, on := v.lookupAutoDelete()
+	if !on {
+		ttl = 0
 	}
-	sent, _ := bot.SendMessage(c, m)
-	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
-	return sent
+	return v.telegram(bot).ReplyHTML(c, chatID, replyTo, htmlText, ttl)
 }
 
 const privateQueryWindow = time.Minute
@@ -439,95 +474,11 @@ func (v *Verifier) stats() (date string, approved, declined int) {
 	return v.statDate, v.approved, v.declined
 }
 
-// Serialize snapshot creation and commit so an older snapshot cannot overwrite a newer save.
-var stateWriteMu sync.Mutex
-
-// Callers must enter before taking their state mutex to preserve lock order.
-func saveJSONFile(path string, snapshot func() any) {
-	stateWriteMu.Lock()
-	defer stateWriteMu.Unlock()
-	writeJSONFileLocked(path, snapshot())
-}
-
-// Stable values still use the ordered atomic-write path.
-func writeJSONFile(path string, val any) {
-	saveJSONFile(path, func() any { return val })
-}
-
-// The caller holds stateWriteMu; fsync precedes same-directory atomic rename.
-func writeJSONFileLocked(path string, val any) {
-	data, err := json.Marshal(val)
-	if err != nil {
-		log.Printf("state: marshal %s: %v", path, err)
-		return
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*") // mode 0600
-	if err != nil {
-		log.Printf("state: temp for %s: %v", path, err)
-		return
-	}
-	tmp := f.Name()
-	_, werr := f.Write(data)
-	if werr == nil {
-		werr = f.Sync() // flush data before rename so a crash cannot expose a torn/empty state
-	}
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		_ = os.Remove(tmp)
-		log.Printf("state: write %s: %v", path, werr)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		log.Printf("state: rename %s: %v", path, err)
-		return
-	}
-	// The file sync does not make the directory entry durable across a power loss.
-	if d, derr := os.Open(filepath.Dir(path)); derr == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-}
-
-type stateReadError struct {
-	cause error
-}
-
-func (e *stateReadError) Error() string { return e.cause.Error() }
-func (e *stateReadError) Unwrap() error { return e.cause }
-
-func stateReadFailed(err error) bool {
-	_, ok := err.(*stateReadError)
-	return ok
-}
-
-// Only absence is a first run; unreadable state disables writes to preserve recoverable data.
-func loadJSONFile(path string, dst any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		log.Printf("ERROR state load %s: %v; writes disabled until restart", path, err)
-		return &stateReadError{cause: err}
-	}
-	if err := json.Unmarshal(data, dst); err != nil {
-		log.Printf("state load %s: %v — backing up to %s.corrupt and starting fresh", path, err, path)
-		if rerr := os.Rename(path, path+".corrupt"); rerr != nil {
-			log.Printf("state load: could not back up corrupt %s: %v", path, rerr)
-		}
-		return err
-	}
-	return nil
-}
-
 func (v *Verifier) save() {
 	if v.statePath == "" {
 		return
 	}
-	saveJSONFile(v.statePath, func() any {
+	_ = store.Save(v.statePath, func() any {
 		v.mu.Lock()
 		defer v.mu.Unlock()
 		recs := make([]pendingRec, 0, len(v.pend))
@@ -536,7 +487,7 @@ func (v *Verifier) save() {
 				continue
 			}
 			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-				Mode: p.mode, Lang: string(p.lang), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries,
+				Mode: p.mode, Lang: p.persistedLang(), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries,
 				Hinted: p.hinted, SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
 				Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 		}
@@ -549,8 +500,8 @@ func (v *Verifier) load(bot verifyBot) {
 		return
 	}
 	var recs []pendingRec
-	if err := loadJSONFile(v.statePath, &recs); err != nil {
-		if stateReadFailed(err) {
+	if err := store.Load(v.statePath, &recs); err != nil {
+		if store.ReadFailed(err) {
 			v.statePath = ""
 		}
 		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
@@ -574,16 +525,17 @@ func (v *Verifier) load(bot verifyBot) {
 		}
 		mode := r.Mode
 		if mode == "" {
-			mode = modeQuiz // a record written before kernel mode existed always held a quiz
+			mode = (config.ModeQuiz) // a record written before kernel mode existed always held a quiz
 		}
 		// Kernel challenges have no options; quiz payloads must remain winnable.
-		if mode == modeQuiz && (len(r.QOpts) < 2 || r.CorrectIdx < 0 || r.CorrectIdx >= len(r.QOpts)) {
+		if mode == (config.ModeQuiz) && (len(r.QOpts) < 2 || r.CorrectIdx < 0 || r.CorrectIdx >= len(r.QOpts)) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
 		}
-		p := &pending{groupMsgID: r.GroupMsgID, mode: mode, lang: lang(r.Lang), fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries,
-			hinted: r.Hinted, sampleBounced: r.SampleBounced, noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts,
-			correctIdx: r.CorrectIdx, nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
+		p := &pending{groupMsgID: r.GroupMsgID, mode: mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
+			fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries, hinted: r.Hinted, sampleBounced: r.SampleBounced,
+			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
+			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
 		reason := challengeExpiryReason(r.GroupMsgID)
 		switch {
@@ -679,7 +631,7 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 
-// Leave any group or channel outside Config.IsKnownChat.
+// Leave any group or channel outside config.Config.IsKnownChat.
 // Configure a guarded group before adding the bot.
 func (v *Verifier) onMyChatMember(ctx *th.Context, update telego.Update) error {
 	cm := update.MyChatMember
@@ -723,7 +675,7 @@ func (v *Verifier) isChatMember(c context.Context, bot modBot, chatID, uid int64
 // Lookup failure is untrusted and follows normal verification.
 // Approval failure returns trusted=true so normal verification runs without cooldown rejection.
 func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) (handled, trusted bool) {
-	for _, src := range v.cfg.trustedGroups(gid) {
+	for _, src := range v.cfg.TrustedGroups(gid) {
 		if src == 0 || src == gid {
 			continue // ignore a blank or self-referential entry
 		}
@@ -864,7 +816,7 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	// Applicant messages follow Telegram's interface language.
-	ul := langFor(jr.From.LanguageCode)
+	ul := i18n.FromTelegram(jr.From.LanguageCode)
 	mode, text, opts, correctIdx := v.newChallenge(gid, ul)
 	name := displayName(&jr.From)
 	p := &pending{mode: mode, lang: ul, qText: text, qOpts: opts, correctIdx: correctIdx,
@@ -904,7 +856,7 @@ func (v *Verifier) hasPending(uid int64) bool {
 }
 
 // Use one pending for the DM channel prompt; each answer still enforces its own group's channel.
-func (v *Verifier) firstPending(uid int64) (gid int64, ul lang, ok bool) {
+func (v *Verifier) firstPending(uid int64) (gid int64, ul i18n.Lang, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
@@ -912,7 +864,7 @@ func (v *Verifier) firstPending(uid int64) (gid int64, ul lang, ok bool) {
 			return k.gid, p.lang, true
 		}
 	}
-	return 0, langZH, false
+	return 0, i18n.LangZH, false
 }
 
 // Throttle /start fan-out per user without delaying normal channel-follow completion.
@@ -937,21 +889,23 @@ func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64
 	if ok && !v.challengeResendOK(uid) {
 		return // pressed again within the cooldown: the prompt they already have is still valid
 	}
+	channel := &i18n.Messages.Verification.Channel
 	if !ok {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), tr(ul).NoPending))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), channel.NoPending.For(ul)))
 		return
 	}
-	t := tr(ul)
 	// The DM prompt uses one channel; answer settlement enforces each group separately.
-	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
+	if v.cfg.RequiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		var rows [][]telego.InlineKeyboardButton
 		if curl := v.channelURL(gid); curl != "" {
-			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: fmt.Sprintf(t.FollowButton, v.cfg.channelDisplay(gid)), URL: curl}))
+			rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{
+				Text: channel.FollowButton.Render(ul, v.cfg.ChannelDisplayFor(gid)), URL: curl,
+			}))
 		}
-		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: t.ContinueButton,
+		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: channel.ContinueButton.For(ul),
 			CallbackData: recheckPrefix + strconv.FormatInt(gid, 10) + ":" + strconv.FormatInt(uid, 10)}))
 		_, _ = bot.SendMessage(c, htmlMessage(uid,
-			fmt.Sprintf(t.FollowPrompt, v.channelLinkHTML(gid, ul))).
+			channel.FollowPrompt.Render(ul, v.channelLinkHTML(gid, ul))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 		return
 	}
@@ -963,7 +917,7 @@ func (v *Verifier) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 	type dmq struct {
 		gid      int64
 		mode     string
-		lang     lang
+		lang     i18n.Lang
 		text     string
 		opts     []string
 		nonce    string
@@ -979,7 +933,7 @@ func (v *Verifier) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 	}
 	v.mu.Unlock()
 	for _, dq := range qs {
-		if dq.mode == modeKernel {
+		if dq.mode == (config.ModeKernel) {
 			left := kernelMaxTries - dq.tries
 			render := kernelPromptHTML
 			if dq.fallback { // already moved to the short-answer question — re-send THAT, not the kernel one
@@ -999,7 +953,7 @@ func (v *Verifier) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 				telego.InlineKeyboardButton{Text: opt, CallbackData: fmt.Sprintf("%s%s:%s:%s:%d", answerPrefix, gidStr, uidStr, dq.nonce, i)}))
 		}
 		_, _ = bot.SendMessage(c, htmlMessage(uid,
-			fmt.Sprintf(tr(dq.lang).QuizPrompt, html.EscapeString(dq.text))).
+			i18n.Messages.Verification.Challenge.QuizPrompt.Render(dq.lang, html.EscapeString(dq.text))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	}
 }
@@ -1015,57 +969,7 @@ func (v *Verifier) markPrompted(gid, uid int64) {
 
 // Return success only when some rendering was delivered.
 func (v *Verifier) sendVerifyDM(c context.Context, bot verifyBot, uid int64, rich, simpler string) bool {
-	_, err := bot.SendMessage(c, htmlMessage(uid, rich))
-	if err == nil {
-		return true
-	}
-	if !markupRejected(err) {
-		// Do not retry transient failures: the first request may have landed despite the error.
-		log.Printf("verify DM to %d failed (%v)", uid, err)
-		return false
-	}
-	log.Printf("verify DM to %d rejected (%v) — retrying without the collapsed quote", uid, err)
-	if simpler != "" && simpler != rich {
-		if _, err := bot.SendMessage(c, htmlMessage(uid, simpler)); err == nil {
-			return true
-		}
-	}
-	if _, err := bot.SendMessage(c, tu.Message(tu.ID(uid), stripHTML(simpler))); err != nil {
-		log.Printf("verify DM to %d failed even as plain text: %v", uid, err)
-		return false
-	}
-	return true
-}
-
-// Re-render only opaque Bot API errors that indicate rejected HTML.
-func markupRejected(err error) bool {
-	if err == nil {
-		return false
-	}
-	e := strings.ToLower(err.Error())
-	return strings.Contains(e, "parse") || strings.Contains(e, "entit") || strings.Contains(e, "bad request")
-}
-
-// Strip tags only from bot-generated HTML before the plain-text fallback.
-func stripHTML(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	depth := 0
-	for _, r := range s {
-		switch {
-		case r == '<':
-			depth++
-		case r == '>' && depth > 0:
-			depth--
-		case depth == 0:
-			b.WriteRune(r)
-		}
-	}
-	out := b.String()
-	for _, p := range [][2]string{{"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&#39;", "'"}, {"&amp;", "&"}} {
-		out = strings.ReplaceAll(out, p[0], p[1])
-	}
-	return out
+	return v.verificationTransport(bot).SendHTMLFallback(c, uid, rich, simpler)
 }
 
 func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error {
@@ -1082,22 +986,24 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 	}
 	gid, _ := strconv.ParseInt(parts[0], 10, 64)
 	uid, _ := strconv.ParseInt(parts[1], 10, 64)
-	t := tr(langFor(cq.From.LanguageCode))
+	ul := i18n.FromTelegram(cq.From.LanguageCode)
+	result := &i18n.Messages.Verification.Result
+	channel := &i18n.Messages.Verification.Channel
 	if cq.From.ID != uid {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.NotYours).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.NotYours.For(ul)).WithShowAlert())
 		return nil
 	}
 	if !v.hasPending(uid) {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.AlreadyHandled))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.AlreadyHandled.For(ul)))
 		return nil
 	}
-	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
+	if v.cfg.RequiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(fmt.Sprintf(t.NotFollowedYet, v.cfg.channelDisplay(gid))).WithShowAlert())
+			WithText(channel.NotFollowedYet.Render(ul, v.cfg.ChannelDisplayFor(gid))).WithShowAlert())
 		return nil
 	}
 	// Acknowledge before sends; membership toasts remain result-driven and happen first.
-	_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.ContinueOK))
+	_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(channel.ContinueOK.For(ul)))
 	v.sendQuizzes(c, bot, uid)
 	return nil
 }
@@ -1128,9 +1034,11 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
 	}
-	t := tr(langFor(cq.From.LanguageCode))
+	ul := i18n.FromTelegram(cq.From.LanguageCode)
+	result := &i18n.Messages.Verification.Result
+	channel := &i18n.Messages.Verification.Channel
 	if cq.From.ID != owner {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.NotYours).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.NotYours.For(ul)).WithShowAlert())
 		return nil
 	}
 
@@ -1143,31 +1051,32 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 	}
 	v.mu.Unlock()
 	if done {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.AlreadyHandled))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.AlreadyHandled.For(ul)))
 		return nil
 	}
 	if nonce != curNonce {
 		// A stale button from a previous (overwritten) request — don't let it answer this quiz.
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.StaleQuestion).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.StaleQuestion.For(ul)).WithShowAlert())
 		return nil
 	}
 
 	if choice != correctIdx {
 		_, banned := v.decline(c, bot, gid, owner, nonce, "wrong answer")
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(langFor(cq.From.LanguageCode), banned)).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(v.wrongAnswerText(ul, banned)).WithShowAlert())
 		return nil
 	}
 	if !v.isChannelMember(c, bot, gid, owner) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).
-			WithText(fmt.Sprintf(t.NotFollowedYet, v.cfg.channelDisplay(gid))).WithShowAlert())
+			WithText(channel.NotFollowedYet.Render(ul, v.cfg.ChannelDisplayFor(gid))).WithShowAlert())
 		return nil
 	}
 	p, claimed := v.claimPendingNonce(gid, owner, nonce)
 	if claimed && v.executeApprove(c, bot, gid, owner, p) {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.Approved))
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), t.Approved))
+		text := result.Approved.For(ul)
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(text))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), text))
 	} else {
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.AlreadyHandled).WithShowAlert())
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(result.AlreadyHandled.For(ul)).WithShowAlert())
 	}
 	return nil
 }
@@ -1219,7 +1128,7 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 
 // Required-channel lookup uses modBot so fail-open policy remains testable.
 func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID int64) bool {
-	rc := v.cfg.requiredChannel(gid)
+	rc := v.cfg.RequiredChannel(gid)
 	if rc == 0 {
 		return true
 	}
@@ -1229,7 +1138,7 @@ func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID in
 		// Apply configured fail-open policy and alert admins instead of silently blocking everyone.
 		if v.botID != 0 {
 			if _, e2 := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: v.botID}); e2 != nil {
-				open := v.cfg.failOpenChannel()
+				open := v.cfg.FailOpenChannel()
 				log.Printf("isChannelMember: bot cannot access required channel %d (%v) for applicant %d; fail_open=%v — make the bot an admin of that channel", rc, e2, userID, open)
 				v.channelAccessAlert(c, bot, rc)
 				return open // configurable: default fail-open (don't lock everyone out); strict deployments set required_channel_fail_open:false
@@ -1248,19 +1157,19 @@ func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID in
 
 // Prefer an explicit private-channel invite; otherwise derive a public t.me URL.
 func (v *Verifier) channelURL(gid int64) string {
-	if u := v.cfg.channelInvite(gid); u != "" {
+	if u := v.cfg.ChannelInvite(gid); u != "" {
 		return u
 	}
-	if d := v.cfg.channelDisplay(gid); strings.HasPrefix(d, "@") {
+	if d := v.cfg.ChannelDisplayFor(gid); strings.HasPrefix(d, "@") {
 		return "https://t.me/" + d[1:]
 	}
 	return ""
 }
 
-func (v *Verifier) channelLinkHTML(gid int64, ul lang) string {
-	d := v.cfg.channelDisplay(gid)
+func (v *Verifier) channelLinkHTML(gid int64, ul i18n.Lang) string {
+	d := v.cfg.ChannelDisplayFor(gid)
 	if d == "" {
-		d = tr(ul).ChannelFallbackName // an unnamed channel still has to read naturally in the applicant's language
+		d = i18n.Messages.Verification.Channel.FallbackName.For(ul) // unnamed channels still read naturally
 	}
 	if u := v.channelURL(gid); u != "" {
 		return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(d))
@@ -1356,29 +1265,17 @@ func (v *Verifier) stopForShutdown() {
 }
 
 func (v *Verifier) deleteChallenge(c context.Context, bot verifyBot, gid int64, msgID int) {
-	if msgID != 0 {
-		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msgID})
-	}
+	v.verificationTransport(bot).Delete(c, gid, msgID)
 }
 
 func (v *Verifier) adminAlert(c context.Context, bot verifyBot, text string) {
-	if v.cfg.AdminLogChatID != 0 {
-		if _, err := bot.SendMessage(c, tu.Message(tu.ID(v.cfg.AdminLogChatID), text)); err != nil {
-			log.Printf("adminAlert to %d failed (check admin_log_chat_id / bot membership): %v", v.cfg.AdminLogChatID, err)
-		}
-	}
+	v.verificationTransport(bot).Alert(c, v.cfg.AdminLogChatID, text)
 }
 
 // Failure notices fall back to the acting group when no admin-log chat is configured.
 // This keeps optimistic callback acknowledgements from hiding rare network failures.
 func (v *Verifier) failAlert(c context.Context, bot verifyBot, gid int64, text string) {
-	target := v.cfg.AdminLogChatID
-	if target == 0 {
-		target = gid
-	}
-	if _, err := bot.SendMessage(c, tu.Message(tu.ID(target), text)); err != nil {
-		log.Printf("failAlert to %d failed: %v", target, err)
-	}
+	v.verificationTransport(bot).FailAlert(c, v.cfg.AdminLogChatID, gid, text)
 }
 
 // Throttle unreadable-channel alerts per channel to avoid flooding operators.
@@ -1391,7 +1288,7 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot verifyBot, channelI
 	v.chanAlert[channelID] = time.Now()
 	v.mu.Unlock()
 	mode := "正在批准已通过答题的申请人(fail-open)" // matches the default
-	if !v.cfg.failOpenChannel() {
+	if !v.cfg.FailOpenChannel() {
 		mode = "正在拒绝这些申请,请申请人稍后重试(fail-closed)"
 	}
 	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必需关注频道 %d 的成员状态(可能已不再是该频道管理员)——频道门槛暂时无法核验,%s。请重新把机器人设为该频道管理员。", channelID, mode))
@@ -1481,15 +1378,15 @@ func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 }
 
 // Wrong-answer feedback distinguishes automatic ban from cooldown retry.
-func (v *Verifier) wrongAnswerText(l lang, banned bool) string {
-	t := tr(l)
+func (v *Verifier) wrongAnswerText(l i18n.Lang, banned bool) string {
+	result := &i18n.Messages.Verification.Result
 	if banned {
-		return t.WrongBanned
+		return result.WrongBanned.For(l)
 	}
-	if s := v.cfg.VerifyRetrySeconds; s > 0 {
-		return fmt.Sprintf(t.WrongRetry, s)
+	if seconds := v.cfg.VerifyRetrySeconds; seconds > 0 {
+		return result.WrongRetry.Render(l, seconds)
 	}
-	return t.WrongNoWait
+	return result.WrongNoWait.For(l)
 }
 
 // Bot-caused failures receive a meaningful strike-free retry window.
@@ -1655,7 +1552,7 @@ func (v *Verifier) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoc
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.
-func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, ul lang) int {
+func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, ul i18n.Lang) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 	mention := joinerLabel(uid, name, v.nameSpoilerOn())
 	link := ""
@@ -1663,20 +1560,20 @@ func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid
 		link = "https://t.me/" + v.botUsername + "?start=verify"
 	}
 	// Keep channel navigation inside the DM verification flow.
-	t := tr(ul)
+	group := &i18n.Messages.Verification.Group
 	channelHint := ""
-	if v.cfg.requiredChannel(gid) != 0 {
-		channelHint = fmt.Sprintf(t.GroupChannelHint, html.EscapeString(v.cfg.channelDisplay(gid)))
+	if v.cfg.RequiredChannel(gid) != 0 {
+		channelHint = group.ChannelHint.Render(ul, html.EscapeString(v.cfg.ChannelDisplayFor(gid)))
 	}
 	linkText := ""
 	if link != "" {
-		linkText = fmt.Sprintf(t.GroupLinkText, link)
+		linkText = group.LinkText.Render(ul, link)
 	}
-	body := fmt.Sprintf(t.GroupBody, mention, linkText, v.cfg.TimeoutSeconds, channelHint)
+	body := group.Body.Render(ul, mention, linkText, v.cfg.TimeoutSeconds, channelHint)
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
-		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: t.VerifyButton, URL: link}))
+		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: group.VerifyButton.For(ul), URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
 		telego.InlineKeyboardButton{Text: "👮 管理员直接通过", CallbackData: adminPrefix + "pass:" + gidStr + ":" + uidStr},
@@ -1706,7 +1603,7 @@ func (v *Verifier) saveHeartbeat() {
 	if t.IsZero() {
 		return
 	}
-	writeJSONFile(v.hbPath, heartbeatRec{LastOnline: t.Unix()})
+	_ = store.Write(v.hbPath, heartbeatRec{LastOnline: t.Unix()})
 }
 
 // Missing or unreadable heartbeat state returns zero time.
@@ -1715,8 +1612,8 @@ func (v *Verifier) loadHeartbeat() time.Time {
 		return time.Time{}
 	}
 	var r heartbeatRec
-	if err := loadJSONFile(v.hbPath, &r); err != nil {
-		if stateReadFailed(err) {
+	if err := store.Load(v.hbPath, &r); err != nil {
+		if store.ReadFailed(err) {
 			v.hbPath = ""
 		}
 		return time.Time{}
@@ -1818,7 +1715,8 @@ func (v *Verifier) onRecovery(c context.Context, bot verifyBot, outage time.Dura
 // Re-notify without holding v.mu, then update only the still-current pending's message ID.
 func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
 	ul := p.lang
-	_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(tr(ul).Renotify, outageText(ul, outage))))
+	notice := i18n.Messages.Verification.Recovery.Renotify.Render(ul, outageText(ul, outage))
+	_, _ = bot.SendMessage(c, htmlMessage(uid, notice))
 	newMsg := v.postGroupChallenge(c, bot, gid, uid, name, ul)
 	if oldMsg != 0 && oldMsg != newMsg {
 		v.deleteChallenge(c, bot, gid, oldMsg)
@@ -1831,12 +1729,12 @@ func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid in
 }
 
 // Render whole seconds, minutes, or hours in the applicant's locale.
-func outageText(l lang, d time.Duration) string {
+func outageText(l i18n.Lang, d time.Duration) string {
 	units := [3]string{" 秒", " 分钟", " 小时"}
 	switch l {
-	case langZHT:
+	case i18n.LangZHHant:
 		units = [3]string{" 秒", " 分鐘", " 小時"}
-	case langEN:
+	case i18n.LangEN:
 		units = [3]string{" seconds", " minutes", " hours"}
 	}
 	switch {

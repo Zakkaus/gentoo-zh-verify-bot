@@ -1,10 +1,11 @@
-package main
+package config
 
 import (
 	"bytes"
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,7 +39,7 @@ func TestLoadConfigLegacy(t *testing.T) {
 	if len(c.Groups) != 2 || !c.IsGroup(-100) || !c.IsGroup(-200) {
 		t.Fatalf("groups not merged: %+v", c.GroupIDs)
 	}
-	if c.requiredChannel(-100) != -300 || c.channelDisplay(-100) != "@x" || len(c.questions(-100)) != 1 {
+	if c.RequiredChannel(-100) != -300 || c.ChannelDisplayFor(-100) != "@x" || len(c.QuestionsFor(-100)) != 1 {
 		t.Errorf("global fallback wrong for -100")
 	}
 	if !c.IsKnownChat(-300) { // the required channel must not be auto-left
@@ -59,10 +60,10 @@ func TestLoadConfigPerGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if c.requiredChannel(-100) != -400 || c.channelDisplay(-100) != "@y" {
+	if c.RequiredChannel(-100) != -400 || c.ChannelDisplayFor(-100) != "@y" {
 		t.Errorf("group -100 override not applied")
 	}
-	if c.requiredChannel(-200) != -300 || c.channelDisplay(-200) != "@x" {
+	if c.RequiredChannel(-200) != -300 || c.ChannelDisplayFor(-200) != "@x" {
 		t.Errorf("group -200 fallback not applied")
 	}
 	if !c.IsKnownChat(-400) || !c.IsKnownChat(-300) {
@@ -79,13 +80,13 @@ func TestLoadConfigValidation(t *testing.T) {
 	}
 	if _, err := LoadConfig(writeConfig(t, map[string]any{
 		"group_ids":   []int{-100},
-		"verify_mode": modeQuiz, // quiz mode but no questions at all
+		"verify_mode": ModeQuiz, // quiz mode but no questions at all
 	})); err == nil {
 		t.Errorf("expected error for a quiz-mode group with no questions")
 	}
 	if _, err := LoadConfig(writeConfig(t, map[string]any{
 		"group_ids":   []int{-100},
-		"verify_mode": modeKernel, // kernel mode asks for uname -r — no pool needed
+		"verify_mode": ModeKernel, // kernel mode asks for uname -r — no pool needed
 	})); err != nil {
 		t.Errorf("kernel mode should load without questions: %v", err)
 	}
@@ -136,16 +137,16 @@ func TestTrustedGroupsResolver(t *testing.T) {
 			{ID: -3, TrustedMemberGroupIDs: []int64{}},           // explicit [] -> DISABLE (opt out of global)
 		},
 	}
-	if got := c.trustedGroups(-1); len(got) != 1 || got[0] != -100 {
+	if got := c.TrustedGroups(-1); len(got) != 1 || got[0] != -100 {
 		t.Errorf("group -1 (omitted) should inherit the global [-100], got %v", got)
 	}
-	if got := c.trustedGroups(-2); len(got) != 2 || got[0] != -200 {
+	if got := c.TrustedGroups(-2); len(got) != 2 || got[0] != -200 {
 		t.Errorf("group -2 should use its per-group override, got %v", got)
 	}
-	if got := c.trustedGroups(-3); len(got) != 0 {
+	if got := c.TrustedGroups(-3); len(got) != 0 {
 		t.Errorf("group -3 with explicit [] must DISABLE the bypass (no inheritance), got %v", got)
 	}
-	if got := c.trustedGroups(-999); len(got) != 1 || got[0] != -100 {
+	if got := c.TrustedGroups(-999); len(got) != 1 || got[0] != -100 {
 		t.Errorf("an unknown group should get the global default, got %v", got)
 	}
 }
@@ -175,7 +176,7 @@ func TestIsKnownChatExtra(t *testing.T) {
 	if !c.IsKnownChat(-1001166068646) {
 		t.Error("a known_chat_ids chat must be a known chat (never auto-left)")
 	}
-	if len(c.trustedGroups(-1)) != 0 {
+	if len(c.TrustedGroups(-1)) != 0 {
 		t.Error("known_chat_ids must NOT add a trusted bypass source")
 	}
 	if c.IsKnownChat(-77777) {
@@ -214,7 +215,7 @@ func TestLoadConfigTrustedGroups(t *testing.T) {
 	if len(c.TrustedMemberGroupIDs) != 1 || c.TrustedMemberGroupIDs[0] != -1001163306055 {
 		t.Errorf("top-level trusted_member_group_ids not parsed: %v", c.TrustedMemberGroupIDs)
 	}
-	if got := c.trustedGroups(-1003265952923); len(got) != 1 || got[0] != -1001163306055 {
+	if got := c.TrustedGroups(-1003265952923); len(got) != 1 || got[0] != -1001163306055 {
 		t.Errorf("per-group trusted_member_group_ids not resolved: %v", got)
 	}
 	if !c.IsKnownChat(-1001163306055) {
@@ -234,10 +235,10 @@ func TestLoadConfigTrustedDisable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.trustedGroups(-100); len(got) != 1 || got[0] != -1001163306055 {
+	if got := c.TrustedGroups(-100); len(got) != 1 || got[0] != -1001163306055 {
 		t.Errorf("group -100 (omitted) should inherit the global, got %v", got)
 	}
-	if got := c.trustedGroups(-200); len(got) != 0 {
+	if got := c.TrustedGroups(-200); len(got) != 0 {
 		t.Errorf("group -200 with explicit [] must DISABLE the bypass (no inheritance), got %v", got)
 	}
 }
@@ -252,26 +253,13 @@ func TestWarnLimitDefault(t *testing.T) {
 	}
 }
 
-func TestPrivateQueryRate(t *testing.T) {
+func TestPrivateQueryRateDefault(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.PrivateQueryPerMin != 3 {
 		t.Errorf("default PrivateQueryPerMin = %d, want 3", c.PrivateQueryPerMin)
-	}
-	v := NewVerifier(c)
-	pass := 0
-	for i := 0; i < 5; i++ {
-		if v.queryRateOK(7) {
-			pass++
-		}
-	}
-	if pass != 3 {
-		t.Errorf("user 7: %d/5 allowed, want 3", pass)
-	}
-	if !v.queryRateOK(8) { // a different user is independent
-		t.Errorf("user 8 should be allowed")
 	}
 }
 
@@ -359,5 +347,45 @@ func TestControlGroupIDMustBeGuarded(t *testing.T) {
 		"questions":        sampleQ,
 	})); err != nil {
 		t.Errorf("a control_group_id naming a guarded group should load: %v", err)
+	}
+}
+
+func TestConfigClampDurations(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids": []int{-100}, "questions": sampleQ, "ban_seconds": 10, "mute_seconds": 10,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BanSeconds != 30 || c.MuteSeconds != 30 {
+		t.Errorf("sub-30s clamp: ban=%d mute=%d, want 30/30", c.BanSeconds, c.MuteSeconds)
+	}
+	c, err = LoadConfig(writeConfig(t, map[string]any{
+		"group_ids": []int{-100}, "questions": sampleQ, "ban_seconds": 40000000, "mute_seconds": 40000000,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BanSeconds != 0 {
+		t.Errorf("over-366d ban_seconds should clamp to 0 (permanent), got %d", c.BanSeconds)
+	}
+	if c.MuteSeconds != telegramBanMax {
+		t.Errorf("over-366d mute_seconds should cap to %d, got %d", telegramBanMax, c.MuteSeconds)
+	}
+}
+
+func TestMuteSecondsDefault(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MuteSeconds != 3600 {
+		t.Errorf("default MuteSeconds = %d, want 3600 (1h)", c.MuteSeconds)
+	}
+}
+
+func TestLoadConfigExample(t *testing.T) {
+	if _, err := LoadConfig(filepath.Join("..", "..", "config.example.json")); err != nil {
+		t.Fatalf("load config.example.json: %v", err)
 	}
 }

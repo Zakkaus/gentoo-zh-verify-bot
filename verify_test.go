@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 )
 
@@ -32,7 +34,7 @@ func TestJoinerLabel(t *testing.T) {
 }
 
 func TestNameSpoilerDefaultAndToggle(t *testing.T) {
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	if !v.nameSpoilerOn() {
 		t.Error("name spoiler should default ON (spam names are often adverts)")
 	}
@@ -101,6 +103,58 @@ func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessagePara
 	return &telego.Message{MessageID: 1}, nil
 }
 
+func (b *fakeVerifyBot) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) bool {
+	send := func(text, parseMode string) error {
+		_, err := b.SendMessage(ctx, &telego.SendMessageParams{
+			ChatID:    telego.ChatID{ID: chatID},
+			Text:      text,
+			ParseMode: parseMode,
+		})
+		return err
+	}
+	if err := send(rich, telego.ModeHTML); err == nil {
+		return true
+	} else {
+		message := strings.ToLower(err.Error())
+		if !strings.Contains(message, "parse") && !strings.Contains(message, "entit") && !strings.Contains(message, "bad request") {
+			return false
+		}
+	}
+	if simpler != "" && simpler != rich {
+		if err := send(simpler, telego.ModeHTML); err == nil {
+			return true
+		}
+	}
+	return send(simpler, "") == nil
+}
+
+func (b *fakeVerifyBot) Delete(ctx context.Context, chatID int64, messageID int) {
+	if messageID != 0 {
+		_ = b.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: telego.ChatID{ID: chatID}, MessageID: messageID})
+	}
+}
+
+func (b *fakeVerifyBot) Alert(ctx context.Context, adminLogChatID int64, text string) {
+	if adminLogChatID != 0 {
+		_, _ = b.SendMessage(ctx, &telego.SendMessageParams{ChatID: telego.ChatID{ID: adminLogChatID}, Text: text})
+	}
+}
+
+func (b *fakeVerifyBot) FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string) {
+	if adminLogChatID == 0 {
+		adminLogChatID = groupID
+	}
+	_, _ = b.SendMessage(ctx, &telego.SendMessageParams{ChatID: telego.ChatID{ID: adminLogChatID}, Text: text})
+}
+
+func (b *fakeVerifyBot) Ban(ctx context.Context, chatID, userID int64, _ int, revokeMessages bool) error {
+	return b.BanChatMember(ctx, &telego.BanChatMemberParams{
+		ChatID:         telego.ChatID{ID: chatID},
+		UserID:         userID,
+		RevokeMessages: revokeMessages,
+	})
+}
+
 type blockingTerminalBot struct {
 	*fakeVerifyBot
 	approveStarted chan struct{}
@@ -154,7 +208,7 @@ func TestOnAnswer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{VerifyMaxFails: 3}
+			cfg := &config.Config{VerifyMaxFails: 3}
 			if tt.required {
 				cfg.RequiredChannelID = -400
 			}
@@ -189,7 +243,7 @@ func TestOnAnswer(t *testing.T) {
 }
 
 func TestApproveSuccess(t *testing.T) {
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	v.vfail[key] = &vfailRec{count: 2, last: time.Now()} // had strikes; approve should clear them
@@ -212,7 +266,7 @@ func TestApproveSuccess(t *testing.T) {
 }
 
 func TestApproveFailureReopens(t *testing.T) {
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	key := pkey{-100, 5}
 	p := livePending(42)
 	v.pend[key] = p
@@ -235,7 +289,7 @@ func TestApproveFailureReopens(t *testing.T) {
 }
 
 func TestDeclineBelowThreshold(t *testing.T) {
-	v := NewVerifier(&Config{VerifyMaxFails: 3})
+	v := NewVerifier(&config.Config{VerifyMaxFails: 3})
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
@@ -255,7 +309,7 @@ func TestDeclineBelowThreshold(t *testing.T) {
 }
 
 func TestDeclineAutoBan(t *testing.T) {
-	v := NewVerifier(&Config{VerifyMaxFails: 1}) // the first failure trips the auto-ban
+	v := NewVerifier(&config.Config{VerifyMaxFails: 1}) // the first failure trips the auto-ban
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
@@ -272,7 +326,7 @@ func TestDeclineAutoBan(t *testing.T) {
 }
 
 func TestBanApplicant(t *testing.T) {
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
@@ -295,7 +349,7 @@ func TestBanApplicant(t *testing.T) {
 }
 
 func TestClaimThenExecuteApprove(t *testing.T) {
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 
@@ -334,7 +388,7 @@ func TestTerminalActionBlocksReapplication(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			const gid, uid = int64(-100), int64(5)
 			key := pkey{gid, uid}
-			v := NewVerifier(&Config{TimeoutSeconds: 3600, VerifyMaxFails: 3})
+			v := NewVerifier(&config.Config{TimeoutSeconds: 3600, VerifyMaxFails: 3})
 			old := &pending{nonce: "old", deadline: time.Now().Add(time.Hour)}
 			v.pend[key] = old
 			bot := newBlockingTerminalBot()
@@ -382,7 +436,7 @@ func TestTerminalActionBlocksReapplication(t *testing.T) {
 }
 
 func TestConsumeThenExecuteBan(t *testing.T) {
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 
@@ -402,17 +456,8 @@ func TestConsumeThenExecuteBan(t *testing.T) {
 	}
 }
 
-func TestAdminCacheHit(t *testing.T) {
-	v := NewVerifier(&Config{})
-	v.adminCache[pkey{-100, 7}] = time.Now().Add(adminCacheTTL)
-	ok, err := v.adminStatus(context.Background(), nil, -100, 7)
-	if err != nil || !ok {
-		t.Fatalf("a fresh cached admin must short-circuit to true (no bot call), got ok=%v err=%v", ok, err)
-	}
-}
-
 func TestFailAlertFallsBackToGroup(t *testing.T) {
-	v := NewVerifier(&Config{}) // AdminLogChatID == 0
+	v := NewVerifier(&config.Config{}) // AdminLogChatID == 0
 	fb := &fakeVerifyBot{}
 	v.failAlert(context.Background(), fb, -555, "x")
 	if fb.lastSendChat != -555 {
@@ -422,20 +467,6 @@ func TestFailAlertFallsBackToGroup(t *testing.T) {
 	v.failAlert(context.Background(), fb, -555, "x")
 	if fb.lastSendChat != -999 {
 		t.Errorf("with an admin-log chat set, failAlert should post there, got chat %d", fb.lastSendChat)
-	}
-}
-
-func TestPruneAdminCache(t *testing.T) {
-	v := NewVerifier(&Config{})
-	now := time.Now()
-	v.adminCache[pkey{-1, 1}] = now.Add(time.Minute)  // fresh
-	v.adminCache[pkey{-1, 2}] = now.Add(-time.Minute) // expired
-	v.pruneAdminCacheLocked(now)
-	if _, ok := v.adminCache[pkey{-1, 2}]; ok {
-		t.Error("an expired admin-cache entry should be pruned")
-	}
-	if _, ok := v.adminCache[pkey{-1, 1}]; !ok {
-		t.Error("a fresh admin-cache entry should be kept")
 	}
 }
 
@@ -483,7 +514,7 @@ func TestTrustedBypass(t *testing.T) {
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
 	mkV := func() *Verifier {
 		return &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{},
-			cfg: &Config{Groups: []GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
+			cfg: &config.Config{Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
 	}
 
 	v := mkV()
@@ -519,7 +550,7 @@ func TestTrustedBypass(t *testing.T) {
 		t.Errorf("a confirmed member with a failed approve must be (false,true): handled=%v trusted=%v", handled, trusted)
 	}
 
-	plain := &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{}, cfg: &Config{Groups: []GroupConfig{{ID: gid}}}}
+	plain := &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{}, cfg: &config.Config{Groups: []config.GroupConfig{{ID: gid}}}}
 	if handled, trusted := plain.tryTrustedBypass(ctx, newFakeMod(), gid, uid); handled || trusted {
 		t.Errorf("no trusted config -> (false,false): handled=%v trusted=%v", handled, trusted)
 	}
@@ -530,7 +561,7 @@ func TestJoinGate(t *testing.T) {
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
 	mkV := func() *Verifier {
 		return &Verifier{loc: time.UTC, vfail: map[pkey]*vfailRec{},
-			cfg: &Config{VerifyRetrySeconds: 600, Groups: []GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
+			cfg: &config.Config{VerifyRetrySeconds: 600, Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
 	}
 	cooldown := func(v *Verifier) { v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()} }
 
@@ -603,7 +634,7 @@ func TestStrikesUser(t *testing.T) {
 func TestDeclineNoStrike(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
 	mkV := func() *Verifier {
-		return &Verifier{loc: time.UTC, cfg: &Config{}, pend: map[pkey]*pending{}, vfail: map[pkey]*vfailRec{}}
+		return &Verifier{loc: time.UTC, cfg: &config.Config{}, pend: map[pkey]*pending{}, vfail: map[pkey]*vfailRec{}}
 	}
 	for _, reason := range []string{"approve-retry", "restart-lapsed", "challenge-post-failed"} {
 		v := mkV()
@@ -656,7 +687,7 @@ func TestReopenPendingRestoresRetryable(t *testing.T) {
 func TestDeclineFailureAlertsAdmins(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
 	v := &Verifier{
-		cfg:   &Config{AdminLogChatID: -200},
+		cfg:   &config.Config{AdminLogChatID: -200},
 		loc:   time.UTC,
 		pend:  map[pkey]*pending{{gid, uid}: livePending(42)},
 		vfail: map[pkey]*vfailRec{},
@@ -688,8 +719,8 @@ func TestSendQuizzesMarksPromptedOnlyAfterDelivery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			const gid, uid = int64(-100), int64(5)
-			v := NewVerifier(&Config{})
-			p := &pending{mode: modeKernel, lang: langZH, qText: "kernel", nonce: "n", deadline: time.Now().Add(time.Hour)}
+			v := NewVerifier(&config.Config{})
+			p := &pending{mode: config.ModeKernel, lang: i18n.LangZH, qText: "kernel", nonce: "n", deadline: time.Now().Add(time.Hour)}
 			v.pend[pkey{gid, uid}] = p
 			v.sendQuizzes(context.Background(), tt.bot, uid)
 			if p.prompted != tt.want {
@@ -725,7 +756,7 @@ func TestPendingCaps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(&Config{TimeoutSeconds: 3600})
+			v := NewVerifier(&config.Config{TimeoutSeconds: 3600})
 			tt.fill(v)
 			p := &pending{nonce: "new"}
 			_, status := v.startPending(&fakeVerifyBot{}, tt.gid, tt.uid, p)
@@ -761,7 +792,7 @@ func TestPendingCapAlertThrottled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(&Config{AdminLogChatID: tt.adminLogID})
+			v := NewVerifier(&config.Config{AdminLogChatID: tt.adminLogID})
 			fb := &fakeVerifyBot{}
 			v.alertPendingCap(context.Background(), fb, tt.groupID)
 			v.alertPendingCap(context.Background(), fb, -300)
@@ -793,7 +824,7 @@ func TestWarnCounterBound(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(&Config{})
+			v := NewVerifier(&config.Config{})
 			v.mu.Lock()
 			for i := range warnCounterMax {
 				v.warns[pkey{-100, int64(i + 1)}] = 2

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -71,8 +72,8 @@ func (v *Verifier) loadAntispam() {
 		return
 	}
 	var st antispamState
-	if err := loadJSONFile(v.acPath, &st); err != nil {
-		if stateReadFailed(err) {
+	if err := store.Load(v.acPath, &st); err != nil {
+		if store.ReadFailed(err) {
 			v.acPath = ""
 		}
 		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
@@ -91,7 +92,7 @@ func (v *Verifier) saveAntispam() {
 	if v.acPath == "" {
 		return
 	}
-	saveJSONFile(v.acPath, func() any {
+	_ = store.Save(v.acPath, func() any {
 		v.acMu.RLock()
 		defer v.acMu.RUnlock()
 		st := antispamState{Enabled: v.acOn, Whitelist: make([]int64, 0, len(v.acWhite))}
@@ -148,7 +149,7 @@ func (v *Verifier) antispam(ctx *th.Context, update telego.Update) error {
 			c := ctx.Context()
 			_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(msg.Chat.ID), MessageID: msg.MessageID})
 			banned := true
-			if err := bot.BanChatSenderChat(c, &telego.BanChatSenderChatParams{ChatID: tu.ID(msg.Chat.ID), SenderChatID: sc.ID}); err != nil {
+			if err := v.telegram(bot).BanSenderChat(c, msg.Chat.ID, sc.ID); err != nil {
 				banned = false
 				log.Printf("antispam: ban sender_chat %d in %d: %v", sc.ID, msg.Chat.ID, err)
 			}
@@ -199,7 +200,7 @@ func (v *Verifier) onBc(ctx *th.Context, update telego.Update) error {
 	fields := strings.Fields(commandArg(msg.Text))
 	isAllow := len(fields) >= 2 && fields[0] == "allow"
 	if !isAllow {
-		if allowed, refusal := v.controlGroupGate(gid); !allowed {
+		if allowed, refusal := v.cfg.ControlGroupAllowed(gid); !allowed {
 			v.notify(c, bot, gid, refusal)
 			return nil
 		}
@@ -225,7 +226,7 @@ func (v *Verifier) onBc(ctx *th.Context, update telego.Update) error {
 			v.setChannelWhite(id, true)
 			failed := make([]string, 0)
 			for _, groupID := range v.cfg.GroupIDs {
-				if err := bot.UnbanChatSenderChat(c, &telego.UnbanChatSenderChatParams{ChatID: tu.ID(groupID), SenderChatID: id}); err != nil {
+				if err := v.telegram(bot).UnbanSenderChat(c, groupID, id); err != nil {
 					log.Printf("/bc allow: unban sender_chat %d in %d: %v", id, groupID, err)
 					failed = append(failed, strconv.FormatInt(groupID, 10))
 				}

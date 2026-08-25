@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
 
 func newTestVerifier(ttl *int) *Verifier {
-	return NewVerifier(&Config{
-		GroupIDs:         []int64{-1},
-		Questions:        []Question{{Q: "x", Options: []string{"a", "b"}, Answer: 0}},
-		LookupTTLSeconds: ttl,
-	})
+	return NewVerifier(&config.Config{GroupIDs: []int64{-1},
+		Questions:        []config.Question{{Q: "x", Options: []string{"a", "b"}, Answer: 0}},
+		LookupTTLSeconds: ttl})
 }
 
 func TestLookupAutoDelete(t *testing.T) {

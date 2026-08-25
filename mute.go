@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -14,47 +13,12 @@ import (
 
 // Empty permissions fully mute; Telegram lifts the restriction at UntilDate.
 func (v *Verifier) applyMute(c context.Context, bot modBot, gid, uid int64, secs int) error {
-	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{
-		ChatID:      tu.ID(gid),
-		UserID:      uid,
-		Permissions: telego.ChatPermissions{}, // all false => muted
-		UntilDate:   time.Now().Add(time.Duration(secs) * time.Second).Unix(),
-	})
+	return v.moderationTransport(bot).Mute(c, gid, uid, secs)
 }
 
-func unrestrictedChatPermissions() telego.ChatPermissions {
-	allowed := true
-	return telego.ChatPermissions{
-		CanSendMessages:       &allowed,
-		CanSendAudios:         &allowed,
-		CanSendDocuments:      &allowed,
-		CanSendPhotos:         &allowed,
-		CanSendVideos:         &allowed,
-		CanSendVideoNotes:     &allowed,
-		CanSendVoiceNotes:     &allowed,
-		CanSendPolls:          &allowed,
-		CanSendOtherMessages:  &allowed,
-		CanAddWebPagePreviews: &allowed,
-		CanReactToMessages:    &allowed,
-		CanEditTag:            &allowed,
-		CanChangeInfo:         &allowed,
-		CanInviteUsers:        &allowed,
-		CanPinMessages:        &allowed,
-		CanManageTopics:       &allowed,
-	}
-}
-
-// Group defaults preserve local policy; the explicit full set keeps unmute independent of GetChat.
+// Group defaults preserve local policy; explicit permissions cover unavailable defaults.
 func (v *Verifier) applyUnmute(c context.Context, bot modBot, gid, uid int64) error {
-	permissions := unrestrictedChatPermissions()
-	if chat, err := bot.GetChat(c, &telego.GetChatParams{ChatID: tu.ID(gid)}); err == nil && chat != nil && chat.Permissions != nil {
-		permissions = *chat.Permissions
-	}
-	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{
-		ChatID:      tu.ID(gid),
-		UserID:      uid,
-		Permissions: permissions,
-	})
+	return v.moderationTransport(bot).Unmute(c, gid, uid)
 }
 
 // /mute is always timed; an inline duration overrides the configured default.

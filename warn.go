@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -22,8 +23,8 @@ func (v *Verifier) loadWarns() {
 		return
 	}
 	var recs []warnRec
-	if err := loadJSONFile(v.warnPath, &recs); err != nil {
-		if stateReadFailed(err) {
+	if err := store.Load(v.warnPath, &recs); err != nil {
+		if store.ReadFailed(err) {
 			v.warnPath = ""
 		}
 		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
@@ -45,7 +46,7 @@ func (v *Verifier) saveWarns() {
 	if v.warnPath == "" {
 		return
 	}
-	saveJSONFile(v.warnPath, func() any {
+	_ = store.Save(v.warnPath, func() any {
 		v.mu.Lock()
 		defer v.mu.Unlock()
 		recs := make([]warnRec, 0, len(v.warns))

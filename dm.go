@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 // Per-user throttling prevents DMs from amplifying into Telegram send floods.
@@ -16,12 +14,6 @@ const dmReplyCooldown = 30 * time.Second
 
 // Clear the cooldown map before untrusted user IDs can grow it without bound.
 const dmMapMax = 10000
-
-// defaultPrivateReply handles plain DMs not routed to a command.
-const defaultPrivateReply = "👋 这是 Gentoo 中文社区的入群验证 + Gentoo/Linux 助手机器人。\n\n" +
-	"• 想入群:回到群里发起加入申请,再点群消息中的「✅ 点此完成验证」链接来这里完成验证。\n" +
-	"• 查询命令(/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs)私聊也能直接用(每分钟有限次,防滥用;群里不限次)。\n" +
-	"• 审核/管理命令仅在群里有效。"
 
 // Only these member commands bypass the unified DM reply.
 var dmCommands = map[string]bool{
@@ -67,9 +59,6 @@ func (v *Verifier) onPrivateDM(ctx *th.Context, update telego.Update) error {
 	v.dmLast[msg.From.ID] = time.Now()
 	v.mu.Unlock()
 	// Invalid admin-supplied HTML falls back to plain text.
-	if _, err := ctx.Bot().SendMessage(ctx.Context(), htmlMessage(msg.Chat.ID, v.cfg.PrivateReply)); err != nil {
-		log.Printf("private_reply HTML send failed (%v); retrying as plain text", err)
-		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(msg.Chat.ID), v.cfg.PrivateReply))
-	}
+	v.telegram(ctx.Bot()).SendPrivateHTMLFallback(ctx.Context(), msg.Chat.ID, v.cfg.PrivateReply)
 	return nil
 }

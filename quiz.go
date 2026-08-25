@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"math/big"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
 
 // Challenge selection uses crypto/rand; failure degrades to deterministic index zero.
@@ -17,13 +19,13 @@ func cryptoIntn(n int) int {
 	return int(v.Int64())
 }
 
-func (c *Config) randomQuestion(gid int64) Question {
-	qs := c.questions(gid)
+func randomQuestion(c *config.Config, gid int64) config.Question {
+	qs := c.QuestionsFor(gid)
 	return qs[cryptoIntn(len(qs))]
 }
 
 // Shuffling prevents fixed-position clicks while preserving the correct option's new index.
-func shuffledQuestion(q Question) (text string, opts []string, correctIdx int) {
+func shuffledQuestion(q config.Question) (text string, opts []string, correctIdx int) {
 	order := make([]int, len(q.Options))
 	for i := range order {
 		order[i] = i

@@ -1,0 +1,59 @@
+{
+  "verification": {
+    "challenge": {
+      "fallback_intro": "還沒安裝 Linux 也可以,換一個問題:\n\n❓ %[1]s\n\n直接把答案傳到這裡即可。還有 %[2]d 次機會。",
+      "fallback_questions": [
+        {
+          "answers": [
+            "gentoozh.org",
+            "gentoozh"
+          ],
+          "prompt": "Gentoo 中文社群官方網站的網域是什麼?"
+        },
+        {
+          "answers": [
+            "gentoo.org"
+          ],
+          "prompt": "Gentoo 官方網站的網域是什麼?"
+        }
+      ],
+      "fallback_wrong": "❌ 不對。請再想想上面那個問題,直接把答案傳過來。還有 %[1]d 次機會。",
+      "kernel_prompt": "完成入群驗證，請回答以下問題。\n\n❓ %[1]s\n\n<b>作答方式</b>\n在終端機執行 <code>uname -r</code>，將輸出的核心版本號傳送至此。\n格式形如 <code>X.Y.Z-gentoo</code>，各發行版皆可。\n請傳送本機實際版本號，勿使用範例中的佔位符。\n\n<b>無 Linux 裝置</b>\n回覆 <code>無 Linux 裝置</code>，並傳送當前分鐘數。\n分鐘數為時鐘冒號後兩位，例如 14:46 為 <code>46</code>。\n範例：<code>無 Linux 裝置46</code>\n\n剩餘 %[2]d 次機會。答錯或逾時將被拒絕。",
+      "kernel_question": "你正在執行的 Linux 核心(kernel)版本號是多少?",
+      "kernel_wrong": "❌ 這不是有效的 Linux 核心版本號。請執行 <code>uname -r</code>，傳送其輸出。剩餘 %[1]d 次機會。",
+      "no_linux_retry": "格式如下：回覆 <code>無 Linux 裝置</code>，並傳送當前分鐘數。分鐘數為時鐘冒號後兩位，例如 14:46 為 <code>46</code>。",
+      "os_mixed": "你的回覆提到了其他系統。若該版本號為本機執行的 Linux 核心（如 WSL 或虛擬機），請僅傳送該版本號。",
+      "quiz_prompt": "請回答下面的問題完成入群驗證:\n\n❓ %[1]s",
+      "sample_copied": "你傳送的是範例中的版本號，而非本機版本號。請執行 <code>uname -r</code>，傳送實際輸出。再次傳送範例將被拒絕。"
+    },
+    "channel": {
+      "continue_button": "✅ 我已加入,繼續",
+      "continue_ok": "✅ 已加入頻道,請回答下面的問題",
+      "fallback_name": "管理員指定的頻道",
+      "first": "答案正確。請先加入頻道 %[1]s,加入後把答案再傳一次即可通過。",
+      "follow_button": "📢 加入頻道 %[1]s",
+      "follow_prompt": "完成驗證還差一步:請先加入頻道 %[1]s,加入後回到本對話點「✅ 我已加入,繼續」。",
+      "no_pending": "你目前沒有待處理的入群申請。請先申請加入群組,再點群內機器人訊息中的「✅ 點此完成驗證」按鈕。",
+      "not_followed_yet": "尚未偵測到你已加入 %[1]s,加入後再點一次。"
+    },
+    "group": {
+      "body": "👋 %[1]s 申請加入。請點下方「✅ 點此完成驗證」%[2]s 開啟機器人私訊完成驗證,%[3]d 秒內未完成將被拒絕。%[4]s",
+      "channel_hint": "\n⚠️ 完成驗證前還需先加入頻道 %[1]s。",
+      "link_text": "(或 <a href=\"%[1]s\">點此</a>)",
+      "verify_button": "✅ 點此完成驗證"
+    },
+    "recovery": {
+      "renotify": "🔄 抱歉,機器人剛才離線了約 %[1]s,你的入群驗證已重新計時。請回到本對話繼續答題;若這裡沒有題目,回群組點「✅ 點此完成驗證」重新取得。"
+    },
+    "result": {
+      "ai_caught": "❌ 偵測到自動化程式代答,驗證已拒絕。",
+      "already_handled": "驗證已處理,或申請已逾時/無法核准,請重新申請。",
+      "approved": "✅ 驗證通過,已核准加入,歡迎!",
+      "not_yours": "這不是你的驗證申請,無法操作。",
+      "stale_question": "該題目已逾時,請重新開啟驗證連結取得新題。",
+      "wrong_banned": "❌ 驗證連續失敗多次,已被封鎖。",
+      "wrong_no_wait": "❌ 答錯了,已拒絕。可重新申請。",
+      "wrong_retry": "❌ 答錯了,已拒絕。請 %[1]d 秒後重新申請。"
+    }
+  }
+}

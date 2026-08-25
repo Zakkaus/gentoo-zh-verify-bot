@@ -5,41 +5,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
-
-// Telegram treats until_date below 30 seconds or above 366 days as permanent.
-const telegramBanMax = 366 * 86400
-
-// clampBanSecs keeps displayed and enforced ban durations equal.
-func clampBanSecs(secs int) int {
-	switch {
-	case secs <= 0:
-		return 0
-	case secs < 30:
-		return 30
-	case secs > telegramBanMax:
-		return 0
-	default:
-		return secs
-	}
-}
-
-// Mutes are always finite and must stay within Telegram's honoured window.
-func clampMuteSecs(secs int) int {
-	switch {
-	case secs < 30:
-		return 30
-	case secs > telegramBanMax:
-		return telegramBanMax
-	default:
-		return secs
-	}
-}
 
 // parseBanDuration accepts permanent, seconds, or s/m/h/d suffixes.
 func parseBanDuration(arg string) (secs int, ok bool) {
@@ -65,16 +35,7 @@ func parseBanDuration(arg string) (secs int, ok bool) {
 	if err != nil || n < 0 || n > 1<<31 {
 		return 0, false
 	}
-	switch secs = n * mult; {
-	case secs <= 0:
-		return 0, true // permanent
-	case secs < 30:
-		return 30, true // Telegram treats <30s as permanent — use its real 30s minimum instead
-	case secs > telegramBanMax:
-		return 0, true // Telegram treats >366d as permanent
-	default:
-		return secs, true
-	}
+	return config.ClampBanSeconds(n * mult), true
 }
 
 // banDurationText renders 0 as the localized permanent label.
@@ -99,11 +60,7 @@ func (v *Verifier) setBanDuration(secs int) { v.mu.Lock(); v.banSecs = secs; v.m
 
 // applyBan uses RevokeMessages to select ban-only versus ban-and-purge.
 func (v *Verifier) applyBan(c context.Context, bot verifyBot, gid, uid int64, secs int, revoke bool) error {
-	p := &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: uid, RevokeMessages: revoke}
-	if secs > 0 {
-		p.UntilDate = time.Now().Add(time.Duration(secs) * time.Second).Unix()
-	}
-	return bot.BanChatMember(c, p)
+	return v.verificationTransport(bot).Ban(c, gid, uid, secs, revoke)
 }
 
 func (v *Verifier) onBanTime(ctx *th.Context, update telego.Update) error {

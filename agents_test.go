@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
 
 func TestClaimedModel(t *testing.T) {
@@ -26,7 +28,7 @@ func TestClaimedModel(t *testing.T) {
 }
 
 func TestRecordAgentTally(t *testing.T) {
-	v := NewVerifier(&Config{}) // no agentPath: in-memory only, no state file written
+	v := NewVerifier(&config.Config{}) // no agentPath: in-memory only, no state file written
 	v.agents = agentTally{}
 	for i := 0; i < 3; i++ {
 		v.recordAgent("AGENT-X model=gpt-5")
@@ -45,7 +47,7 @@ func TestRecordAgentTally(t *testing.T) {
 	}
 
 	// key cap: unknown models fold into "other" once the map is full
-	v2 := NewVerifier(&Config{})
+	v2 := NewVerifier(&config.Config{})
 	v2.agents = agentTally{Counts: map[string]int{}}
 	for i := 0; i < agentModelMax; i++ {
 		v2.agents.Counts[string(rune('a'+i%26))+strings.Repeat("z", i%20+1)] = 1
@@ -55,19 +57,19 @@ func TestRecordAgentTally(t *testing.T) {
 	}
 
 	// an empty tally renders nothing, so /stats stays quiet before the first catch
-	if s := NewVerifier(&Config{}).agentStatsText(); s != "" {
+	if s := NewVerifier(&config.Config{}).agentStatsText(); s != "" {
 		t.Errorf("an empty tally should render nothing, got %q", s)
 	}
 }
 
 func TestAgentTallyPersists(t *testing.T) {
 	path := t.TempDir() + "/agents.json"
-	v := NewVerifier(&Config{})
+	v := NewVerifier(&config.Config{})
 	v.agentPath = path
 	v.recordAgent("AGENT-X model=gpt-5")
 	v.recordAgent("AGENT-X model=gpt-5")
 
-	v2 := NewVerifier(&Config{})
+	v2 := NewVerifier(&config.Config{})
 	v2.agentPath = path
 	v2.loadAgents()
 	if v2.agents.Total != 2 || v2.agents.Counts["gpt-5"] != 2 {
@@ -84,7 +86,7 @@ func TestLoadAgentsReadFailureDisablesWrites(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(&Config{})
+			v := NewVerifier(&config.Config{})
 			v.agentPath = tt.path(t)
 			v.loadAgents()
 			if v.agentPath != "" {

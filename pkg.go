@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -27,7 +28,7 @@ var userAgent = "gentoo-zh-verify-bot"
 
 var overlays []overlay
 
-func configurePkg(cfg *Config) {
+func configurePkg(cfg *config.Config) {
 	if cfg.UserAgent != "" {
 		userAgent = cfg.UserAgent
 	}

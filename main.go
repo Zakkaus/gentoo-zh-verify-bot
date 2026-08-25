@@ -6,11 +6,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -33,7 +34,7 @@ func main() {
 		log.Fatal("BOT_TOKEN environment variable is required")
 	}
 
-	cfg, err := LoadConfig(*configPath)
+	cfg, err := (config.LoadConfig(*configPath))
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -83,7 +84,7 @@ func main() {
 	log.Printf("verify bot @%s (%s) started — groups=%d timeout=%ds", me.Username, version, len(cfg.Groups), cfg.TimeoutSeconds)
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
-		log.Printf("  group %d: required_channel=%d questions=%d", g.ID, cfg.requiredChannel(g.ID), len(cfg.questions(g.ID)))
+		log.Printf("  group %d: required_channel=%d questions=%d", g.ID, cfg.RequiredChannel(g.ID), len(cfg.QuestionsFor(g.ID)))
 	}
 	go v.logGroupAdmin(ctx, bot, me.ID) // non-fatal: report which groups the bot can actually moderate
 	v.register(bh)
@@ -95,12 +96,7 @@ func main() {
 			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
 		}
 		// Remove temp files orphaned between atomic creation and rename.
-		if leftover, _ := filepath.Glob(filepath.Join(sd, ".*.tmp-*")); len(leftover) > 0 {
-			for _, f := range leftover {
-				_ = os.Remove(f)
-			}
-			log.Printf("swept %d leftover state temp file(s) in %s", len(leftover), sd)
-		}
+		store.ReclaimTemps(sd)
 		v.statePath = sd + "/pending.json"
 		v.hbPath = sd + "/heartbeat.json"
 		v.load(bot)
@@ -118,7 +114,7 @@ func main() {
 		log.Printf("WARNING: STATE_DIRECTORY is unset — persistence is DISABLED: pending verifications, warn counts, the /bc state and feed cursors will NOT survive a restart (set StateDirectory= in the systemd unit)")
 	}
 
-	var feeds []*FeedConfig // one shared poller fans new bugs + news out to all configured feeds
+	var feeds []*config.FeedConfig // one shared poller fans new bugs + news out to all configured feeds
 	for i := range cfg.Feeds {
 		if cfg.Feeds[i].ChatID != 0 {
 			feeds = append(feeds, &cfg.Feeds[i])

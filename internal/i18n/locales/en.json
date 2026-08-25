@@ -1,0 +1,59 @@
+{
+  "verification": {
+    "challenge": {
+      "fallback_intro": "No Linux installed? Then answer this instead:\n\n❓ %[1]s\n\nSend the answer here. %[2]d attempts left.",
+      "fallback_questions": [
+        {
+          "answers": [
+            "gentoozh.org",
+            "gentoozh"
+          ],
+          "prompt": "What is the domain of the Gentoo Chinese community's website?"
+        },
+        {
+          "answers": [
+            "gentoo.org"
+          ],
+          "prompt": "What is the domain of the official Gentoo website?"
+        }
+      ],
+      "fallback_wrong": "❌ Not right. Think about the question above and send the answer. %[1]d attempts left.",
+      "kernel_prompt": "Answer the following to finish joining.\n\n❓ %[1]s\n\n<b>How to answer</b>\nRun <code>uname -r</code> in a terminal and send the kernel version here.\nThe format looks like <code>X.Y.Z-gentoo</code>; any distribution's version is accepted.\nSend your machine's actual version, not the placeholder.\n\n<b>No Linux device</b>\nReply <code>no Linux device</code> and send the current minute.\nThe minute is the two digits after the colon on your clock — at 14:46 that is <code>46</code>.\nExample: <code>no Linux device 46</code>\n\n%[2]d attempts left. A wrong answer or a timeout declines the request.",
+      "kernel_question": "What is the version of the Linux kernel you are running?",
+      "kernel_wrong": "❌ That is not a valid Linux kernel version. Run <code>uname -r</code> and send its output. %[1]d attempts left.",
+      "no_linux_retry": "Format: reply <code>no Linux device</code> and send the current minute — the two digits after the colon on your clock (14:46 → <code>46</code>).",
+      "os_mixed": "Your reply mentions another operating system. If that version is the Linux kernel your machine runs (e.g. WSL or a VM), send only the version number.",
+      "quiz_prompt": "Answer this question to finish joining:\n\n❓ %[1]s",
+      "sample_copied": "You sent the example version, not your machine's. Run <code>uname -r</code> and send its actual output. Sending the example again will be declined."
+    },
+    "channel": {
+      "continue_button": "✅ I've followed, continue",
+      "continue_ok": "✅ Followed — here is your question",
+      "fallback_name": "the channel set by the admins",
+      "first": "Correct. Now follow the channel %[1]s, then send the answer once more to be approved.",
+      "follow_button": "📢 Follow %[1]s",
+      "follow_prompt": "One more step: follow the channel %[1]s, then come back here and tap “✅ I've followed, continue”.",
+      "no_pending": "You have no pending join request. Ask to join the group first, then tap “✅ Verify” on the bot's message there.",
+      "not_followed_yet": "I can't see you in %[1]s yet. Follow it, then tap again."
+    },
+    "group": {
+      "body": "👋 %[1]s asked to join. Tap “✅ Verify” below %[2]s to open the bot in DM and finish verification. The request is declined after %[3]d seconds.%[4]s",
+      "channel_hint": "\n⚠️ You must also follow the channel %[1]s before you can be approved.",
+      "link_text": "(or <a href=\"%[1]s\">this link</a>)",
+      "verify_button": "✅ Verify"
+    },
+    "recovery": {
+      "renotify": "🔄 Sorry — the bot was offline for about %[1]s, so your verification window was restarted. Continue here; if there is no question, tap “✅ Verify” in the group again."
+    },
+    "result": {
+      "ai_caught": "❌ An automated agent answered on your behalf. Verification declined.",
+      "already_handled": "This verification is already handled, or the request expired / can't be approved. Please apply again.",
+      "approved": "✅ Verified — your join request was approved. Welcome!",
+      "not_yours": "This isn't your join request.",
+      "stale_question": "This question has expired. Open the verification link again for a new one.",
+      "wrong_banned": "❌ Too many failed verifications — you have been banned.",
+      "wrong_no_wait": "❌ Wrong answer, request declined. You may apply again.",
+      "wrong_retry": "❌ Wrong answer, request declined. You can apply again in %[1]d seconds."
+    }
+  }
+}

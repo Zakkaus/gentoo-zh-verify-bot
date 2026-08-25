@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
@@ -24,7 +25,7 @@ const newsTTL = 30 * time.Minute
 var newsURL = "https://www.gentoo.org/support/news-items/"
 var newsBase = "https://www.gentoo.org"
 
-func configureNews(cfg *Config) {
+func configureNews(cfg *config.Config) {
 	if cfg.NewsURL != "" {
 		newsURL = cfg.NewsURL
 	}

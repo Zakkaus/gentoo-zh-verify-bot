@@ -13,7 +13,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 type useFlag struct {
@@ -359,25 +358,11 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 // Bot API 10.1 rich messages fall back to HTML on server rejection.
 // Client-side rendering failures are not observable.
 func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, richHTML, plainHTML string) {
-	rp := replyParams(replyTo)
-	if v.isRichEnabled() && richHTML != "" {
-		params := (&telego.SendRichMessageParams{}).
-			WithChatID(tu.ID(chatID)).
-			WithRichMessage(*(&telego.InputRichMessage{}).WithHTML(richHTML).WithSkipEntityDetection())
-		if rp != nil {
-			params = params.WithReplyParameters(rp)
-		}
-		if sent, err := bot.SendRichMessage(c, params); err == nil {
-			v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
-			return
-		}
+	ttl, on := v.lookupAutoDelete()
+	if !on {
+		ttl = 0
 	}
-	m := htmlMessage(chatID, plainHTML)
-	if rp != nil {
-		m = m.WithReplyParameters(rp)
-	}
-	sent, _ := bot.SendMessage(c, m)
-	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
+	v.telegram(bot).SendRichOrHTML(c, chatID, replyTo, richHTML, plainHTML, v.isRichEnabled(), ttl)
 }
 
 // Rich output keeps full flag descriptions in collapsible sections.

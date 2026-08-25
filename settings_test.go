@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
 
 func TestSettingsRoundTrip(t *testing.T) {
@@ -74,11 +76,11 @@ func TestSettingsPersistVerifyMode(t *testing.T) {
 	path := t.TempDir() + "/settings.json"
 
 	v := &Verifier{settingsPath: path, enabled: true}
-	v.setVerifyMode(modeQuiz)
+	v.setVerifyMode(config.ModeQuiz)
 	v2 := &Verifier{settingsPath: path, enabled: true}
 	v2.loadSettings()
-	if got := v2.verifyModeOverride(); got != modeQuiz {
-		t.Errorf("persisted /vmode = %q, want %q", got, modeQuiz)
+	if got := v2.verifyModeOverride(); got != (config.ModeQuiz) {
+		t.Errorf("persisted /vmode = %q, want %q", got, config.ModeQuiz)
 	}
 
 	v2.setVerifyMode("") // /vmode auto -> no override

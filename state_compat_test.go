@@ -9,6 +9,10 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 )
 
 const (
@@ -69,13 +73,11 @@ type stateCompatLegacyTracked struct {
 	Status string `json:"status"`
 }
 
-func stateCompatConfig() *Config {
-	return &Config{
-		Groups:         []GroupConfig{{ID: stateCompatGroupA}, {ID: stateCompatGroupB}},
+func stateCompatConfig() *config.Config {
+	return &config.Config{Groups: []config.GroupConfig{{ID: stateCompatGroupA}, {ID: stateCompatGroupB}},
 		GroupIDs:       []int64{stateCompatGroupA, stateCompatGroupB},
 		TimeoutSeconds: 240,
-		VerifyMaxFails: 3,
-	}
+		VerifyMaxFails: 3}
 }
 
 // Regenerate only by explicit request. Every current fixture below is emitted through its owner save path.
@@ -92,14 +94,14 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 	pendingV := NewVerifier(stateCompatConfig())
 	pendingV.statePath = filepath.Join(dir, "pending.json")
 	pendingV.pend[pkey{stateCompatGroupA, 7001}] = &pending{
-		groupMsgID: 501, mode: modeKernel, lang: langEN,
+		groupMsgID: 501, mode: config.ModeKernel, lang: i18n.LangEN,
 		fbAnswers: []string{"gentoozh.org", "gentoozh"}, prompted: true,
 		hinted: true, sampleBounced: true, noLinuxReminded: true, osClarified: true, tries: 2,
 		qText: "Name the Gentoo Chinese community website", correctIdx: -1,
 		nonce: "kernel-compat-nonce", name: "Kernel Applicant", deadline: stateCompatKernelDeadline,
 	}
 	pendingV.pend[pkey{stateCompatGroupB, 7002}] = &pending{
-		groupMsgID: 502, mode: modeQuiz, lang: langZHT, prompted: true,
+		groupMsgID: 502, mode: config.ModeQuiz, lang: i18n.LangZHHant, prompted: true,
 		qText: "Select the package manager", qOpts: []string{"apt", "Portage", "dnf"}, correctIdx: 1,
 		nonce: "quiz-compat-nonce", name: "Quiz Applicant", deadline: stateCompatQuizDeadline,
 	}
@@ -132,7 +134,7 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 		settingsPath: filepath.Join(dir, "settings.json"),
 		enabled:      false,
 		nameSpoiler:  false,
-		vmode:        modeMixed,
+		vmode:        config.ModeMixed,
 	}
 	settingsV.saveSettings()
 
@@ -175,14 +177,16 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 	}
 	legacyPendingV.save()
 
-	writeJSONFile(filepath.Join(dir, "feed-legacy-status.json"), stateCompatLegacyFeedState{
+	if err := store.Write(filepath.Join(dir, "feed-legacy-status.json"), stateCompatLegacyFeedState{
 		LastBugID:   880002,
 		LastNewsURL: "https://www.gentoo.org/support/news-items/legacy.html",
 		Tracked: map[string]stateCompatLegacyTracked{
 			"880001": {MsgID: 4001, Status: "UNCONFIRMED"},
 			"880002": {MsgID: 4002, Status: "IN_PROGRESS"},
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStateCompatPending(t *testing.T) {
@@ -473,11 +477,13 @@ func TestStateCompatAgentTally(t *testing.T) {
 			if tt.roundTrip {
 				out := filepath.Join(t.TempDir(), "agents.json")
 				// recordAgent is the owner writer and necessarily increments. Reuse its exact ordered snapshot path without mutation.
-				saveJSONFile(out, func() any {
+				if err := store.Save(out, func() any {
 					v.agentMu.Lock()
 					defer v.agentMu.Unlock()
 					return agentTally{Total: v.agents.Total, Counts: copyCounts(v.agents.Counts)}
-				})
+				}); err != nil {
+					t.Fatal(err)
+				}
 				stateCompatAssertStableJSON(t, "agent tally", fixture, stateCompatRead(t, out))
 			}
 		})
@@ -565,7 +571,7 @@ func stateCompatAssertPending(t *testing.T, v *Verifier, want []stateCompatPendi
 			t.Errorf("missing pending group=%d user=%d", expected.groupID, expected.userID)
 			continue
 		}
-		if got.groupMsgID != expected.groupMsgID || got.mode != expected.mode || string(got.lang) != expected.lang ||
+		if got.groupMsgID != expected.groupMsgID || got.mode != expected.mode || got.persistedLang() != expected.lang ||
 			!reflect.DeepEqual(got.fbAnswers, expected.fbAnswers) || got.prompted != expected.prompted ||
 			got.hinted != expected.hinted || got.sampleBounced != expected.sampleBounced ||
 			got.noLinuxReminded != expected.noLinuxReminded || got.osClarified != expected.osClarified ||
@@ -574,8 +580,8 @@ func stateCompatAssertPending(t *testing.T, v *Verifier, want []stateCompatPendi
 			!got.deadline.Equal(expected.deadline) {
 			t.Errorf("loaded pending group=%d user=%d = %+v, want %+v", expected.groupID, expected.userID, got, expected)
 		}
-		if expected.lang == "" && tr(got.lang) != tr(langZH) {
-			t.Errorf("legacy pending language fallback = %q, want Simplified Chinese", got.lang)
+		if expected.lang == "" && got.lang != i18n.LangZH {
+			t.Errorf("legacy pending language fallback = %s, want Simplified Chinese", got.lang)
 		}
 	}
 }

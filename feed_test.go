@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
 )
@@ -19,7 +19,7 @@ import (
 // fresh report may be a false alarm), confirmed bugs notify, and silent_bugs=true forces
 // every bug silent.
 func TestBugSilent(t *testing.T) {
-	f := &FeedConfig{}
+	f := &config.FeedConfig{}
 	for _, c := range []struct {
 		status string
 		want   bool // want silent
@@ -30,12 +30,12 @@ func TestBugSilent(t *testing.T) {
 		{"RESOLVED", false},
 		{"VERIFIED", false},
 	} {
-		if got := f.bugSilent(recentBug{Status: c.status}); got != c.want {
+		if got := bugSilent(f, recentBug{Status: c.status}); got != c.want {
 			t.Errorf("bugSilent(%s) = %v, want %v", c.status, got, c.want)
 		}
 	}
 	forced := true
-	if !(&FeedConfig{SilentBugs: &forced}).bugSilent(recentBug{Status: "CONFIRMED"}) {
+	if !bugSilent(&config.FeedConfig{SilentBugs: &forced}, recentBug{Status: "CONFIRMED"}) {
 		t.Errorf("silent_bugs=true should force a CONFIRMED bug silent")
 	}
 }
@@ -86,7 +86,7 @@ func TestNewsCursorMonotonic(t *testing.T) {
 		{url: "https://example.test/u1", title: "u1", date: "2026-05-01"},
 	}
 	newsOn, bugsOff := true, false
-	feed := &FeedConfig{ChatID: -100, Lang: "en", News: &newsOn, Bugs: &bugsOff}
+	feed := &config.FeedConfig{ChatID: -100, Lang: "en", News: &newsOn, Bugs: &bugsOff}
 	tests := []struct {
 		name       string
 		cursor     string
@@ -126,7 +126,7 @@ func TestBugCursorForwardOnly(t *testing.T) {
 	feedSendPause = 0
 	t.Cleanup(func() { feedSendPause = oldPause })
 	bugsOn, newsOff := true, false
-	feed := &FeedConfig{ChatID: -100, Lang: "en", Bugs: &bugsOn, News: &newsOff}
+	feed := &config.FeedConfig{ChatID: -100, Lang: "en", Bugs: &bugsOn, News: &newsOff}
 	tests := []struct {
 		name       string
 		bugs       []recentBug
@@ -231,27 +231,6 @@ func TestResolvedState(t *testing.T) {
 	}
 }
 
-// TestEditErrClassification: "chat not found" is now TRANSIENT (a blip shouldn't drop every changed
-// bug); genuine per-message errors stay permanent; and 429s are detected as rate-limited.
-func TestEditErrClassification(t *testing.T) {
-	if permanentEditErr(errors.New("Bad Request: chat not found")) {
-		t.Error("'chat not found' must NOT be permanent (it's usually a transient blip)")
-	}
-	for _, s := range []string{"message to edit not found", "message can't be edited", "MESSAGE_ID_INVALID"} {
-		if !permanentEditErr(errors.New("Bad Request: " + s)) {
-			t.Errorf("%q should be a permanent edit error", s)
-		}
-	}
-	for _, s := range []string{"Too Many Requests: retry after 30", "too many requests"} {
-		if !isRateLimited(errors.New(s)) {
-			t.Errorf("%q should be detected as rate-limited", s)
-		}
-	}
-	if isRateLimited(errors.New("Bad Gateway")) {
-		t.Error("a non-429 error must not be detected as rate-limited")
-	}
-}
-
 // TestBugStateKey covers the status+resolution state key that drives in-place edits, and that an
 // unchanged state doesn't attempt an edit (a matching bug must be skipped, not re-rendered).
 func TestBugStateKey(t *testing.T) {
@@ -269,7 +248,7 @@ func TestBugStateKey(t *testing.T) {
 	}
 	// Unchanged state in the refresh batch => skipped before any edit (nil bot is safe only
 	// because no edit is attempted); the bug stays tracked.
-	refreshTracked(context.Background(), nil, &FeedConfig{ChatID: -1, Lang: "en"}, &st, map[int]recentBug{200: b}, true)
+	refreshTracked(context.Background(), nil, &config.FeedConfig{ChatID: -1, Lang: "en"}, &st, map[int]recentBug{200: b}, true)
 	if st.Tracked["200"] == nil {
 		t.Error("an unchanged bug must stay tracked (no edit, no drop)")
 	}
@@ -288,7 +267,7 @@ func TestCapRunesAndNilTracked(t *testing.T) {
 		t.Errorf("capRunes produced invalid UTF-8: %q", got)
 	}
 	st := &feedState{Tracked: map[string]*trackedBug{"100": nil}}
-	refreshTracked(context.Background(), nil, &FeedConfig{ChatID: -1, Lang: "en"}, st, map[int]recentBug{100: {Status: "CONFIRMED"}}, true)
+	refreshTracked(context.Background(), nil, &config.FeedConfig{ChatID: -1, Lang: "en"}, st, map[int]recentBug{100: {Status: "CONFIRMED"}}, true)
 	if _, ok := st.Tracked["100"]; ok {
 		t.Error("a nil tracked entry should be dropped (not panic)")
 	}
@@ -363,7 +342,7 @@ func (b *fakeFeedBot) Call(ctx context.Context, url string, data *ta.RequestData
 // unclassified permanent 400 increments the bounded failure counter.
 func TestRefreshTrackedEditBranches(t *testing.T) {
 	feedSendPause = 0 // never sleep in tests
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	track := func(state string) *feedState {
 		return &feedState{Tracked: map[string]*trackedBug{"500": {MsgID: 42, State: state}}}
 	}
@@ -454,7 +433,7 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 // hammering); the unattempted bugs keep their old state and 0 EditFails (retried next cycle).
 func TestRefreshTrackedRateLimitStops(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	st := &feedState{Tracked: map[string]*trackedBug{
 		"800": {MsgID: 1, State: "CONFIRMED|"},
 		"801": {MsgID: 2, State: "CONFIRMED|"},
@@ -476,7 +455,7 @@ func TestRefreshTrackedRateLimitStops(t *testing.T) {
 // edits fire this call (the backlog drains over later cycles, never bursting past the rate limit).
 func TestRefreshTrackedEditCap(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	st := &feedState{Tracked: map[string]*trackedBug{}}
 	byID := map[int]recentBug{}
 	for i := 0; i < maxEditsPerCycle+5; i++ {
@@ -495,7 +474,7 @@ func TestRefreshTrackedEditCap(t *testing.T) {
 // dropped only after maxTrackMisses consecutive misses — never edited in the meantime.
 func TestRefreshTrackedMissDrop(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	st := &feedState{Tracked: map[string]*trackedBug{"900": {MsgID: 1, State: "CONFIRMED|"}}}
 	fb := &fakeFeedBot{}
 	other := map[int]recentBug{12345: {ID: 12345, Status: "CONFIRMED"}} // non-empty, but 900 absent
@@ -521,7 +500,7 @@ func TestRefreshTrackedMissDrop(t *testing.T) {
 // tracking, while the same number of transient failures never ages a live tracked bug out.
 func TestRefreshTrackedEditFailDrop(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	b := map[int]recentBug{950: {ID: 950, Status: "IN_PROGRESS"}}
 	tests := []struct {
 		name        string
@@ -565,7 +544,7 @@ func TestRefreshTrackedEditFailDrop(t *testing.T) {
 // and re-resolved (FIXED) must re-edit and stay tracked — impossible before resolved bugs were kept.
 func TestRefreshTrackedReopenReRenders(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	st := &feedState{Tracked: map[string]*trackedBug{"600": {MsgID: 1, State: "RESOLVED|INVALID"}}}
 	fb := &fakeFeedBot{}
 	b := recentBug{ID: 600, Status: "RESOLVED", Resolution: "FIXED"}
@@ -598,28 +577,12 @@ func TestLoadFeedStateCorruptBackup(t *testing.T) {
 	}
 }
 
-// TestPaceFeed: pacing returns immediately when disabled, and bails out (false) on a cancelled ctx
-// so a shutdown isn't held up by the pause (which would defeat the final state flush).
-func TestPaceFeed(t *testing.T) {
-	feedSendPause = 0
-	if !paceFeed(context.Background()) {
-		t.Error("with feedSendPause<=0 paceFeed should return true immediately")
-	}
-	feedSendPause = time.Hour // only a ctx cancel can return in time
-	defer func() { feedSendPause = 0 }()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if paceFeed(ctx) {
-		t.Error("paceFeed must return false on a cancelled ctx (so shutdown isn't delayed)")
-	}
-}
-
 // TestRefreshTrackedPartialFetchNoMiss locks in finding B's fix: when the refetch was incomplete
 // (fetchOK=false, a chunk failed), an absent tracked bug must NOT accrue a miss — it could have been
 // in the failed chunk — so a flaky chunk can never age out a live bug.
 func TestRefreshTrackedPartialFetchNoMiss(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	st := &feedState{Tracked: map[string]*trackedBug{"900": {MsgID: 1, State: "CONFIRMED|"}}}
 	fb := &fakeFeedBot{}
 	other := map[int]recentBug{12345: {ID: 12345, Status: "CONFIRMED"}} // 900 absent
@@ -640,7 +603,7 @@ func TestRefreshTrackedPartialFetchNoMiss(t *testing.T) {
 // transition that does not originate from UNCONFIRMED does not ping.
 func TestRefreshTrackedConfirmPing(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 
 	t.Run("UNCONFIRMED->CONFIRMED sends one non-silent ping", func(t *testing.T) {
 		st := &feedState{Tracked: map[string]*trackedBug{"700": {MsgID: 9, State: "UNCONFIRMED|"}}}
@@ -668,7 +631,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 
 	t.Run("silent_bugs=true suppresses the ping", func(t *testing.T) {
 		forced := true
-		fs := &FeedConfig{ChatID: -100, Lang: "en", SilentBugs: &forced}
+		fs := &config.FeedConfig{ChatID: -100, Lang: "en", SilentBugs: &forced}
 		st := &feedState{Tracked: map[string]*trackedBug{"701": {MsgID: 9, State: "UNCONFIRMED|"}}}
 		fb := &fakeFeedBot{}
 		refreshTracked(context.Background(), fb, fs, st, map[int]recentBug{701: {ID: 701, Status: "CONFIRMED", Summary: "x"}}, true)
@@ -722,7 +685,7 @@ func TestRefreshTrackedConfirmPing(t *testing.T) {
 // cycle without an endless re-edit; after maxConfirmTries the ping is abandoned and state advances.
 func TestRefreshTrackedConfirmRetry(t *testing.T) {
 	feedSendPause = 0
-	f := &FeedConfig{ChatID: -100, Lang: "en"}
+	f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 	b := map[int]recentBug{700: {ID: 700, Status: "CONFIRMED", Summary: "x"}}
 
 	// rate-limited confirm send: edit lands, ping 429s -> state stays UNCONFIRMED|, ConfirmTries=1

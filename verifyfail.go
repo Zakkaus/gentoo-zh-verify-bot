@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 )
 
 // vfailRec drives both retry cooldowns and automatic bans.
@@ -30,8 +32,8 @@ func (v *Verifier) loadVerifyFails() {
 		return
 	}
 	var recs []vfailDisk
-	if err := loadJSONFile(v.vfailPath, &recs); err != nil {
-		if stateReadFailed(err) {
+	if err := store.Load(v.vfailPath, &recs); err != nil {
+		if store.ReadFailed(err) {
 			v.vfailPath = ""
 		}
 		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
@@ -53,7 +55,7 @@ func (v *Verifier) saveVerifyFails() {
 	if v.vfailPath == "" {
 		return
 	}
-	saveJSONFile(v.vfailPath, func() any {
+	_ = store.Save(v.vfailPath, func() any {
 		v.mu.Lock()
 		defer v.mu.Unlock()
 		recs := make([]vfailDisk, 0, len(v.vfail))

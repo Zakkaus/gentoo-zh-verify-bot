@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoapi"
 )
@@ -115,7 +117,7 @@ func TestBugBacklogPaginationAcrossCycles(t *testing.T) {
 
 			st := &feedState{LastBugID: initialCursor}
 			fb := &fakeFeedBot{}
-			f := &FeedConfig{ChatID: -100, Lang: "en"}
+			f := &config.FeedConfig{ChatID: -100, Lang: "en"}
 			for cycle, wantCursor := range tt.wantCursor {
 				fetches := 0
 				bugs, ok := collectRecentBugs(context.Background(), st.LastBugID, func(ctx context.Context, afterID int) ([]recentBug, error) {
@@ -200,10 +202,8 @@ func TestPollAllUsesPerCursorBugBatches(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setFeedTestTiming(t, time.Second, time.Second)
 			off := false
-			feeds := []*FeedConfig{
-				{ChatID: -100, Lang: "en", News: &off},
-				{ChatID: -200, Lang: "en", News: &off},
-			}
+			feeds := []*config.FeedConfig{{ChatID: -100, Lang: "en", News: &off},
+				{ChatID: -200, Lang: "en", News: &off}}
 			states := map[int64]*feedState{
 				-100: {},
 				-200: {LastBugID: 1000},
@@ -260,7 +260,7 @@ func TestTelegramFeedOperationDeadlines(t *testing.T) {
 			name: "edit",
 			run: func(bot *deadlineFeedBot) bool {
 				st := &feedState{Tracked: map[string]*trackedBug{"7": {MsgID: 1, State: "CONFIRMED|"}}}
-				refreshTracked(context.Background(), bot, &FeedConfig{ChatID: -100}, st,
+				refreshTracked(context.Background(), bot, &config.FeedConfig{ChatID: -100}, st,
 					map[int]recentBug{7: {ID: 7, Status: "IN_PROGRESS"}}, true)
 				tb := st.Tracked["7"]
 				return bot.editDeadline && bot.edits == 1 && tb != nil && tb.EditFails == 0
@@ -286,11 +286,11 @@ func TestTelegramFeedOperationDeadlines(t *testing.T) {
 func TestPollFetchPhaseDeadlines(t *testing.T) {
 	tests := []struct {
 		name string
-		run  func(*testing.T, *fakeFeedBot, *FeedConfig, *feedState, *bool) feedSources
+		run  func(*testing.T, *fakeFeedBot, *config.FeedConfig, *feedState, *bool) feedSources
 	}{
 		{
 			name: "hung recent bugs do not starve news",
-			run: func(_ *testing.T, _ *fakeFeedBot, _ *FeedConfig, _ *feedState, nextRan *bool) feedSources {
+			run: func(_ *testing.T, _ *fakeFeedBot, _ *config.FeedConfig, _ *feedState, nextRan *bool) feedSources {
 				return feedSources{
 					recent: func(ctx context.Context, _ int) ([]recentBug, bool) {
 						<-ctx.Done()
@@ -306,7 +306,7 @@ func TestPollFetchPhaseDeadlines(t *testing.T) {
 		},
 		{
 			name: "hung news does not starve tracked bugs",
-			run: func(_ *testing.T, _ *fakeFeedBot, _ *FeedConfig, st *feedState, nextRan *bool) feedSources {
+			run: func(_ *testing.T, _ *fakeFeedBot, _ *config.FeedConfig, st *feedState, nextRan *bool) feedSources {
 				st.Tracked = map[string]*trackedBug{"42": {MsgID: 1, State: "CONFIRMED|"}}
 				return feedSources{
 					recent: func(context.Context, int) ([]recentBug, bool) { return nil, true },
@@ -327,12 +327,12 @@ func TestPollFetchPhaseDeadlines(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setFeedTestTiming(t, time.Second, 10*time.Millisecond)
 			fb := &fakeFeedBot{}
-			f := &FeedConfig{ChatID: -100}
+			f := &config.FeedConfig{ChatID: -100}
 			st := &feedState{LastBugID: 1, LastNewsURL: "old"}
 			nextRan := false
 			sources := tt.run(t, fb, f, st, &nextRan)
 			now := time.Now()
-			pollAllWithSources(context.Background(), fb, []*FeedConfig{f}, map[int64]*feedState{f.ChatID: st}, "", now,
+			pollAllWithSources(context.Background(), fb, []*config.FeedConfig{f}, map[int64]*feedState{f.ChatID: st}, "", now,
 				map[int64]time.Time{f.ChatID: now}, sources)
 			if !nextRan {
 				t.Fatal("the phase after a timed-out fetch inherited an expired context")
@@ -382,7 +382,7 @@ func TestTrackedBugChunksGetIndependentDeadlines(t *testing.T) {
 			}
 			st := &feedState{Tracked: map[string]*trackedBug{strconv.Itoa(tt.wantID): {MsgID: 1, State: "CONFIRMED|"}}}
 			fb := &fakeFeedBot{}
-			refreshTracked(context.Background(), fb, &FeedConfig{ChatID: -100}, st, byID, ok)
+			refreshTracked(context.Background(), fb, &config.FeedConfig{ChatID: -100}, st, byID, ok)
 			if fb.edits != 1 {
 				t.Fatalf("later successful chunk was not usable: got %d edits", fb.edits)
 			}
@@ -414,7 +414,7 @@ func TestTrackedBugSchemaValidation(t *testing.T) {
 			}
 			st := &feedState{Tracked: map[string]*trackedBug{"77": {MsgID: 1, State: "CONFIRMED|"}}}
 			fb := &fakeFeedBot{}
-			refreshTracked(context.Background(), fb, &FeedConfig{ChatID: -100}, st, map[int]recentBug{}, ok)
+			refreshTracked(context.Background(), fb, &config.FeedConfig{ChatID: -100}, st, map[int]recentBug{}, ok)
 			if got := st.Tracked["77"].Misses; got != tt.wantMisses {
 				t.Fatalf("misses = %d, want %d (decoded bugs: %v)", got, tt.wantMisses, bugs)
 			}
@@ -444,7 +444,7 @@ func TestTransientEditsNeverAgeOutTracking(t *testing.T) {
 			st := &feedState{Tracked: map[string]*trackedBug{"88": {MsgID: 1, State: "CONFIRMED|", EditFails: tt.initialFail}}}
 			fb := &fakeFeedBot{editErr: tt.err}
 			for i := 0; i < tt.repeats && st.Tracked["88"] != nil; i++ {
-				refreshTracked(context.Background(), fb, &FeedConfig{ChatID: -100}, st,
+				refreshTracked(context.Background(), fb, &config.FeedConfig{ChatID: -100}, st,
 					map[int]recentBug{88: {ID: 88, Status: "IN_PROGRESS"}}, true)
 			}
 			tb := st.Tracked["88"]
@@ -463,9 +463,9 @@ func TestFormatNewsTelegramLimit(t *testing.T) {
 		name  string
 		title string
 	}{
-		{name: "ASCII", title: strings.Repeat("a", telegramMessageLimit+500)},
-		{name: "UTF-16 surrogate pairs", title: strings.Repeat("😀", telegramMessageLimit)},
-		{name: "escaped HTML", title: strings.Repeat("&amp;<>", telegramMessageLimit)},
+		{name: "ASCII", title: strings.Repeat("a", tg.MessageLimit+500)},
+		{name: "UTF-16 surrogate pairs", title: strings.Repeat("😀", tg.MessageLimit)},
+		{name: "escaped HTML", title: strings.Repeat("&amp;<>", tg.MessageLimit)},
 	}
 
 	for _, tt := range tests {
@@ -476,8 +476,8 @@ func TestFormatNewsTelegramLimit(t *testing.T) {
 				t.Fatalf("invalid rendered anchor: %q", got)
 			}
 			visible := "📰 " + htmlstd.UnescapeString(got[start+1:end])
-			if units := telegramTextUnits(visible); units > telegramMessageLimit {
-				t.Fatalf("rendered news uses %d Telegram text units, limit %d", units, telegramMessageLimit)
+			if units := tg.TextUnits(visible); units > tg.MessageLimit {
+				t.Fatalf("rendered news uses %d Telegram text units, limit %d", units, tg.MessageLimit)
 			}
 			if !strings.Contains(got, "…</a>") {
 				t.Error("oversized title was not visibly truncated")
@@ -524,7 +524,7 @@ func TestPermanentNewsRejectionAdvancesCursor(t *testing.T) {
 				{date: "2026-08-22", title: "Older new", url: "older-new"},
 				{date: "2026-08-21", title: "Old", url: "old"},
 			}
-			postFeedItems(context.Background(), bot, &FeedConfig{ChatID: -100}, st, nil, news)
+			postFeedItems(context.Background(), bot, &config.FeedConfig{ChatID: -100}, st, nil, news)
 			if st.LastNewsURL != tt.wantCursor {
 				t.Fatalf("news cursor = %q, want %q", st.LastNewsURL, tt.wantCursor)
 			}

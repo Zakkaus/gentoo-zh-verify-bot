@@ -1,0 +1,59 @@
+{
+  "verification": {
+    "challenge": {
+      "fallback_intro": "没装 Linux 也可以,换一个问题:\n\n❓ %[1]s\n\n直接把答案发到这里即可。还有 %[2]d 次机会。",
+      "fallback_questions": [
+        {
+          "answers": [
+            "gentoozh.org",
+            "gentoozh"
+          ],
+          "prompt": "Gentoo 中文社区官方网站的域名是什么?"
+        },
+        {
+          "answers": [
+            "gentoo.org"
+          ],
+          "prompt": "Gentoo 官方网站的域名是什么?"
+        }
+      ],
+      "fallback_wrong": "❌ 不对。请再想想上面那个问题,直接把答案发过来。还有 %[1]d 次机会。",
+      "kernel_prompt": "完成入群验证，请回答以下问题。\n\n❓ %[1]s\n\n<b>作答方式</b>\n在终端执行 <code>uname -r</code>，将输出的内核版本号发送至此。\n格式形如 <code>X.Y.Z-gentoo</code>，各发行版均可。\n请发送本机实际版本号，勿使用示例中的占位符。\n\n<b>无 Linux 设备</b>\n回复 <code>无 Linux 设备</code>，并发送当前分钟数。\n分钟数为时钟冒号后两位，例如 14:46 为 <code>46</code>。\n示例：<code>无 Linux 设备46</code>\n\n剩余 %[2]d 次机会。答错或超时将被拒绝。",
+      "kernel_question": "你正在运行的 Linux 内核版本号是多少?",
+      "kernel_wrong": "❌ 这不是有效的 Linux 内核版本号。请执行 <code>uname -r</code>，发送其输出。剩余 %[1]d 次机会。",
+      "no_linux_retry": "格式如下：回复 <code>无 Linux 设备</code>，并发送当前分钟数。分钟数为时钟冒号后两位，例如 14:46 为 <code>46</code>。",
+      "os_mixed": "你的回复提到了其他系统。若该版本号为本机运行的 Linux 内核（如 WSL 或虚拟机），请仅发送该版本号。",
+      "quiz_prompt": "请回答下面的问题完成入群验证:\n\n❓ %[1]s",
+      "sample_copied": "你发送的是示例中的版本号，而非本机版本号。请执行 <code>uname -r</code>，发送实际输出。再次发送示例将被拒绝。"
+    },
+    "channel": {
+      "continue_button": "✅ 我已关注,继续",
+      "continue_ok": "✅ 已关注,请回答下面的问题",
+      "fallback_name": "管理员指定的频道",
+      "first": "答案正确。请先关注频道 %[1]s,关注后把答案再发一次即可通过。",
+      "follow_button": "📢 关注频道 %[1]s",
+      "follow_prompt": "完成验证还差一步:请先关注频道 %[1]s,关注后回到本对话点「✅ 我已关注,继续」。",
+      "no_pending": "你当前没有待处理的入群申请。请先申请加入群组,再点群内机器人消息中的「✅ 点此完成验证」按钮。",
+      "not_followed_yet": "还没检测到你关注 %[1]s,关注后再点一次。"
+    },
+    "group": {
+      "body": "👋 %[1]s 申请加入。请点下方「✅ 点此完成验证」%[2]s 打开机器人私聊完成验证,%[3]d 秒内未完成将被拒绝。%[4]s",
+      "channel_hint": "\n⚠️ 完成验证前还需先关注频道 %[1]s。",
+      "link_text": "(或 <a href=\"%[1]s\">点此</a>)",
+      "verify_button": "✅ 点此完成验证"
+    },
+    "recovery": {
+      "renotify": "🔄 抱歉,机器人刚才离线了约 %[1]s,你的入群验证已重新计时。请回到本对话继续答题;若这里没有题目,回群里点「✅ 点此完成验证」重新获取。"
+    },
+    "result": {
+      "ai_caught": "❌ 检测到自动化程序代答,验证已拒绝。",
+      "already_handled": "验证已处理,或申请已过期/无法批准,请重新申请。",
+      "approved": "✅ 验证通过,已批准加入,欢迎!",
+      "not_yours": "这不是你的验证申请,无法操作。",
+      "stale_question": "该题目已过期,请重新打开验证链接获取新题。",
+      "wrong_banned": "❌ 验证连续失败多次,已被封禁。",
+      "wrong_no_wait": "❌ 答错了,已拒绝。可重新申请。",
+      "wrong_retry": "❌ 答错了,已拒绝。请 %[1]d 秒后重新申请。"
+    }
+  }
+}

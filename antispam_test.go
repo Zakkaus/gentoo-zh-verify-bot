@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/mymmrac/telego"
 )
 
@@ -31,7 +32,7 @@ func TestParseChannelID(t *testing.T) {
 	}
 }
 
-func TestControlGroupGate(t *testing.T) {
+func TestControlGroupAllowed(t *testing.T) {
 	tests := []struct {
 		name        string
 		controlID   int64
@@ -45,10 +46,10 @@ func TestControlGroupGate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &Verifier{cfg: &Config{ControlGroupID: tt.controlID}}
-			allowed, notice := v.controlGroupGate(tt.chatID)
+			cfg := &config.Config{ControlGroupID: tt.controlID}
+			allowed, notice := cfg.ControlGroupAllowed(tt.chatID)
 			if allowed != tt.wantAllowed || notice != tt.wantNotice {
-				t.Errorf("controlGroupGate(%d) = (%v, %q), want (%v, %q)", tt.chatID, allowed, notice, tt.wantAllowed, tt.wantNotice)
+				t.Errorf("ControlGroupAllowed(%d) = (%v, %q), want (%v, %q)", tt.chatID, allowed, notice, tt.wantAllowed, tt.wantNotice)
 			}
 		})
 	}
@@ -67,12 +68,10 @@ func TestBcAllowUnbansEveryGuardedGroup(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				GroupIDs:         groups,
-				Groups:           []GroupConfig{{ID: -100}, {ID: -200}, {ID: -300}},
+			cfg := &config.Config{GroupIDs: groups,
+				Groups:           []config.GroupConfig{{ID: -100}, {ID: -200}, {ID: -300}},
 				ControlGroupID:   -100,
-				NotifyTTLSeconds: -1,
-			}
+				NotifyTTLSeconds: -1}
 			v := NewVerifier(cfg)
 			fake := newFakeMod()
 			fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
@@ -120,7 +119,7 @@ func TestChannelWhitelistBound(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := NewVerifier(&Config{})
+			v := NewVerifier(&config.Config{})
 			for i := range channelWhitelistMax + tt.extra {
 				v.setChannelWhite(-1000000-int64(i), true)
 			}

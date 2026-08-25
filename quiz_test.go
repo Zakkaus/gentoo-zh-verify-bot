@@ -1,9 +1,13 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+)
 
 func TestShuffledQuestion(t *testing.T) {
-	q := Question{Q: "pick A", Options: []string{"A", "B", "C", "D"}, Answer: 0}
+	q := (config.Question{Q: "pick A", Options: []string{"A", "B", "C", "D"}, Answer: 0})
 	for i := 0; i < 200; i++ {
 		text, opts, correctIdx := shuffledQuestion(q)
 		if text != q.Q {

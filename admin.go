@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -89,14 +90,14 @@ func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
 		switch arg {
 		case "":
 			src := "配置文件"
-			if validMode(v.verifyModeOverride()) {
+			if config.ValidMode(v.verifyModeOverride()) {
 				src = "/vmode 设定"
 			}
 			return fmt.Sprintf("🔐 当前入群验证方式:%s(来自%s)。\n用法:/vmode kernel 改为填内核版本号;/vmode quiz 改回选择题;/vmode mixed 两者随机;/vmode auto 恢复按配置文件。",
 				modeName(v.effectiveMode(gid)), src)
-		case modeKernel, modeQuiz, modeMixed:
+		case config.ModeKernel, config.ModeQuiz, config.ModeMixed:
 			v.setVerifyMode(arg)
-			if arg == modeKernel {
+			if arg == (config.ModeKernel) {
 				return "🔐 入群验证已改为:填写内核版本号 —— 申请者必须自己输入 uname -r 的版本号,只会乱点按钮的机器人进不来。"
 			}
 			return "🔐 入群验证已改为:" + modeName(arg) + "。"
@@ -219,15 +220,6 @@ func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() st
 	return nil
 }
 
-// Zero preserves the legacy policy allowing global commands from any guarded group.
-func (v *Verifier) controlGroupGate(chatID int64) (bool, string) {
-	controlID := v.cfg.ControlGroupID
-	if controlID == 0 || chatID == controlID {
-		return true, ""
-	}
-	return false, fmt.Sprintf("⛔ 该命令只能在控制群（ID %d）中使用。", controlID)
-}
-
 // adminCmd enforces the process-wide control-group boundary.
 func (v *Verifier) adminCmd(ctx *th.Context, update telego.Update, fn func() string) error {
 	msg := update.Message
@@ -240,7 +232,7 @@ func (v *Verifier) adminCmd(ctx *th.Context, update telego.Update, fn func() str
 	defer func() {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
-	if allowed, refusal := v.controlGroupGate(gid); !allowed {
+	if allowed, refusal := v.cfg.ControlGroupAllowed(gid); !allowed {
 		v.notify(c, bot, gid, refusal)
 		return nil
 	}

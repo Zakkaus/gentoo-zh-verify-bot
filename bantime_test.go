@@ -40,13 +40,6 @@ func TestBanDurationText(t *testing.T) {
 }
 
 func TestMuteDuration(t *testing.T) {
-	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.MuteSeconds != 3600 {
-		t.Errorf("default MuteSeconds = %d, want 3600 (1h)", c.MuteSeconds)
-	}
 	// /mute uses cfg.MuteSeconds by default; an inline duration overrides it.
 	if secs, ok := parseBanDuration("30m"); !ok || secs != 1800 {
 		t.Errorf("inline /mute 30m parse = (%d,%v), want (1800,true)", secs, ok)

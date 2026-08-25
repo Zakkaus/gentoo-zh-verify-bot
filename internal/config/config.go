@@ -1,4 +1,5 @@
-package main
+// Package config loads and resolves the bot's JSON configuration.
+package config
 
 import (
 	"encoding/json"
@@ -11,58 +12,135 @@ import (
 	"time"
 )
 
-// Question is one verification quiz item. Answer is the 0-based index into Options.
-type Question struct {
-	Q       string   `json:"q"`
-	Options []string `json:"options"`
-	Answer  int      `json:"answer"`
+const (
+	// ModeQuiz presents shuffled inline-button questions.
+	ModeQuiz = "quiz"
+	// ModeKernel requires applicants to type a kernel version.
+	ModeKernel = "kernel"
+	// ModeMixed chooses quiz or kernel verification per applicant.
+	ModeMixed = "mixed"
+)
+
+const defaultVerifyMode = ModeKernel
+
+// ValidMode reports whether mode names a supported verification mode.
+func ValidMode(mode string) bool {
+	switch mode {
+	case ModeQuiz, ModeKernel, ModeMixed:
+		return true
+	}
+	return false
 }
 
-// ShortQuestion is typed; accepted answers never appear in its prompt.
-// Answers contains normalized whole replies, not substrings in prose.
+// Telegram treats until_date below 30 seconds or above 366 days as permanent.
+const telegramBanMax = 366 * 86400
+
+// ClampBanSeconds maps a ban duration into Telegram's enforced range.
+func ClampBanSeconds(seconds int) int {
+	switch {
+	case seconds <= 0:
+		return 0
+	case seconds < 30:
+		return 30
+	case seconds > telegramBanMax:
+		return 0
+	default:
+		return seconds
+	}
+}
+
+// clampMuteSecs maps a finite mute duration into Telegram's enforced range.
+func clampMuteSecs(secs int) int {
+	switch {
+	case secs < 30:
+		return 30
+	case secs > telegramBanMax:
+		return telegramBanMax
+	default:
+		return secs
+	}
+}
+
+// defaultPrivateReply handles plain DMs not routed to a command.
+const defaultPrivateReply = "👋 这是 Gentoo 中文社区的入群验证 + Gentoo/Linux 助手机器人。\n\n" +
+	"• 想入群:回到群里发起加入申请,再点群消息中的「✅ 点此完成验证」链接来这里完成验证。\n" +
+	"• 查询命令(/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs)私聊也能直接用(每分钟有限次,防滥用;群里不限次)。\n" +
+	"• 审核/管理命令仅在群里有效。"
+
+// Question is one verification quiz item with a zero-based answer index.
+type Question struct {
+	// Q is the question prompt.
+	Q string `json:"q"`
+	// Options lists the possible answers.
+	Options []string `json:"options"`
+	// Answer is the zero-based index of the correct option.
+	Answer int `json:"answer"`
+}
+
+// ShortQuestion is an answer-hidden verification question.
 type ShortQuestion struct {
-	Q       string   `json:"q"`
+	// Q is the question prompt.
+	Q string `json:"q"`
+	// Answers lists normalized whole replies accepted as correct.
 	Answers []string `json:"answers"`
 }
 
-// OverlayCfg is a GitHub overlay searched by /pkg.
+// OverlayCfg identifies a GitHub overlay searched by /pkg.
 type OverlayCfg struct {
-	Name   string `json:"name"`
-	Repo   string `json:"repo"`   // owner/name
-	Branch string `json:"branch"` // default "master" if empty
+	// Name is the overlay's display and cache name.
+	Name string `json:"name"`
+	// Repo is the GitHub repository in owner/name form.
+	Repo string `json:"repo"`
+	// Branch is the repository branch and defaults to master when empty.
+	Branch string `json:"branch"`
 }
 
 // GroupConfig overrides top-level defaults for one guarded group.
 type GroupConfig struct {
-	ID                int64      `json:"id"`
-	RequiredChannelID *int64     `json:"required_channel_id"` // nil => global required_channel_id
-	ChannelDisplay    string     `json:"channel_display"`     // "" => global channel_display
-	ChannelInviteURL  string     `json:"channel_invite_url"`  // "" => global channel_invite_url
-	Questions         []Question `json:"questions"`           // empty => global questions
-	// VerifyMode is "kernel", "quiz", "mixed", or "" to inherit.
+	// ID is the guarded Telegram group ID.
+	ID int64 `json:"id"`
+	// RequiredChannelID overrides the global channel requirement when non-nil.
+	RequiredChannelID *int64 `json:"required_channel_id"`
+	// ChannelDisplay overrides the global channel display name when non-empty.
+	ChannelDisplay string `json:"channel_display"`
+	// ChannelInviteURL overrides the global private-channel invite when non-empty.
+	ChannelInviteURL string `json:"channel_invite_url"`
+	// Questions overrides the global quiz pool when non-empty.
+	Questions []Question `json:"questions"`
+	// VerifyMode is kernel, quiz, mixed, or empty to inherit.
 	VerifyMode string `json:"verify_mode"`
-	// TrustedMemberGroupIDs bypasses verification for confirmed members of other chats.
-	// nil inherits the global list; [] disables it; non-empty replaces it.
-	// Failed membership checks fall back to verification, never approval.
+	// TrustedMemberGroupIDs overrides, disables, or inherits the global bypass list.
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 }
 
-// FeedConfig configures one optional Bugzilla/news destination.
+// FeedConfig configures one optional Bugzilla and news destination.
 type FeedConfig struct {
-	ChatID          int64  `json:"chat_id"`          // channel/group to post to (bot must be admin there)
-	Lang            string `json:"lang"`             // bug field labels: "zh" (default) or "en"
-	IntervalSeconds int    `json:"interval_seconds"` // poll interval; default 300, min 60
-	Bugs            *bool  `json:"bugs"`             // post new Bugzilla bugs (default true)
-	News            *bool  `json:"news"`             // post new news items (default true)
-	BugProduct      string `json:"bug_product"`      // only bugs in this Bugzilla product (empty = all)
-	BugComponent    string `json:"bug_component"`    // only bugs in this component (empty = all)
-	SilentBugs      *bool  `json:"silent_bugs"`      // true => all bugs silent; unset => only UNCONFIRMED silent (see bugSilent)
+	// ChatID is the channel or group receiving feed posts.
+	ChatID int64 `json:"chat_id"`
+	// Lang selects zh or en bug field labels and defaults to zh.
+	Lang string `json:"lang"`
+	// IntervalSeconds is the polling interval with a 300-second default and 60-second minimum.
+	IntervalSeconds int `json:"interval_seconds"`
+	// Bugs enables Bugzilla posts and defaults to true.
+	Bugs *bool `json:"bugs"`
+	// News enables news posts and defaults to true.
+	News *bool `json:"news"`
+	// BugProduct filters bugs by product when non-empty.
+	BugProduct string `json:"bug_product"`
+	// BugComponent filters bugs by component when non-empty.
+	BugComponent string `json:"bug_component"`
+	// SilentBugs makes every bug post silent when true.
+	SilentBugs *bool `json:"silent_bugs"`
 }
 
-func (f *FeedConfig) bugsOn() bool { return f.Bugs == nil || *f.Bugs }
-func (f *FeedConfig) newsOn() bool { return f.News == nil || *f.News }
+// BugsOn reports whether this feed posts Bugzilla bugs.
+func (f *FeedConfig) BugsOn() bool { return f.Bugs == nil || *f.Bugs }
 
-func (f *FeedConfig) interval() time.Duration {
+// NewsOn reports whether this feed posts news items.
+func (f *FeedConfig) NewsOn() bool { return f.News == nil || *f.News }
+
+// Interval returns this feed's clamped polling interval.
+func (f *FeedConfig) Interval() time.Duration {
 	switch {
 	case f.IntervalSeconds <= 0:
 		return 5 * time.Minute // unset -> default
@@ -73,73 +151,74 @@ func (f *FeedConfig) interval() time.Duration {
 	}
 }
 
-// Config is loaded from JSON; BOT_TOKEN remains environment-only.
+// Config contains the validated JSON configuration.
 type Config struct {
-	// Groups is canonical after legacy group_ids/group_id are merged; GroupIDs mirrors it.
-	Groups   []GroupConfig `json:"groups"`
-	GroupIDs []int64       `json:"group_ids"`
-	GroupID  int64         `json:"group_id"`
-	// ControlGroupID limits global commands; zero allows any guarded group's admins.
+	// Groups is the canonical guarded-group list after legacy IDs are merged.
+	Groups []GroupConfig `json:"groups"`
+	// GroupIDs mirrors Groups and accepts the legacy group_ids key.
+	GroupIDs []int64 `json:"group_ids"`
+	// GroupID accepts the legacy singular group_id key.
+	GroupID int64 `json:"group_id"`
+	// ControlGroupID limits global commands and zero allows any guarded group.
 	ControlGroupID int64 `json:"control_group_id"`
-	// RequiredChannelID gates approval on channel membership; zero disables it.
-	RequiredChannelID int64  `json:"required_channel_id"`
-	ChannelDisplay    string `json:"channel_display"`
-	// TrustedMemberGroupIDs is the global bypass source list.
-	// Unreadable membership falls back to verification.
+	// RequiredChannelID gates approval on channel membership and zero disables it.
+	RequiredChannelID int64 `json:"required_channel_id"`
+	// ChannelDisplay names the required channel for messages and public links.
+	ChannelDisplay string `json:"channel_display"`
+	// TrustedMemberGroupIDs is the global verification-bypass source list.
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 	// KnownChatIDs prevents auto-leave without granting verification or bypass semantics.
 	KnownChatIDs []int64 `json:"known_chat_ids"`
-	// ChannelInviteURL is required for private channels without a public handle.
+	// ChannelInviteURL links a private required channel without a public handle.
 	ChannelInviteURL string `json:"channel_invite_url"`
 	// TimeoutSeconds is the verification deadline.
 	TimeoutSeconds int `json:"timeout_seconds"`
 	// AdminLogChatID receives moderation and failed-action notices.
 	AdminLogChatID int64 `json:"admin_log_chat_id"`
-	// NotifyTTLSeconds: 0 defaults to 60; negative disables deletion.
+	// NotifyTTLSeconds controls notice deletion, defaults to 60, and is disabled when negative.
 	NotifyTTLSeconds int `json:"notify_ttl_seconds"`
-	// LookupTTLSeconds deletes lookup commands and answers together.
-	// nil defaults to 180; non-positive disables it.
+	// LookupTTLSeconds controls lookup deletion, defaults to 180, and is disabled when non-positive.
 	LookupTTLSeconds *int `json:"lookup_ttl_seconds"`
-	// WarnLimit defaults to three strikes before an automatic kick.
+	// WarnLimit is the strike count before an automatic kick and defaults to three.
 	WarnLimit int `json:"warn_limit"`
-	// PrivateQueryPerMin limits DMs only and defaults to three.
+	// PrivateQueryPerMin is the per-user DM query limit and defaults to three.
 	PrivateQueryPerMin int `json:"private_query_per_min"`
-	// RequiredChannelFailOpen controls unreadable membership: nil/true admits verified users;
-	// false blocks them. Admins are alerted either way.
+	// RequiredChannelFailOpen controls admission when required-channel membership is unreadable.
 	RequiredChannelFailOpen *bool `json:"required_channel_fail_open"`
-	// BanSeconds: 0 is permanent; /bantime may override it at runtime.
+	// BanSeconds is the default ban duration and zero means permanent.
 	BanSeconds int `json:"ban_seconds"`
-	// MuteSeconds is always finite; it defaults to one hour and may be overridden per command.
+	// MuteSeconds is the finite default mute duration.
 	MuteSeconds int `json:"mute_seconds"`
-	// VerifyRetrySeconds defaults to 180; negative disables the cooldown.
+	// VerifyRetrySeconds is the cooldown and a negative value disables it.
 	VerifyRetrySeconds int `json:"verify_retry_seconds"`
-	// VerifyMaxFails defaults to three; negative disables automatic bans.
+	// VerifyMaxFails is the automatic-ban threshold and a negative value disables it.
 	VerifyMaxFails int `json:"verify_max_fails"`
-	// VerifyMode is "kernel", "quiz", or "mixed"; typing prevents blind button clicks.
-	// Per-group config and /vmode may override it.
+	// VerifyMode selects kernel, quiz, or mixed verification.
 	VerifyMode string `json:"verify_mode"`
 	// FallbackQuestions is the answer-hidden path for applicants without Linux.
 	FallbackQuestions []ShortQuestion `json:"fallback_questions"`
-	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).
+	// Overlays lists GitHub overlays searched by /pkg.
 	Overlays []OverlayCfg `json:"overlays"`
-	// NewsURL: the Gentoo news-items index for /news (defaults to gentoo.org when empty).
+	// NewsURL is the Gentoo news-items index used by /news.
 	NewsURL string `json:"news_url"`
-	// StatsTimezone: IANA tz for the daily /stats reset boundary (defaults to UTC+8 when empty/invalid).
+	// StatsTimezone is the IANA time zone for the daily /stats boundary.
 	StatsTimezone string `json:"stats_timezone"`
-	// RichMessages falls back to HTML when Bot API 10.1 rejects the request.
+	// RichMessages enables rich Bot API messages with an HTML fallback.
 	RichMessages bool `json:"rich_messages"`
-	// UserAgent (optional): overrides the outbound HTTP User-Agent for /pkg /use /news /bug.
+	// UserAgent overrides the outbound HTTP User-Agent when non-empty.
 	UserAgent string `json:"user_agent"`
 	// PrivateReply handles non-command DMs outside verification.
 	PrivateReply string `json:"private_reply"`
-	// BlockChannelSenders requires BotFather privacy mode to be off.
+	// BlockChannelSenders rejects sender-chat posts when privacy mode is disabled.
 	BlockChannelSenders bool `json:"block_channel_senders"`
-	// ChannelWhitelist: channel sender chats allowed to post in the groups (never blocked).
+	// ChannelWhitelist lists sender chats allowed to post in guarded groups.
 	ChannelWhitelist []int64 `json:"channel_whitelist"`
-	// Feed is the legacy singular form and is merged into Feeds.
-	Feeds     []FeedConfig `json:"feeds"`
-	Feed      *FeedConfig  `json:"feed"`
-	Questions []Question   `json:"questions"`
+	// Feeds lists Bugzilla and news destinations.
+	Feeds []FeedConfig `json:"feeds"`
+	// Feed accepts the legacy singular feed form and is merged into Feeds.
+	Feed *FeedConfig `json:"feed"`
+	// Questions is the global verification quiz pool.
+	Questions []Question `json:"questions"`
 }
 
 func warnUnknownJSONKeys(raw json.RawMessage, typ reflect.Type, where string) {
@@ -189,6 +268,7 @@ func warnUnknownConfigKeys(data []byte) {
 	}
 }
 
+// LoadConfig reads, validates, defaults, and normalizes a JSON configuration file.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -268,22 +348,22 @@ func LoadConfig(path string) (*Config, error) {
 			}
 		}
 	}
-	if c.VerifyMode != "" && !validMode(c.VerifyMode) {
-		return nil, fmt.Errorf("verify_mode %q is not one of %q, %q, %q", c.VerifyMode, modeKernel, modeQuiz, modeMixed)
+	if c.VerifyMode != "" && !ValidMode(c.VerifyMode) {
+		return nil, fmt.Errorf("verify_mode %q is not one of %q, %q, %q", c.VerifyMode, ModeKernel, ModeQuiz, ModeMixed)
 	}
 	for i := range c.Groups {
 		g := &c.Groups[i]
 		if err := validateQuestions(g.Questions, fmt.Sprintf("group %d", g.ID)); err != nil {
 			return nil, err
 		}
-		if g.VerifyMode != "" && !validMode(g.VerifyMode) {
-			return nil, fmt.Errorf("group %d: verify_mode %q is not one of %q, %q, %q", g.ID, g.VerifyMode, modeKernel, modeQuiz, modeMixed)
+		if g.VerifyMode != "" && !ValidMode(g.VerifyMode) {
+			return nil, fmt.Errorf("group %d: verify_mode %q is not one of %q, %q, %q", g.ID, g.VerifyMode, ModeKernel, ModeQuiz, ModeMixed)
 		}
 		// Kernel-only groups need no quiz pool; runtime quiz mode falls back to kernel.
-		if c.verifyMode(g.ID) != modeKernel && len(c.questions(g.ID)) == 0 {
-			return nil, fmt.Errorf("group %d: no questions (add global questions or this group's own questions, or set verify_mode to %q)", g.ID, modeKernel)
+		if c.VerifyModeFor(g.ID) != ModeKernel && len(c.QuestionsFor(g.ID)) == 0 {
+			return nil, fmt.Errorf("group %d: no questions (add global questions or this group's own questions, or set verify_mode to %q)", g.ID, ModeKernel)
 		}
-		if c.requiredChannel(g.ID) != 0 && c.channelInvite(g.ID) == "" && !strings.HasPrefix(c.channelDisplay(g.ID), "@") {
+		if c.RequiredChannel(g.ID) != 0 && c.ChannelInvite(g.ID) == "" && !strings.HasPrefix(c.ChannelDisplayFor(g.ID), "@") {
 			return nil, fmt.Errorf("group %d: required_channel_id is set but the channel has no reachable link (set channel_display to an @handle, or channel_invite_url for a private channel)", g.ID)
 		}
 	}
@@ -315,7 +395,7 @@ func LoadConfig(path string) (*Config, error) {
 		c.MuteSeconds = 3600 // mute is always timed; default 1h (no permanent mute)
 	}
 	// Keep reported config durations within Telegram's enforced window.
-	c.BanSeconds = clampBanSecs(c.BanSeconds)
+	c.BanSeconds = ClampBanSeconds(c.BanSeconds)
 	c.MuteSeconds = clampMuteSecs(c.MuteSeconds)
 	if c.PrivateReply == "" {
 		c.PrivateReply = defaultPrivateReply
@@ -355,6 +435,14 @@ func (c *Config) IsGroup(id int64) bool {
 	return false
 }
 
+// ControlGroupAllowed reports whether a chat may run process-wide commands.
+func (c *Config) ControlGroupAllowed(chatID int64) (bool, string) {
+	if c.ControlGroupID == 0 || chatID == c.ControlGroupID {
+		return true, ""
+	}
+	return false, fmt.Sprintf("⛔ 该命令只能在控制群（ID %d）中使用。", c.ControlGroupID)
+}
+
 func (c *Config) group(id int64) *GroupConfig {
 	for i := range c.Groups {
 		if c.Groups[i].ID == id {
@@ -364,53 +452,56 @@ func (c *Config) group(id int64) *GroupConfig {
 	return nil
 }
 
-// Per-group values override top-level defaults.
-func (c *Config) requiredChannel(id int64) int64 {
+// RequiredChannel returns the effective required-channel ID for a group.
+func (c *Config) RequiredChannel(id int64) int64 {
 	if g := c.group(id); g != nil && g.RequiredChannelID != nil {
 		return *g.RequiredChannelID
 	}
 	return c.RequiredChannelID
 }
 
-// A present per-group list, including [], overrides the global bypass list.
-func (c *Config) trustedGroups(id int64) []int64 {
+// TrustedGroups returns the effective verification-bypass source list for a group.
+func (c *Config) TrustedGroups(id int64) []int64 {
 	if g := c.group(id); g != nil && g.TrustedMemberGroupIDs != nil {
 		return g.TrustedMemberGroupIDs
 	}
 	return c.TrustedMemberGroupIDs
 }
 
-// Unreadable required-channel membership defaults to fail-open.
-func (c *Config) failOpenChannel() bool {
+// FailOpenChannel reports whether unreadable required-channel membership admits users.
+func (c *Config) FailOpenChannel() bool {
 	return c.RequiredChannelFailOpen == nil || *c.RequiredChannelFailOpen
 }
 
-func (c *Config) channelDisplay(id int64) string {
+// ChannelDisplayFor returns the effective required-channel display name for a group.
+func (c *Config) ChannelDisplayFor(id int64) string {
 	if g := c.group(id); g != nil && g.ChannelDisplay != "" {
 		return g.ChannelDisplay
 	}
 	return c.ChannelDisplay
 }
 
-func (c *Config) channelInvite(id int64) string {
+// ChannelInvite returns the effective private-channel invite URL for a group.
+func (c *Config) ChannelInvite(id int64) string {
 	if g := c.group(id); g != nil && g.ChannelInviteURL != "" {
 		return g.ChannelInviteURL
 	}
 	return c.ChannelInviteURL
 }
 
-// verifyMode resolves per-group, global, then built-in defaults.
-func (c *Config) verifyMode(id int64) string {
-	if g := c.group(id); g != nil && validMode(g.VerifyMode) {
+// VerifyModeFor returns the effective verification mode for a group.
+func (c *Config) VerifyModeFor(id int64) string {
+	if g := c.group(id); g != nil && ValidMode(g.VerifyMode) {
 		return g.VerifyMode
 	}
-	if validMode(c.VerifyMode) {
+	if ValidMode(c.VerifyMode) {
 		return c.VerifyMode
 	}
 	return defaultVerifyMode
 }
 
-func (c *Config) questions(id int64) []Question {
+// QuestionsFor returns the effective verification quiz pool for a group.
+func (c *Config) QuestionsFor(id int64) []Question {
 	if g := c.group(id); g != nil && len(g.Questions) > 0 {
 		return g.Questions
 	}

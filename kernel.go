@@ -11,44 +11,28 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// Verification modes:
-// - quiz: shuffled inline buttons;
-// - kernel: a typed uname -r value, preventing blind button clicks;
-// - mixed: one mode chosen per applicant.
-const (
-	modeQuiz   = "quiz"
-	modeKernel = "kernel"
-	modeMixed  = "mixed"
-)
-
-const defaultVerifyMode = modeKernel
-
 // Persist the localized question so recovery renders the same challenge.
-func kernelQuestion(l lang) string { return tr(l).KernelQuestion }
+func kernelQuestion(l i18n.Lang) string {
+	return i18n.Messages.Verification.Challenge.KernelQuestion.For(l)
+}
 
 // Three replies tolerate typos while bounding DM guess floods.
 const kernelMaxTries = 3
 
-func validMode(s string) bool {
-	switch s {
-	case modeQuiz, modeKernel, modeMixed:
-		return true
-	}
-	return false
-}
-
 func modeName(mode string) string {
 	switch mode {
-	case modeKernel:
+	case config.ModeKernel:
 		return "内核版本(需手动输入)"
-	case modeQuiz:
+	case config.ModeQuiz:
 		return "选择题(点按钮)"
-	case modeMixed:
+	case config.ModeMixed:
 		return "随机(内核版本 / 选择题各一半)"
 	}
 	return mode
@@ -225,44 +209,44 @@ func (v *Verifier) setVerifyMode(mode string) {
 
 // Runtime /vmode overrides per-group and global config.
 func (v *Verifier) effectiveMode(gid int64) string {
-	if o := v.verifyModeOverride(); validMode(o) {
+	if o := v.verifyModeOverride(); config.ValidMode(o) {
 		return o
 	}
-	return v.cfg.verifyMode(gid)
+	return v.cfg.VerifyModeFor(gid)
 }
 
 // Mixed mode uses a cryptographic coin flip; an empty quiz pool falls back to kernel.
 func (v *Verifier) pickMode(gid int64) string {
 	mode := v.effectiveMode(gid)
-	if mode == modeMixed {
-		mode = modeQuiz
+	if mode == (config.ModeMixed) {
+		mode = (config.ModeQuiz)
 		if cryptoIntn(2) == 0 {
-			mode = modeKernel
+			mode = (config.ModeKernel)
 		}
 	}
-	if mode == modeQuiz && len(v.cfg.questions(gid)) == 0 {
-		return modeKernel
+	if mode == (config.ModeQuiz) && len(v.cfg.QuestionsFor(gid)) == 0 {
+		return config.ModeKernel
 	}
 	return mode
 }
 
 // Kernel challenges have no options and use correctIdx -1.
-func (v *Verifier) newChallenge(gid int64, ul lang) (mode, text string, opts []string, correctIdx int) {
+func (v *Verifier) newChallenge(gid int64, ul i18n.Lang) (mode, text string, opts []string, correctIdx int) {
 	mode = v.pickMode(gid)
-	if mode == modeKernel {
+	if mode == (config.ModeKernel) {
 		return mode, kernelQuestion(ul), nil, -1
 	}
-	text, opts, correctIdx = shuffledQuestion(v.cfg.randomQuestion(gid))
+	text, opts, correctIdx = shuffledQuestion(randomQuestion(v.cfg, gid))
 	return mode, text, opts, correctIdx
 }
 
 // Render both expandable and legacy-compatible versions of the localized DM prompt.
-func kernelPromptHTML(l lang, question string, left int, nonce string, expandable bool) string {
+func kernelPromptHTML(l i18n.Lang, question string, left int, nonce string, expandable bool) string {
 	if left < 1 {
 		left = 1 // a live pending always has at least one reply left; never advertise zero
 	}
-	t := tr(l)
-	return fmt.Sprintf(t.KernelPrompt, html.EscapeString(question), left) + "\n\n" + aiTrapLine(nonce, expandable)
+	prompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(l, html.EscapeString(question), left)
+	return prompt + "\n\n" + aiTrapLine(nonce, expandable)
 }
 
 // Derive the tripwire token per pending so it cannot be filtered or guessed in advance.
@@ -312,12 +296,14 @@ func copiedSample(text string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), samplePrompt)
 }
 
-// Operator fallback questions override the localized built-in pool.
-func (v *Verifier) fallbackPool(l lang) []ShortQuestion {
-	if len(v.cfg.FallbackQuestions) > 0 {
-		return v.cfg.FallbackQuestions
+// Operator fallback questions override the localized built-in questions.
+func (v *Verifier) fallbackQuestion(l i18n.Lang) (string, []string) {
+	if questions := v.cfg.FallbackQuestions; len(questions) > 0 {
+		question := questions[cryptoIntn(len(questions))]
+		return question.Q, question.Answers
 	}
-	return tr(l).FallbackQuestions
+	questions := i18n.Messages.Verification.Challenge.FallbackQuestions
+	return questions[cryptoIntn(len(questions))].For(l)
 }
 
 // Accept one normalized whole reply, never a matching word embedded in prose.
@@ -438,12 +424,12 @@ func saysNoLinux(text string) bool {
 }
 
 // The fallback carries the same agent tripwire as the kernel prompt.
-func fallbackPromptHTML(l lang, question string, left int, nonce string, expandable bool) string {
+func fallbackPromptHTML(l i18n.Lang, question string, left int, nonce string, expandable bool) string {
 	if left < 1 {
 		left = 1
 	}
-	t := tr(l)
-	return fmt.Sprintf(t.FallbackIntro, html.EscapeString(question), left) + "\n\n" + aiTrapLine(nonce, expandable)
+	prompt := i18n.Messages.Verification.Challenge.FallbackIntro.Render(l, html.EscapeString(question), left)
+	return prompt + "\n\n" + aiTrapLine(nonce, expandable)
 }
 
 // Route DMs only after the kernel question was delivered.
@@ -452,7 +438,7 @@ func (v *Verifier) hasKernelPending(uid int64) bool {
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
 		// Before prompting, the applicant may have seen only the channel-follow step.
-		if k.uid == uid && !p.done && p.mode == modeKernel && p.prompted {
+		if k.uid == uid && !p.done && p.mode == (config.ModeKernel) && p.prompted {
 			return true
 		}
 	}
@@ -465,7 +451,7 @@ func (v *Verifier) kernelPendingGroups(uid int64) []int64 {
 	defer v.mu.Unlock()
 	var gids []int64
 	for k, p := range v.pend {
-		if k.uid == uid && !p.done && p.mode == modeKernel && p.prompted {
+		if k.uid == uid && !p.done && p.mode == (config.ModeKernel) && p.prompted {
 			gids = append(gids, k.gid)
 		}
 	}
@@ -515,7 +501,7 @@ func (v *Verifier) trippedPending(uid int64, text string) (gid int64, nonce stri
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
-		if k.uid == uid && !p.done && p.mode == modeKernel && p.prompted && aiTrapped(text, p.nonce) {
+		if k.uid == uid && !p.done && p.mode == (config.ModeKernel) && p.prompted && aiTrapped(text, p.nonce) {
 			return k.gid, p.nonce, true
 		}
 	}
@@ -528,7 +514,7 @@ func (v *Verifier) declineAgent(c context.Context, bot modBot, gid, uid int64, n
 	if !ok {
 		return
 	}
-	t := tr(ul)
+	result := &i18n.Messages.Verification.Result
 	if nonce != "" {
 		model, total := v.recordAgent(text)
 		log.Printf("verify: automated-agent tripwire triggered by %d in %d (model %q, %d total) — declining", uid, gid, model, total)
@@ -537,9 +523,9 @@ func (v *Verifier) declineAgent(c context.Context, bot modBot, gid, uid int64, n
 		log.Printf("verify: declining %d in %d — the same reply tripped the tripwire in another group", uid, gid)
 	}
 	_, banned := v.decline(c, bot, gid, uid, cur, "wrong answer")
-	msg := t.AICaught
+	msg := result.AICaught.For(ul)
 	if banned {
-		msg = t.WrongBanned
+		msg = result.WrongBanned.For(ul)
 	}
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 }
@@ -550,7 +536,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 	if !ok {
 		return // handled or replaced meanwhile
 	}
-	t := tr(ul)
+	challenge := &i18n.Messages.Verification.Challenge
 	// Tripwire compliance declines immediately and counts as a normal failed verification.
 	if aiTrapped(text, nonce) {
 		v.declineAgent(c, bot, gid, uid, nonce, text)
@@ -559,13 +545,13 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 	// Guard every acceptance path from the prompt's impossible example; only the first copy is free.
 	if copiedSample(text) && v.markSampleBounced(gid, uid, nonce) {
 		v.save()
-		_, _ = bot.SendMessage(c, htmlMessage(uid, t.SampleCopied))
+		_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.SampleCopied.For(ul)))
 		return
 	}
 	// Fallback answers are authoritative, but a real kernel remains acceptable.
 	if len(fbAnswers) > 0 {
 		if fallbackAnswerOK(text, fbAnswers) || (kernelAnswerOK(text) && !mentionsOtherOS(text)) {
-			v.finishKernelPass(c, bot, gid, uid, nonce, ul, t)
+			v.finishKernelPass(c, bot, gid, uid, nonce, ul)
 			return
 		}
 		left, curNonce, ok := v.recordKernelTry(gid, uid, nonce)
@@ -574,7 +560,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 		}
 		if left > 0 {
 			v.save()
-			_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(t.FallbackWrong, left)))
+			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.FallbackWrong.Render(ul, left)))
 			return
 		}
 		// Decline only the nonce charged by recordKernelTry, never a replacement pending.
@@ -585,7 +571,7 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 	// Give WSL or VM users one free clarification before accepting the same real kernel.
 	if mentionsOtherOS(text) && kernelAnswerOK(text) && v.markOSClarified(gid, uid, nonce) {
 		v.save()
-		_, _ = bot.SendMessage(c, htmlMessage(uid, t.OSMixed))
+		_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.OSMixed.For(ul)))
 		return
 	}
 	if !kernelAnswerOK(text) { // another system's build number is not a kernel version
@@ -596,18 +582,17 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 			// One malformed attempt gets a free format reminder.
 			if !minuteProofOK(text, time.Now()) {
 				if v.markNoLinuxReminded(gid, uid, nonce) {
-					_, _ = bot.SendMessage(c, htmlMessage(uid, t.NoLinuxRetry))
+					_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.NoLinuxRetry.For(ul)))
 					return
 				}
 			} else if v.markKernelHinted(gid, uid, nonce) {
-				pool := v.fallbackPool(ul)
-				q := pool[cryptoIntn(len(pool))]
+				qText, answers := v.fallbackQuestion(ul)
 				left := kernelMaxTries - v.kernelTriesUsed(gid, uid)
-				if v.setKernelFallback(gid, uid, nonce, q) {
+				if v.setKernelFallback(gid, uid, nonce, qText, answers) {
 					v.save()
 					v.sendVerifyDM(c, bot, uid,
-						fallbackPromptHTML(ul, q.Q, left, nonce, true),
-						fallbackPromptHTML(ul, q.Q, left, nonce, false))
+						fallbackPromptHTML(ul, qText, left, nonce, true),
+						fallbackPromptHTML(ul, qText, left, nonce, false))
 					return
 				}
 			}
@@ -618,37 +603,40 @@ func (v *Verifier) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int
 		}
 		if left > 0 {
 			v.save() // keep the used-up tries across a restart
-			_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(t.KernelWrong, left)))
+			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.KernelWrong.Render(ul, left)))
 			return
 		}
 		_, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer") // the nonce as of the charge, see above
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(ul, banned)))
 		return
 	}
-	v.finishKernelPass(c, bot, gid, uid, nonce, ul, t)
+	v.finishKernelPass(c, bot, gid, uid, nonce, ul)
 }
 
 // Nonce-bind approval across the channel lookup so a stale answer cannot settle a replacement.
-func (v *Verifier) finishKernelPass(c context.Context, bot modBot, gid, uid int64, nonce string, ul lang, t *catalog) {
+func (v *Verifier) finishKernelPass(c context.Context, bot modBot, gid, uid int64, nonce string, ul i18n.Lang) {
+	channel := &i18n.Messages.Verification.Channel
+	result := &i18n.Messages.Verification.Result
 	if !v.isChannelMember(c, bot, gid, uid) {
-		_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(t.ChannelFirst, v.channelLinkHTML(gid, ul))))
+		message := channel.First.Render(ul, v.channelLinkHTML(gid, ul))
+		_, _ = bot.SendMessage(c, htmlMessage(uid, message))
 		return
 	}
 	p, ok := v.claimPendingNonce(gid, uid, nonce)
 	if ok && v.executeApprove(c, bot, gid, uid, p) {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), t.Approved))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.Approved.For(ul)))
 		return
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), t.AlreadyHandled))
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.AlreadyHandled.For(ul)))
 }
 
 // Return only live pending data needed for grading.
-func (v *Verifier) kernelPendingInfo(gid, uid int64) (ul lang, nonce string, fbAnswers []string, ok bool) {
+func (v *Verifier) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string, fbAnswers []string, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, exists := v.pend[pkey{gid, uid}]
 	if !exists || p.done {
-		return langZH, "", nil, false
+		return i18n.LangZH, "", nil, false
 	}
 	return p.lang, p.nonce, p.fbAnswers, true
 }
@@ -663,15 +651,15 @@ func (v *Verifier) kernelTriesUsed(gid, uid int64) int {
 }
 
 // Persist the selected fallback question for subsequent prompts and grading.
-func (v *Verifier) setKernelFallback(gid, uid int64, nonce string, q ShortQuestion) bool {
+func (v *Verifier) setKernelFallback(gid, uid int64, nonce, question string, answers []string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
 	if !ok || p.done || p.nonce != nonce {
 		return false
 	}
-	p.qText = q.Q
-	p.fbAnswers = q.Answers
+	p.qText = question
+	p.fbAnswers = answers
 	return true
 }
 

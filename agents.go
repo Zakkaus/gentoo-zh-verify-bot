@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"log"
 	"regexp"
 	"sort"
@@ -78,7 +79,7 @@ type agentTally struct {
 // recordAgent persists one tripwire result and returns its model and the new total.
 func (v *Verifier) recordAgent(text string) (model string, total int) {
 	model = claimedModel(text)
-	// Snapshot under stateWriteMu before agentMu; reversing that order can deadlock other saves.
+	// Snapshot under the store write lock before agentMu; reversing that order can deadlock other saves.
 	count := func() any {
 		v.agentMu.Lock()
 		defer v.agentMu.Unlock()
@@ -97,7 +98,7 @@ func (v *Verifier) recordAgent(text string) (model string, total int) {
 		count() // no persistence configured: the in-memory tally still has to advance
 		return model, total
 	}
-	saveJSONFile(v.agentPath, count)
+	_ = store.Save(v.agentPath, count)
 	return model, total
 }
 
@@ -116,8 +117,8 @@ func (v *Verifier) loadAgents() {
 		return
 	}
 	var t agentTally
-	if err := loadJSONFile(v.agentPath, &t); err != nil {
-		if stateReadFailed(err) {
+	if err := store.Load(v.agentPath, &t); err != nil {
+		if store.ReadFailed(err) {
 			v.agentPath = ""
 		}
 		return
