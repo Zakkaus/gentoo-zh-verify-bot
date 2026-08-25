@@ -257,6 +257,49 @@ func TestTimeoutSecondsClamp(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsOverflowingDurationSeconds(t *testing.T) {
+	const overflowing = int64(1<<63 - 1)
+	tests := []struct {
+		name string
+		key  string
+		data map[string]any
+	}{
+		{name: "feed interval", key: "interval_seconds", data: map[string]any{
+			"feeds": []map[string]any{{"chat_id": -1001, "interval_seconds": overflowing}},
+		}},
+		{name: "verification timeout", key: "timeout_seconds", data: map[string]any{"timeout_seconds": overflowing}},
+		{name: "notification TTL", key: "notify_ttl_seconds", data: map[string]any{"notify_ttl_seconds": overflowing}},
+		{name: "lookup TTL", key: "lookup_ttl_seconds", data: map[string]any{"lookup_ttl_seconds": overflowing}},
+		{name: "ban duration", key: "ban_seconds", data: map[string]any{"ban_seconds": overflowing}},
+		{name: "mute duration", key: "mute_seconds", data: map[string]any{"mute_seconds": overflowing}},
+		{name: "verification cooldown", key: "verify_retry_seconds", data: map[string]any{"verify_retry_seconds": overflowing}},
+		{name: "owner claim lifetime", key: "owner_claim_lifetime_seconds", data: map[string]any{"owner_claim_lifetime_seconds": overflowing}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := LoadConfig(writeConfig(t, test.data))
+			if err == nil {
+				t.Fatalf("%s accepted an overflowing duration", test.key)
+			}
+			if message := err.Error(); !strings.Contains(message, test.key) || !strings.Contains(message, "accepted range") {
+				t.Fatalf("%s error = %q, want key and accepted range", test.key, message)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsOperationallyUselessFeedInterval(t *testing.T) {
+	_, err := LoadConfig(writeConfig(t, map[string]any{
+		"feeds": []map[string]any{{"chat_id": -1001, "interval_seconds": 86401}},
+	}))
+	if err == nil {
+		t.Fatal("interval_seconds above one day was accepted")
+	}
+	if message := err.Error(); !strings.Contains(message, "interval_seconds") || !strings.Contains(message, "1..86400 seconds") {
+		t.Fatalf("interval_seconds error = %q, want key and 1..86400-second positive range", message)
+	}
+}
+
 func TestTrustedGroupsResolver(t *testing.T) {
 	c := &Config{
 		TrustedMemberGroupIDs: []int64{-100},

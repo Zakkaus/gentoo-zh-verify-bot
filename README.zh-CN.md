@@ -130,7 +130,7 @@ sudo journalctl -u gentoo-zh-verify-bot
 
 `BOT_TOKEN` 必填且没有默认值。可选的 `GITHUB_TOKEN` 无需 scope，可将 overlay 请求的 GitHub API 限额从每小时 60 次提高到约 5,000 次。可选的 `TELEGRAM_API_URL` 使用自建 Bot API server，未设置时使用 Telegram 官方 Bot API。
 
-`config.json` 可省略。文件存在时，其内容作为经过验证的基线；JSON 格式错误或配置值无效仍会阻止启动。Telegram 中保存的稀疏运行时值优先于文件，文件值优先于内置默认值。修改文件后需要重启服务。
+`config.json` 可省略。文件存在时，其内容作为经过验证的基线；JSON 格式错误或配置值无效仍会阻止启动。Telegram 中保存的稀疏运行时值优先于文件，文件值优先于内置默认值。修改文件后需要重启服务。`*_seconds` 的正数值超过 9,223,372,036 时，程序会在换算时长前拒绝配置；字段另有更低上限时以下表为准。
 
 ### 群组与验证
 | 键 | 作用 | 默认值和归一化规则 |
@@ -144,12 +144,12 @@ sudo journalctl -u gentoo-zh-verify-bot
 | `channel_invite_url` | 全局加入链接；私有频道没有 `@handle` 时必填。 | 空。 |
 | `trusted_member_group_ids` | 可信群组成员免验证来源；无法读取成员状态时仍执行常规验证。 | `[]` 表示不启用。 |
 | `known_chat_ids` | 允许机器人停留的其它聊天，不会因此成为受管理群组、必需频道或可信来源。 | `[]`。 |
-| `owner_claim_lifetime_seconds` | 启动时写入 journal 的私有一次性所有者认领链接有效期。 | `0` 变为 600；负数无效；正数不变。 |
+| `owner_claim_lifetime_seconds` | 启动时写入 journal 的私有一次性所有者认领链接有效期。 | `0` 变为 600；负数无效；上限为 86,400。 |
 | `owner_claim_user_id` | 可使用首次所有者认领链接的 Telegram 用户 ID。 | `0` 不限制账号，任何取得链接的 journal 读取者均可认领；负数无效。 |
 | `verify_mode` | 全局验证模式：`kernel`、`quiz` 或 `mixed`；按群配置和 `/vmode ...|auto` 可覆盖。 | 空值变为 `kernel`；其它值导致加载失败。 |
 | `timeout_seconds` | 验证时限。 | `<=0` 变为 240；1–29 变为 30；上限 1,800。 |
 | `required_channel_fail_open` | 申请人通过验证后，机器人无法读取必需频道成员状态时的处理方式。两种模式都会通知管理员。 | `true`（默认）批准；`false` 拒绝并允许重试。 |
-| `verify_retry_seconds` | 验证失败后的冷却时间。 | `0` 变为 180；负数关闭；正数不变。 |
+| `verify_retry_seconds` | 验证失败后的冷却时间。 | `0` 变为 180；负数关闭；上限为 31,622,400（366 天）。 |
 | `verify_max_fails` | 自动封禁前的失败次数。 | `0` 变为 3；负数关闭；正数不变。 |
 | `fallback_questions` | 无 Linux 设备时的简答题库：`[{q,answers:[…]}]`。 | `[]` 使用内置多语言题库。每项需要非空 `q` 和至少一个非空完整答案。 |
 | `questions` | 全局选择题库：`[{q,options:[…],answer}]`。 | 只有全部群组均为 `kernel` 模式时才可为 `[]`。`options` 至少两项；`answer` 默认为索引 0 且不得越界；`q` 按原文显示。 |
@@ -157,8 +157,8 @@ sudo journalctl -u gentoo-zh-verify-bot
 ### 管理、消息与运行默认值
 | 键 | 作用 | 默认值和归一化规则 |
 | --- | --- | --- |
-| `notify_ttl_seconds` | 多少秒后删除机器人发送的群消息。 | `0` 变为 60；负数保留消息；正数不变。 |
-| `lookup_ttl_seconds` | 同时删除查询命令和回复；`/autodel` 将运行时覆盖值保存到 `settings.json`。 | 未设置变为 180；`0` 或负数关闭；正数不变。 |
+| `notify_ttl_seconds` | 多少秒后删除机器人发送的群消息。 | `0` 变为 60；负数保留消息；上限为 86,400。 |
+| `lookup_ttl_seconds` | 同时删除查询命令和回复；`/autodel` 将运行时覆盖值保存到 `settings.json`。 | 未设置时变为 180；`0` 或负数关闭；上限为 86,400。 |
 | `warn_limit` | `/warn` 达到多少次后自动移出群组。 | `<=0` 变为 3；无上限。 |
 | `private_query_per_min` | 每名用户每分钟可在私聊中执行的查询次数；受管理群组内不限次。 | `<=0` 变为 3；无上限。 |
 | `ban_seconds` | `/ban`、`/sb` 和验证自动封禁的默认时长；`/bantime` 将运行时覆盖值保存到 `settings.json`。 | `<=0` 表示永久；1–29 变为 30；超过 366 天变为永久。 |
@@ -182,7 +182,7 @@ sudo journalctl -u gentoo-zh-verify-bot
 | --- | --- | --- |
 | `chat_id` | 目标频道或群组；机器人须有发帖权限。 | `0` 表示关闭。 |
 | `lang` | bug 字段标签和新闻播报的语言。 | `zh`、`zh-Hant` 和 `en` 有效，空值按 `zh` 处理；无法识别的值会阻止启动。 |
-| `interval_seconds` | 轮询间隔。 | `<=0` 变为 300；1–59 变为 60；无上限。 |
+| `interval_seconds` | 轮询间隔。 | `<=0` 变为 300；1–59 变为 60；上限为 86,400。 |
 | `bugs` / `news` | 分别启用新 Bugzilla 工单和新闻播报。 | 未设置变为 `true`。 |
 | `bug_product` / `bug_component` | 可选 Bugzilla 过滤条件。 | 空值匹配全部。 |
 | `silent_bugs` | 是否静默发送 bug。 | `true` 表示全部静默；未设置或 `false` 时只静默 UNCONFIRMED bug，并允许补发一次确认通知。 |

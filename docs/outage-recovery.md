@@ -50,6 +50,6 @@ An unreadable `pending.json` leaves the file untouched, disables pending writes 
 
 **Implementation:** package `internal/verify`, `(*Service).Shutdown` in `internal/verify/service.go`; package `main`, `streamEndedUnexpectedly` and `main` in `cmd/gentoo-zh-verify-bot/main.go`.
 
-On signal-driven shutdown, the handler stops before `Shutdown` marks verification as shutting down, stops every timer, refuses later settlement claims, and saves pending, strike, and heartbeat state. A timer racing shutdown therefore cannot decline, strike, or ban an applicant after the freeze.
+On signal-driven shutdown, long polling stops first and the handler drains every update already fetched into Telego before it stops. `Shutdown` then marks verification as shutting down, stops every timer, refuses later settlement claims, and saves pending, strike, and heartbeat state. A timer racing shutdown therefore cannot decline, strike, or ban an applicant after the freeze.
 
 Long polling is configured to retry transient polling errors every five seconds. If the update stream ends while the process context is still live, the process exits nonzero for systemd restart. Fatal paths do not execute graceful deferred cleanup. They rely on per-event atomic saves and the previously persisted heartbeat; an in-flight mutation whose save had not completed can be absent after restart.

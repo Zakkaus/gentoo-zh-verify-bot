@@ -10,7 +10,7 @@ Outside `-version`, `BOT_TOKEN` is the only required application input. The defa
 
 When `STATE_DIRECTORY` is nonempty, `loadRuntimeState` tries to create it with mode `0700`, removes orphan `.<name>.tmp-*` files, and places `settings.json` there. Directory-creation failure logs a warning but does not stop startup; subsequent persistence can fail. When the variable is empty, ordinary settings changes are memory-only and all verification/warning/feed state is non-durable. Owner claim and runtime registration are stricter: they refuse to operate without durable settings storage.
 
-Startup then creates the Bot API client, starts long-poll setup with five-second retry delay, constructs the handler, and performs mandatory `GetMe`. Bot construction, initial long-poll setup, handler construction, or `GetMe` failure is fatal. The process registers owner/enrollment routes before ordinary application routes, starts asynchronous permission checks, registers command menus, starts optional feeds, lookup warming, and heartbeat, then starts the handler. An update stream ending without a shutdown signal exits nonzero so systemd can restart it.
+Startup then creates the Bot API client, performs mandatory `GetMe`, constructs the handler, and registers owner/enrollment routes before ordinary application routes. It starts the handler consumer and confirms its running state before initial long polling can fetch a backlog. Bot construction, handler construction or startup, initial long-poll setup, or `GetMe` failure is fatal. The process also starts asynchronous permission checks, registers command menus, and starts optional feeds, lookup warming, and heartbeat. An update stream ending without a shutdown signal exits nonzero so systemd can restart it.
 
 ## Owner claim
 
@@ -69,20 +69,23 @@ The supplied unit runs `/usr/local/bin/gentoo-zh-verify-bot --config
 latch, so a persistent startup failure keeps retrying every 30 seconds instead of stopping after
 five attempts. An operator-requested `systemctl stop` remains stopped.
 
-The service is `Type=notify`. It sends `READY=1` after identity lookup, state restoration, and
-handler registration. A completed `getUpdates` attempt sends `WATCHDOG=1`; no independent ticker
-can hide a stalled poll loop. A quiet successful long poll completes within 30 seconds. Each API
-call is bounded at 45 seconds and a failed call retries after five seconds, so the longest expected
-gap between progress signals is 50 seconds. `WatchdogSec=120s` is more than twice that gap. Network,
-DNS, and Telegram failures still complete an attempt and therefore keep the watchdog alive while
-the retry and verification-outage paths recover. A poll loop that stops completing attempts for
-120 seconds is terminated by systemd and restarted after 30 seconds.
+The service is `Type=notify`. It sends `READY=1` only after identity lookup, state restoration,
+handler registration, and confirmation that the handler consumer is running; long polling starts
+after that consumer confirmation and before readiness. A completed `getUpdates` attempt sends
+`WATCHDOG=1`; no independent ticker can hide a stalled poll loop. A quiet successful long poll
+completes within 30 seconds. Each API call is bounded at 45 seconds and a failed call retries after
+five seconds, so the longest expected gap between progress signals is 50 seconds.
+`WatchdogSec=120s` is more than twice that gap. Network, DNS, and Telegram failures still complete
+an attempt and therefore keep the watchdog alive while the retry and verification-outage paths
+recover. A poll loop that stops completing attempts for 120 seconds is terminated by systemd and
+restarted after 30 seconds.
 
-SIGINT or SIGTERM sends `STOPPING=1`, stops accepting updates, and gives in-flight handlers, the
-Telegram heartbeat, and the feed state flush one shared 20-second deadline. Verification timers
-then freeze and the verification files are saved synchronously. `TimeoutStopSec=30s` leaves systemd
-ten additional seconds before forced termination. Shutdown logs name each component being waited
-for.
+SIGINT or SIGTERM sends `STOPPING=1` and stops long polling first. The handler input then drains
+every update already fetched into Telego's buffer; those updates may already have been confirmed
+upstream by a later poll offset and cannot safely be abandoned. Draining, in-flight handlers, the
+Telegram heartbeat, and the feed state flush share one 20-second deadline. Verification timers then
+freeze and the verification files are saved synchronously. `TimeoutStopSec=30s` leaves systemd ten
+additional seconds before forced termination. Shutdown logs name each component being waited for.
 
 All state commits use one process-wide mutex. A commit writes a mode-`0600` temporary file in the
 target directory, `fsync`s and closes it, atomically renames it over the state file, then `fsync`s

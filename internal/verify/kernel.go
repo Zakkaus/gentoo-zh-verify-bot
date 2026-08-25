@@ -426,26 +426,26 @@ func fallbackPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, le
 	return prompt + "\n\n" + aiTrapLine(messages, l, nonce, expandable)
 }
 
-// Route DMs only after the kernel question was delivered.
+// Route DMs only after the current kernel or fallback question was confirmed delivered.
 func (v *Service) hasKernelPending(uid int64) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
 		// Before prompting, the applicant may have seen only the channel-follow step.
-		if k.uid == uid && !p.done && p.mode == (config.ModeKernel) && p.prompted {
+		if k.uid == uid && !p.done && p.mode == config.ModeKernel && p.prompted && !p.fallbackPending {
 			return true
 		}
 	}
 	return false
 }
 
-// One DM answer settles all simultaneously pending groups.
+// One DM answer settles all simultaneously pending groups with confirmed prompts.
 func (v *Service) kernelPendingGroups(uid int64) []int64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	var gids []int64
 	for k, p := range v.pend {
-		if k.uid == uid && !p.done && p.mode == (config.ModeKernel) && p.prompted {
+		if k.uid == uid && !p.done && p.mode == config.ModeKernel && p.prompted && !p.fallbackPending {
 			gids = append(gids, k.gid)
 		}
 	}
@@ -495,7 +495,8 @@ func (v *Service) trippedPending(uid int64, text string) (gid int64, nonce strin
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for k, p := range v.pend {
-		if k.uid == uid && !p.done && p.mode == (config.ModeKernel) && p.prompted && aiTrapped(text, p.nonce) {
+		if k.uid == uid && !p.done && p.mode == config.ModeKernel && p.prompted && !p.fallbackPending &&
+			aiTrapped(text, p.nonce) {
 			return k.gid, p.nonce, true
 		}
 	}
@@ -590,14 +591,21 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 					_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.NoLinuxRetry.For(ul)))
 					return
 				}
-			} else if v.markKernelHinted(gid, uid, nonce) {
+			} else {
 				qText, answers := v.fallbackQuestion(gid, ul)
-				left := kernelMaxTries - v.kernelTriesUsed(gid, uid)
-				if v.setKernelFallback(gid, uid, nonce, qText, answers) {
+				if v.beginKernelFallback(bot, gid, uid, nonce, qText, answers) {
 					v.save()
-					v.sendVerifyDM(c, bot, uid,
-						fallbackPromptHTML(v.messages, ul, qText, left, nonce, true),
-						fallbackPromptHTML(v.messages, ul, qText, left, nonce, false))
+					prompt, current := v.pendingDMChallenge(gid, uid)
+					if !current {
+						return
+					}
+					result, _ := v.sendDMQuestion(c, bot, uid, prompt)
+					if result.stateChanged {
+						v.save()
+					}
+					if !result.current {
+						v.deleteChallenge(c, bot, uid, result.messageID)
+					}
 					return
 				}
 			}
@@ -642,12 +650,12 @@ func (v *Service) finishKernelPass(c context.Context, bot modBot, gid, uid int64
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.AlreadyHandled.For(ul)))
 }
 
-// Return only live pending data needed for grading.
+// Return only live, confirmed pending data needed for grading.
 func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string, fbAnswers []string, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, exists := v.pend[pkey{gid, uid}]
-	if !exists || p.done {
+	if !exists || p.done || p.fallbackPending {
 		return i18n.LangZH, "", nil, false
 	}
 	return p.lang, p.nonce, p.fbAnswers, true
@@ -662,16 +670,23 @@ func (v *Service) kernelTriesUsed(gid, uid int64) int {
 	return 0
 }
 
-// Persist the selected fallback question for subsequent prompts and grading.
-func (v *Service) setKernelFallback(gid, uid int64, nonce, question string, answers []string) bool {
+// Prepare a hidden fallback and suspend grading until its prompt delivery is confirmed.
+func (v *Service) beginKernelFallback(bot verifyBot, gid, uid int64, nonce, question string, answers []string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
-	if !ok || p.done || p.nonce != nonce {
+	if !ok || p.done || p.nonce != nonce || p.hinted || p.fallbackPending {
 		return false
 	}
+	p.hinted = true
 	p.qText = question
-	p.fbAnswers = answers
+	p.fbAnswers = append([]string(nil), answers...)
+	p.fallbackPending = true
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	p.deadline = v.wallNow().Add(pendingDeliveryTimeout)
+	v.armExpiry(bot, p, gid, uid, pendingDeliveryTimeout, challengeExpiryReason(false))
 	return true
 }
 
@@ -708,18 +723,6 @@ func (v *Service) markSampleBounced(gid, uid int64, nonce string) bool {
 		return false
 	}
 	p.sampleBounced = true
-	return true
-}
-
-// Offer the no-Linux fallback only once per pending.
-func (v *Service) markKernelHinted(gid, uid int64, nonce string) bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	p, exists := v.pend[pkey{gid, uid}]
-	if !exists || p.done || p.nonce != nonce || p.hinted {
-		return false
-	}
-	p.hinted = true
 	return true
 }
 

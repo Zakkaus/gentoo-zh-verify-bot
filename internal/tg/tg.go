@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 )
@@ -83,32 +85,32 @@ func (c *Client) ReplyHTML(ctx context.Context, chatID int64, replyTo int, text 
 	return sent
 }
 
-// SendHTMLFallback sends verification HTML, retries only rejected markup, and returns the final send error.
-func (c *Client) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (bool, error) {
-	_, err := c.bot.SendMessage(ctx, HTMLMessage(chatID, rich))
+// SendHTMLFallback sends verification HTML, retries only rejected markup, and returns the sent message.
+func (c *Client) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (*telego.Message, error) {
+	sent, err := c.bot.SendMessage(ctx, HTMLMessage(chatID, rich))
 	if err == nil {
-		return true, nil
+		return sent, nil
 	}
 	if !MarkupRejected(err) {
 		// Do not retry transient failures: the first request may have landed despite the error.
-		return false, err
+		return nil, err
 	}
 	log.Printf("verify DM to %d rejected (%v) — retrying without the collapsed quote", chatID, err)
 	if simpler != "" && simpler != rich {
-		_, err = c.bot.SendMessage(ctx, HTMLMessage(chatID, simpler))
+		sent, err = c.bot.SendMessage(ctx, HTMLMessage(chatID, simpler))
 		if err == nil {
-			return true, nil
+			return sent, nil
 		}
 		if !MarkupRejected(err) {
-			return false, err
+			return nil, err
 		}
 	}
-	_, err = c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), stripHTML(simpler)))
+	sent, err = c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), stripHTML(simpler)))
 	if err != nil {
 		log.Printf("verify DM to %d failed even as plain text: %v", chatID, err)
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	return sent, nil
 }
 
 // SendPrivateHTMLFallback retries an HTML private reply as plain text after any send failure.
@@ -163,7 +165,11 @@ func (c *Client) Notify(ctx context.Context, chatID int64, text string, ttlSecon
 	if err != nil || message == nil || ttlSeconds < 0 {
 		return
 	}
-	c.scheduleDelete(chatID, message.MessageID, 0, time.Duration(ttlSeconds)*time.Second)
+	duration, ok := config.SecondsToDuration(ttlSeconds)
+	if !ok {
+		return
+	}
+	c.scheduleDelete(chatID, message.MessageID, 0, duration)
 }
 
 // Alert sends an operator alert when an admin-log chat is configured.
@@ -227,7 +233,11 @@ func MissingModRights(member telego.ChatMember) []string {
 func (c *Client) Ban(ctx context.Context, chatID, userID int64, seconds int, revokeMessages bool) error {
 	params := &telego.BanChatMemberParams{ChatID: tu.ID(chatID), UserID: userID, RevokeMessages: revokeMessages}
 	if seconds > 0 {
-		params.UntilDate = time.Now().Add(time.Duration(seconds) * time.Second).Unix()
+		duration, ok := config.SecondsToDuration(seconds)
+		if !ok {
+			return errors.New("ban duration seconds exceed time.Duration")
+		}
+		params.UntilDate = time.Now().Add(duration).Unix()
 	}
 	return c.bot.BanChatMember(ctx, params)
 }
@@ -243,11 +253,15 @@ func (c *Client) Unban(ctx context.Context, chatID, userID int64, onlyIfBanned b
 
 // Mute restricts all member permissions until the requested duration elapses.
 func (c *Client) Mute(ctx context.Context, chatID, userID int64, seconds int) error {
+	duration, ok := config.SecondsToDuration(seconds)
+	if !ok {
+		return errors.New("mute duration seconds exceed time.Duration")
+	}
 	return c.bot.RestrictChatMember(ctx, &telego.RestrictChatMemberParams{
 		ChatID:      tu.ID(chatID),
 		UserID:      userID,
 		Permissions: telego.ChatPermissions{},
-		UntilDate:   time.Now().Add(time.Duration(seconds) * time.Second).Unix(),
+		UntilDate:   time.Now().Add(duration).Unix(),
 	})
 }
 

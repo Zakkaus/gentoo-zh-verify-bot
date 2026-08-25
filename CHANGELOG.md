@@ -69,15 +69,21 @@ All notable changes to this project are documented here. The format is based on
   `settings.json` and `antispam.json` before rollback. The antispam migration remains one-way.
 - **The bot now remains supervised through clean exits, crash loops, stalled polling, and reboot.**
   The systemd unit retries every 30 seconds without a start-limit latch, uses a 120-second
-  progress-based watchdog, and allows 30 seconds for a bounded state-preserving shutdown. Poll
-  handlers are registered before Telegram backlog consumption begins, active update handlers are
-  capped at 64, and outages beyond Telegram's approximate 24-hour retention window produce a
-  localized administrator alert to review pending join requests manually.
+  progress-based watchdog, and allows 30 seconds for a bounded state-preserving shutdown. Update
+  routes are registered and the handler consumer is running before Telegram backlog polling begins;
+  shutdown stops polling and drains updates already fetched into Telego before stopping the handler.
+  Active update handlers are capped at 64, and outages beyond Telegram's approximate 24-hour
+  retention window produce a localized administrator alert to review pending join requests manually.
 - **Bot-side delivery failures no longer misclassify applicants.** A group challenge that Telegram
   never confirmed used to expire as a normal strike. A failed kernel-question DM used to mark the
   applicant as prompted, so a later unrelated message could count as an answer. The first path is
   now strike-free and the second remains unprompted. If Telegram rejects a decline, administrators
   are alerted because the join request still needs manual handling.
+- **Verification pending transitions now remain recoverable and delivery-bound.** Runtime group
+  removal cancels its pending timers without strikes; shutdown snapshots retain settlements until
+  Telegram confirms them; private and fallback prompt completion is bound to the exact pending;
+  rolling-window strikes use the failure event time; and recovery keeps the previous group
+  challenge unless a current replacement post succeeds.
 - **Closed feed bugs no longer always display a green check.** `FIXED` resolves to ✅; `INVALID`,
   `WONTFIX`, `DUPLICATE`, and other closed-without-a-fix resolutions display ❌.
 - Auto-feed polling now drains multi-page Bugzilla backlogs without advancing across undelivered

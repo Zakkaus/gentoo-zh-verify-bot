@@ -33,10 +33,34 @@ func TestVerLess(t *testing.T) {
 		{"1.0_p1", "1.0", false},      // a patch level is NEWER than the release
 		{"1.0", "1.0_p1", true},
 		{"1.0_rc1", "1.0_rc2", true}, // rc1 < rc2
+		{"1.0_p1", "1.0_rc9", false}, // a patch release is newer than any release candidate
+		{"1.0_rc9", "1.0_p1", true},
+		{"1.0_p1", "1.0_pre99", false}, // a patch release is newer than any pre-release
+		{"1.0_pre99", "1.0_p1", true},
 	}
 	for _, c := range cases {
 		if got := verLess(c.a, c.b); got != c.want {
 			t.Errorf("verLess(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+
+	ordered := []string{
+		"1.0_alpha9",
+		"1.0_beta9",
+		"1.0_pre9",
+		"1.0_rc9",
+		"1.0",
+		"1.0_p1",
+		"1.0_p1-r1",
+	}
+	for older := range ordered {
+		for newer := older + 1; newer < len(ordered); newer++ {
+			if !verLess(ordered[older], ordered[newer]) {
+				t.Errorf("documented Gentoo order: verLess(%q, %q) = false, want true", ordered[older], ordered[newer])
+			}
+			if verLess(ordered[newer], ordered[older]) {
+				t.Errorf("documented Gentoo order: verLess(%q, %q) = true, want false", ordered[newer], ordered[older])
+			}
 		}
 	}
 }

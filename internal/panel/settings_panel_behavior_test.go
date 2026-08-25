@@ -59,6 +59,7 @@ func (v *panelVerifierStub) ToggleRich() (bool, error)                      { re
 type panelAPICaller struct {
 	admin                bool
 	editErr              error
+	chatUsername         string
 	memberCalls          atomic.Int32
 	lastEditText         string
 	lastAnswerText       string
@@ -83,7 +84,9 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 		if err := json.Unmarshal(data.BodyRaw, &request); err != nil {
 			return nil, err
 		}
-		return panelAPIResponse(&telego.ChatFullInfo{ID: request.ChatID, Type: "supergroup", Title: fmt.Sprintf("Group %d", request.ChatID)})
+		return panelAPIResponse(&telego.ChatFullInfo{
+			ID: request.ChatID, Type: "supergroup", Title: fmt.Sprintf("Group %d", request.ChatID), Username: c.chatUsername,
+		})
 	case "getChatMember":
 		c.memberCalls.Add(1)
 		if c.admin {
@@ -1000,5 +1003,242 @@ func TestPanelPostCommitRenderFailureDoesNotClaimSaveFailed(t *testing.T) {
 	want := i18n.Messages.Panel.Settings.Error.SavedRenderFailed.For(i18n.LangEN)
 	if caller.lastAnswerText != want {
 		t.Fatalf("post-commit callback message = %q, want saved-render warning %q", caller.lastAnswerText, want)
+	}
+}
+
+func assertSavedRenderWarning(t *testing.T, got string) {
+	t.Helper()
+	want := i18n.Messages.Panel.Settings.Error.SavedRenderFailed.For(i18n.LangEN)
+	if got != want {
+		t.Fatalf("post-commit render message = %q, want catalogue warning %q", got, want)
+	}
+}
+
+func TestPanelCommittedCallbackRenderFailuresReportSaved(t *testing.T) {
+	t.Run("quiz save", func(t *testing.T) {
+		panel, settings, caller, bot := newSettingsPanelTest(t, "")
+		session := addPanelSession(t, panel, settings, panelTestGroupA, "qd")
+		session.quiz = &quizDraft{
+			index: -1,
+			question: config.Question{
+				Q: "Question", Options: []string{"Correct", "Wrong"}, Answer: 0,
+			},
+			revision: session.revision,
+		}
+		before := session.revision
+		caller.editErr = errors.New("edit failed after quiz commit")
+
+		invokePanelCallback(t, panel, bot, session, panelTestGroupA, "sv", "_")
+
+		group, _ := settings.Group(panelTestGroupA)
+		if group.Revision() != before+1 || len(group.Questions().Value) != 1 {
+			t.Fatalf("quiz save state = revision %d, questions %+v", group.Revision(), group.Questions().Value)
+		}
+		assertSavedRenderWarning(t, caller.lastAnswerText)
+	})
+
+	t.Run("fallback save", func(t *testing.T) {
+		panel, settings, caller, bot := newSettingsPanelTest(t, "")
+		session := addPanelSession(t, panel, settings, panelTestGroupA, "fd")
+		session.fallback = &fallbackDraft{
+			index: -1,
+			question: config.ShortQuestion{
+				Q: "Fallback", Answers: []string{"Answer"},
+			},
+			revision: session.revision,
+		}
+		before := session.revision
+		caller.editErr = errors.New("edit failed after fallback commit")
+
+		invokePanelCallback(t, panel, bot, session, panelTestGroupA, "sv", "_")
+
+		group, _ := settings.Group(panelTestGroupA)
+		if group.Revision() != before+1 || len(group.FallbackQuestions().Value) != 1 {
+			t.Fatalf("fallback save state = revision %d, questions %+v", group.Revision(), group.FallbackQuestions().Value)
+		}
+		assertSavedRenderWarning(t, caller.lastAnswerText)
+	})
+
+	t.Run("channel change", func(t *testing.T) {
+		panel, settings, caller, bot := newSettingsPanelTest(t, "")
+		group, _ := settings.Group(panelTestGroupA)
+		display, invite := "@required", "https://t.me/+invite"
+		next := group.Overrides()
+		next.ChannelDisplay = &display
+		next.ChannelInviteURL = &invite
+		if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), next); err != nil {
+			t.Fatal(err)
+		}
+		session := addPanelSession(t, panel, settings, panelTestGroupA, "ch")
+		before := session.revision
+		caller.editErr = errors.New("edit failed after channel commit")
+
+		invokePanelCallback(t, panel, bot, session, panelTestGroupA, "dl", "_")
+
+		group, _ = settings.Group(panelTestGroupA)
+		if group.Revision() != before+1 || group.ChannelInviteURL().Value != "" {
+			t.Fatalf("channel save state = revision %d, invite %q", group.Revision(), group.ChannelInviteURL().Value)
+		}
+		assertSavedRenderWarning(t, caller.lastAnswerText)
+	})
+
+	t.Run("list change", func(t *testing.T) {
+		panel, settings, caller, bot := newSettingsPanelTest(t, "")
+		group, _ := settings.Group(panelTestGroupA)
+		const knownID int64 = -1009000000601
+		known := []int64{knownID}
+		next := group.Overrides()
+		next.KnownChatIDs = &known
+		if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), next); err != nil {
+			t.Fatal(err)
+		}
+		session := addPanelSession(t, panel, settings, panelTestGroupA, "li")
+		session.listKind = inputKnownChat
+		before := session.revision
+		caller.editErr = errors.New("edit failed after list commit")
+
+		invokePanelCallback(t, panel, bot, session, panelTestGroupA, string(inputKnownChat), encodeSigned(knownID))
+
+		group, _ = settings.Group(panelTestGroupA)
+		if group.Revision() != before+1 || len(group.KnownChatIDs().Value) != 0 {
+			t.Fatalf("list save state = revision %d, values %v", group.Revision(), group.KnownChatIDs().Value)
+		}
+		assertSavedRenderWarning(t, caller.lastAnswerText)
+	})
+
+	t.Run("channel whitelist change", func(t *testing.T) {
+		panel, settings, caller, bot := newSettingsPanelTest(t, "")
+		group, _ := settings.Group(panelTestGroupA)
+		const senderID int64 = -1009000000602
+		whitelist := []int64{senderID}
+		next := group.Overrides()
+		next.ChannelWhitelist = &whitelist
+		if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), next); err != nil {
+			t.Fatal(err)
+		}
+		session := addPanelSession(t, panel, settings, panelTestGroupA, "li")
+		session.listKind = inputChannelWhitelist
+		before := session.revision
+		caller.editErr = errors.New("edit failed after whitelist commit")
+
+		invokePanelCallback(t, panel, bot, session, panelTestGroupA, string(inputChannelWhitelist), encodeSigned(senderID))
+
+		group, _ = settings.Group(panelTestGroupA)
+		if group.Revision() != before+1 || len(group.ChannelWhitelist().Value) != 0 {
+			t.Fatalf("whitelist save state = revision %d, values %v", group.Revision(), group.ChannelWhitelist().Value)
+		}
+		assertSavedRenderWarning(t, caller.lastAnswerText)
+	})
+
+	t.Run("confirmation", func(t *testing.T) {
+		panel, settings, caller, bot := newSettingsPanelTest(t, "")
+		group, _ := settings.Group(panelTestGroupA)
+		channelID := int64(-1009000000603)
+		display, invite := "@required", "https://t.me/+invite"
+		next := group.Overrides()
+		next.RequiredChannelID = &channelID
+		next.ChannelDisplay = &display
+		next.ChannelInviteURL = &invite
+		if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), next); err != nil {
+			t.Fatal(err)
+		}
+		session := addPanelSession(t, panel, settings, panelTestGroupA, "cf")
+		session.confirm = &confirmation{kind: "channel", revision: session.revision}
+		before := session.revision
+		caller.editErr = errors.New("edit failed after confirmation commit")
+
+		invokePanelCallback(t, panel, bot, session, panelTestGroupA, "ok", "_")
+
+		group, _ = settings.Group(panelTestGroupA)
+		if group.Revision() != before+1 {
+			t.Fatalf("confirmation revision = %d, want %d", group.Revision(), before+1)
+		}
+		assertSavedRenderWarning(t, caller.lastAnswerText)
+	})
+}
+
+func TestPanelCommittedTextInputRenderFailuresReportSaved(t *testing.T) {
+	tests := []struct {
+		name string
+		kind inputKind
+		text string
+	}{
+		{name: "group commit", kind: inputTimeout, text: "600"},
+		{name: "global commit", kind: inputPrivateRate, text: "9"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			panel, settings, caller, bot := newSettingsPanelTest(t, "")
+			session := addPanelSession(t, panel, settings, panelTestGroupA, "in")
+			session.pending = &pendingInput{
+				kind: test.kind, parent: "vp", promptMessageID: 71, expectedRevision: session.revision,
+			}
+			beforeGroup := session.revision
+			beforeGlobal := session.globalRevision
+			caller.editErr = errors.New("edit failed after text-input commit")
+
+			submitPanelText(t, panel, bot, session, test.text)
+
+			group, _ := settings.Group(panelTestGroupA)
+			global := settings.Global()
+			switch test.kind {
+			case inputTimeout:
+				if group.Revision() != beforeGroup+1 || group.TimeoutSeconds().Value != 600 {
+					t.Fatalf("group input state = revision %d, timeout %d", group.Revision(), group.TimeoutSeconds().Value)
+				}
+			case inputPrivateRate:
+				if global.Revision() != beforeGlobal+1 || global.PrivateQueryPerMin().Value != 9 {
+					t.Fatalf("global input state = revision %d, rate %d", global.Revision(), global.PrivateQueryPerMin().Value)
+				}
+			}
+			assertSavedRenderWarning(t, caller.lastEditText)
+		})
+	}
+}
+
+func TestPanelCommittedSharedChatRenderFailuresReportSaved(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     inputKind
+		chatID   int64
+		username string
+	}{
+		{name: "required channel", kind: inputRequiredChannel, chatID: -1009000000701, username: "required"},
+		{name: "trusted group list", kind: inputTrustedGroup, chatID: -1009000000702},
+		{name: "channel whitelist", kind: inputChannelWhitelist, chatID: -1009000000703},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			panel, settings, caller, bot := newSettingsPanelTest(t, "")
+			session := addPanelSession(t, panel, settings, panelTestGroupA, "in")
+			session.pending = &pendingInput{
+				kind: test.kind, parent: "li", promptMessageID: 72, requestID: 7, expectedRevision: session.revision,
+			}
+			before := session.revision
+			caller.chatUsername = test.username
+			caller.editErr = errors.New("edit failed after shared-chat commit")
+
+			submitSharedChat(t, panel, bot, session, test.chatID)
+
+			group, _ := settings.Group(panelTestGroupA)
+			if group.Revision() != before+1 {
+				t.Fatalf("shared-chat revision = %d, want %d", group.Revision(), before+1)
+			}
+			switch test.kind {
+			case inputRequiredChannel:
+				if group.RequiredChannelID().Value != test.chatID {
+					t.Fatalf("required channel = %d, want %d", group.RequiredChannelID().Value, test.chatID)
+				}
+			case inputTrustedGroup:
+				if values := group.TrustedMemberGroupIDs().Value; len(values) != 1 || values[0] != test.chatID {
+					t.Fatalf("trusted groups = %v, want [%d]", values, test.chatID)
+				}
+			case inputChannelWhitelist:
+				if values := group.ChannelWhitelist().Value; len(values) != 1 || values[0] != test.chatID {
+					t.Fatalf("channel whitelist = %v, want [%d]", values, test.chatID)
+				}
+			}
+			assertSavedRenderWarning(t, caller.lastEditText)
+		})
 	}
 }

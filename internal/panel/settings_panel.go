@@ -127,6 +127,24 @@ type postCommitRenderError struct{ err error }
 func (e *postCommitRenderError) Error() string { return e.err.Error() }
 func (e *postCommitRenderError) Unwrap() error { return e.err }
 
+func (v *Panel) renderAfterCommit(ctx context.Context, bot *telego.Bot, session *panelSession) error {
+	if err := v.renderSession(ctx, bot, session, session.groupID); err != nil {
+		return &postCommitRenderError{err: err}
+	}
+	return nil
+}
+
+func (v *Panel) handlePostCommitRenderError(ctx context.Context, bot *telego.Bot, session *panelSession, err error) (string, bool) {
+	var postCommit *postCommitRenderError
+	if !errors.As(err, &postCommit) {
+		return "", false
+	}
+	log.Printf("settings change for group %d committed but panel render failed: %v", session.groupID, postCommit)
+	text := i18n.Messages.Panel.Settings.Error.SavedRenderFailed.For(session.language)
+	v.finishSession(ctx, bot, session, text)
+	return text, true
+}
+
 // OnSettingsCallback authorizes and applies one versioned panel callback.
 func (v *Panel) OnSettingsCallback(ctx *th.Context, update telego.Update) error {
 	query := update.CallbackQuery
@@ -179,11 +197,7 @@ func (v *Panel) OnSettingsCallback(ctx *th.Context, update telego.Update) error 
 		return nil
 	}
 	if err := v.dispatchCallback(requestCtx, bot, session, data); err != nil {
-		var postCommit *postCommitRenderError
-		if errors.As(err, &postCommit) {
-			log.Printf("settings callback for group %d committed but panel render failed: %v", data.group, postCommit)
-			text := i18n.Messages.Panel.Settings.Error.SavedRenderFailed.For(session.language)
-			v.finishSession(requestCtx, bot, session, text)
+		if text, handled := v.handlePostCommitRenderError(requestCtx, bot, session, err); handled {
 			v.answerCallback(requestCtx, bot, query.ID, text, true)
 			return nil
 		}
@@ -352,10 +366,7 @@ func (v *Panel) dispatchRuntime(ctx context.Context, bot *telego.Bot, session *p
 	if data.field == "lg" {
 		session.language = i18n.FromStored(*next.Lang)
 	}
-	if err := v.renderSession(ctx, bot, session, session.groupID); err != nil {
-		return &postCommitRenderError{err: err}
-	}
-	return nil
+	return v.renderAfterCommit(ctx, bot, session)
 }
 
 func (v *Panel) dispatchLists(ctx context.Context, bot *telego.Bot, session *panelSession, data callbackData) error {
@@ -405,7 +416,7 @@ func (v *Panel) dispatchList(ctx context.Context, bot *telego.Bot, session *pane
 			if err := v.updateChannelWhitelist(ctx, bot, session, id, false); err != nil {
 				return err
 			}
-			return v.renderSession(ctx, bot, session, session.groupID)
+			return v.renderAfterCommit(ctx, bot, session)
 		}
 		setListOverride(&next, session.listKind, kept)
 		result, err := v.settings.CommitGroup(session.groupID, session.revision, next)
@@ -413,7 +424,7 @@ func (v *Panel) dispatchList(ctx context.Context, bot *telego.Bot, session *pane
 			return err
 		}
 		session.revision = result.Revision
-		return v.renderSession(ctx, bot, session, session.groupID)
+		return v.renderAfterCommit(ctx, bot, session)
 	default:
 		return errors.New("invalid list action")
 	}

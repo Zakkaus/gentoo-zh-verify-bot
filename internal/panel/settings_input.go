@@ -100,7 +100,7 @@ func (v *Panel) dispatchQuizDraft(ctx context.Context, bot *telego.Bot, session 
 		session.revision = result.Revision
 		session.quiz = nil
 		session.screen = "qb"
-		return v.renderSession(ctx, bot, session, session.groupID)
+		return v.renderAfterCommit(ctx, bot, session)
 	case "rm":
 		if !draft.existing {
 			return errors.New("new quiz question cannot be deleted")
@@ -191,7 +191,7 @@ func (v *Panel) dispatchFallbackDraft(ctx context.Context, bot *telego.Bot, sess
 		session.revision = result.Revision
 		session.fallback = nil
 		session.screen = "fb"
-		return v.renderSession(ctx, bot, session, session.groupID)
+		return v.renderAfterCommit(ctx, bot, session)
 	case "rm":
 		if !draft.existing {
 			return errors.New("new fallback question cannot be deleted")
@@ -231,7 +231,7 @@ func (v *Panel) dispatchChannel(ctx context.Context, bot *telego.Bot, session *p
 			return err
 		}
 		session.revision = result.Revision
-		return v.renderSession(ctx, bot, session, session.groupID)
+		return v.renderAfterCommit(ctx, bot, session)
 	case "ds":
 		session.confirm = &confirmation{kind: "channel", revision: session.revision}
 		session.screen = "cf"
@@ -299,7 +299,7 @@ func (v *Panel) dispatchConfirmation(ctx context.Context, bot *telego.Bot, sessi
 	session.quiz = nil
 	session.fallback = nil
 	session.screen = parent
-	return v.renderSession(ctx, bot, session, session.groupID)
+	return v.renderAfterCommit(ctx, bot, session)
 }
 
 func confirmationParent(kind string) string {
@@ -448,6 +448,9 @@ func (v *Panel) OnPanelInput(ctx *th.Context, update telego.Update) error {
 	}
 	session.pending = nil
 	if err := v.applyTextInput(ctx.Context(), ctx.Bot(), session, group, pending, text); err != nil {
+		if _, handled := v.handlePostCommitRenderError(ctx.Context(), ctx.Bot(), session, err); handled {
+			return nil
+		}
 		var notice *panelNoticeError
 		if errors.As(err, &notice) {
 			session.pending = pending
@@ -510,6 +513,9 @@ func (v *Panel) OnPanelChatShared(ctx *th.Context, update telego.Update) error {
 	}
 	session.pending = nil
 	if err := v.applySharedChat(ctx.Context(), ctx.Bot(), session, group, pending, chat); err != nil {
+		if _, handled := v.handlePostCommitRenderError(ctx.Context(), ctx.Bot(), session, err); handled {
+			return nil
+		}
 		var notice *panelNoticeError
 		if errors.As(err, &notice) {
 			session.pending = pending
@@ -545,6 +551,7 @@ func (v *Panel) authorizeInput(ctx context.Context, bot *telego.Bot, session *pa
 func (v *Panel) applyTextInput(ctx context.Context, bot *telego.Bot, session *panelSession, group store.GroupView, pending *pendingInput, text string) error {
 	next := group.Overrides()
 	commit := true
+	committed := false
 	switch pending.kind {
 	case inputBanDuration:
 		value, ok := parsePanelBanDuration(text)
@@ -596,6 +603,7 @@ func (v *Panel) applyTextInput(ctx context.Context, bot *telego.Bot, session *pa
 			return err
 		}
 		session.globalRevision = result.Revision
+		committed = true
 		commit = false
 	case inputQuizQuestion:
 		commit = false
@@ -647,9 +655,13 @@ func (v *Panel) applyTextInput(ctx context.Context, bot *telego.Bot, session *pa
 			return err
 		}
 		session.revision = result.Revision
+		committed = true
 	}
 	if session.screen == "in" {
 		session.screen = pending.parent
+	}
+	if committed {
+		return v.renderAfterCommit(ctx, bot, session)
 	}
 	return v.renderSession(ctx, bot, session, session.groupID)
 }
@@ -699,14 +711,14 @@ func (v *Panel) applySharedChat(ctx context.Context, bot *telego.Bot, session *p
 		}
 		session.revision = result.Revision
 		session.screen = "ch"
-		return v.renderSession(ctx, bot, session, session.groupID)
+		return v.renderAfterCommit(ctx, bot, session)
 	}
 	if pending.kind == inputChannelWhitelist {
 		if err := v.updateChannelWhitelist(ctx, bot, session, sharedID, true); err != nil {
 			return err
 		}
 		session.screen = pending.parent
-		return v.renderSession(ctx, bot, session, session.groupID)
+		return v.renderAfterCommit(ctx, bot, session)
 	}
 	values := v.listValues(group, pending.kind)
 	for _, existing := range values {
@@ -725,7 +737,7 @@ func (v *Panel) applySharedChat(ctx context.Context, bot *telego.Bot, session *p
 	session.revision = result.Revision
 
 	session.screen = pending.parent
-	return v.renderSession(ctx, bot, session, session.groupID)
+	return v.renderAfterCommit(ctx, bot, session)
 }
 
 func (v *Panel) updateChannelWhitelist(ctx context.Context, bot *telego.Bot, session *panelSession, senderID int64, allow bool) error {

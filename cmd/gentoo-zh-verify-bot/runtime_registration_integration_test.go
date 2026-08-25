@@ -76,7 +76,7 @@ func TestRuntimeRegistrationActivatesServicesWithoutRebuiltConfig(t *testing.T) 
 	registration := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, func(callbackCtx context.Context, _ int64) {
 		application.SetupCommands(callbackCtx, bot)
 		close(menusRefreshed)
-	}, nil)
+	}, nil, nil)
 	registration.now = func() time.Time { return now }
 
 	registrationUpdate := telego.Update{MyChatMember: &telego.ChatMemberUpdated{

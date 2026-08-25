@@ -212,7 +212,9 @@ func (v *Service) pruneVerifyFailsLocked(now time.Time) {
 		retry, known := retryByGroup[key.gid]
 		if !known {
 			if seconds := v.verifyRetrySeconds(key.gid); seconds > 0 {
-				retry = time.Duration(seconds) * time.Second
+				if duration, ok := config.SecondsToDuration(seconds); ok {
+					retry = duration
+				}
 			}
 			retryByGroup[key.gid] = retry
 		}
@@ -295,7 +297,7 @@ func (v *Service) saveVerifyFails() {
 	_ = store.Save(v.vfailPath, func() any {
 		v.mu.Lock()
 		defer v.mu.Unlock()
-		v.pruneVerifyFailsLocked(time.Now())
+		v.pruneVerifyFailsLocked(v.wallNow())
 		v.evictOldestVerifyFailsLocked(vfailMax)
 		recs := make([]vfailDisk, 0, len(v.vfail))
 		for k, r := range v.vfail {
@@ -307,11 +309,9 @@ func (v *Service) saveVerifyFails() {
 	})
 }
 
-// Strikes persist across restarts; a negative threshold disables automatic bans.
-func (v *Service) recordVerifyFail(gid, uid int64) (count int, ban bool) {
-	v.mu.Lock()
-	now := time.Now()
-	v.pruneVerifyFailsLocked(now)
+// Caller holds v.mu.
+func (v *Service) recordVerifyFailLocked(gid, uid int64, failedAt time.Time) int {
+	v.pruneVerifyFailsLocked(failedAt)
 	key := pkey{gid, uid}
 	r := v.vfail[key]
 	if r == nil {
@@ -321,17 +321,36 @@ func (v *Service) recordVerifyFail(gid, uid int64) (count int, ban bool) {
 		r = &vfailRec{}
 		v.vfail[key] = r
 	}
-	if r.count > 0 && now.Sub(r.last) >= verifyFailWindow {
-		r.count = 0 // Isolated old failures must not accumulate into a ban.
-		// Only failures inside verifyFailWindow accumulate.
+	if r.count > 0 && failedAt.Sub(r.last) >= verifyFailWindow {
+		r.count = 0
 	}
 	r.count++
-	r.last = now
-	count = r.count
+	r.last = failedAt
+	return r.count
+}
+
+// Strikes persist across restarts; a negative threshold disables automatic bans.
+func (v *Service) recordVerifyFail(gid, uid int64, failedAt time.Time) (count int, ban bool) {
+	v.mu.Lock()
+	count = v.recordVerifyFailLocked(gid, uid, failedAt)
 	v.mu.Unlock()
 	v.saveVerifyFails()
 	max := v.verifyMaxFails(gid)
 	return count, max > 0 && count >= max
+}
+
+// Group removal and strike recording serialize on v.mu, so a cancelled settlement cannot charge a strike.
+func (v *Service) recordPendingVerifyFail(gid, uid int64, p *pending, failedAt time.Time) (count int, ban, recorded bool) {
+	v.mu.Lock()
+	if p.removed || !v.settings.IsGroup(gid) {
+		v.mu.Unlock()
+		return 0, false, false
+	}
+	count = v.recordVerifyFailLocked(gid, uid, failedAt)
+	v.mu.Unlock()
+	v.saveVerifyFails()
+	max := v.verifyMaxFails(gid)
+	return count, max > 0 && count >= max, true
 }
 
 // Successful verification clears prior strikes.
@@ -377,12 +396,24 @@ func (v *Service) verifyCooldownRemaining(gid, uid int64) time.Duration {
 	if count == 0 {
 		return 0
 	}
-	if elapsed := time.Since(last); elapsed < time.Duration(secs)*time.Second {
-		return time.Duration(secs)*time.Second - elapsed
+	cooldown, ok := config.SecondsToDuration(secs)
+	if !ok {
+		return 0
+	}
+	if elapsed := v.wallNow().Sub(last); elapsed < cooldown {
+		return cooldown - elapsed
 	}
 	return 0
 }
-func (v *Service) now() time.Time { return time.Now().In(v.loc) }
+
+func (v *Service) wallNow() time.Time {
+	if v.timeNow == nil {
+		return time.Now()
+	}
+	return v.timeNow()
+}
+
+func (v *Service) now() time.Time { return v.wallNow().In(v.loc) }
 
 func (v *Service) recordDecision(approve bool) {
 	v.mu.Lock()
@@ -418,13 +449,11 @@ func (v *Service) save() {
 		defer v.mu.Unlock()
 		recs := make([]pendingRec, 0, len(v.pend))
 		for k, p := range v.pend {
-			if p.done {
-				continue
-			}
 			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
 				ChallengeDelivered: p.challengeDelivered && p.groupMsgID == 0, Mode: p.mode, Lang: p.persistedLang(),
-				FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries, Hinted: p.hinted,
-				SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
+				FbAnswers: p.fbAnswers, FallbackPending: p.fallbackPending, Prompted: p.prompted,
+				Tries: p.tries, Hinted: p.hinted, SampleBounced: p.sampleBounced,
+				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 		}
 		return recs
@@ -471,11 +500,12 @@ func (v *Service) load(bot verifyBot) {
 		}
 		p := &pending{groupMsgID: r.GroupMsgID, challengeDelivered: r.ChallengeDelivered || r.GroupMsgID != 0,
 			mode: mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
-			fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries, hinted: r.Hinted, sampleBounced: r.SampleBounced,
+			fbAnswers: r.FbAnswers, fallbackPending: r.FallbackPending, prompted: r.Prompted,
+			tries: r.Tries, hinted: r.Hinted, sampleBounced: r.SampleBounced,
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
-		reason := challengeExpiryReason(p.challengeDelivered)
+		reason := challengeExpiryReason(p.challengeDelivered && !p.fallbackPending)
 		switch {
 		case longOutage:
 			// The outage consumed the window, so refresh and do not strike on this lapse.
@@ -556,8 +586,13 @@ func (v *Service) reachable(c context.Context) bool {
 }
 
 // Caller holds v.mu. Every re-arm bumps epoch so replaced timers become stale.
-// Expiry settlement defers while Telegram is unreachable.
+// Expiry settlement defers while Telegram is unreachable. Non-positive delays become strike-free grace.
 func (v *Service) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay time.Duration, reason string) {
+	if delay <= 0 {
+		delay = noFaultGrace
+		p.deadline = v.wallNow().Add(delay)
+		reason = challengeExpiryReason(false)
+	}
 	p.epoch++
 	epoch := p.epoch
 	nonce := p.nonce
@@ -594,8 +629,8 @@ func (v *Service) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch
 	if p.timer != nil {
 		p.timer.Stop() // stop the current timer before armExpiry installs the next (matches every other re-arm site)
 	}
-	delay := v.timeout(gid)
-	p.deadline = time.Now().Add(delay)
+	delay := v.expiryDelay(gid, reason)
+	p.deadline = v.wallNow().Add(delay)
 	v.armExpiry(bot, p, gid, uid, delay, reason)
 }
 
@@ -763,21 +798,30 @@ func (v *Service) onRecovery(c context.Context, bot verifyBot, outage time.Durat
 	log.Printf("recovery: refreshed %d verification(s), re-notified %d after ~%s offline%s", refreshed, len(items), outage.Round(time.Second), capNote(capped))
 }
 
-// Re-notify without holding v.mu, then update only the still-current pending's message ID.
+// Re-notify without holding v.mu, replacing a working challenge only after a successful current send.
 func (v *Service) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
 	ul := p.lang
 	notice := v.messages.Verification.Recovery.Renotify.Render(ul, outageText(v.messages, ul, outage))
 	_, _ = bot.SendMessage(c, htmlMessage(uid, notice))
 	newMsg := v.postGroupChallenge(c, bot, gid, uid, name, v.groupLanguage(gid))
+	if newMsg == 0 {
+		return
+	}
+	v.mu.Lock()
+	cur, current := v.pend[pkey{gid, uid}]
+	current = current && cur == p && !p.done
+	if current {
+		p.groupMsgID = newMsg
+		p.challengeDelivered = true
+	}
+	v.mu.Unlock()
+	if !current {
+		v.deleteChallenge(c, bot, gid, newMsg)
+		return
+	}
 	if oldMsg != 0 && oldMsg != newMsg {
 		v.deleteChallenge(c, bot, gid, oldMsg)
 	}
-	v.mu.Lock()
-	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
-		cur.groupMsgID = newMsg
-		cur.challengeDelivered = newMsg != 0
-	}
-	v.mu.Unlock()
 }
 
 // Render whole seconds, minutes, or hours in the applicant's locale.

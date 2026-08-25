@@ -98,14 +98,16 @@ func (s *Service) Warm(ctx context.Context) {
 func (s *Service) AutoDelete(groupID int64) (time.Duration, bool) {
 	if s.settings != nil {
 		if group, ok := s.settings.Group(groupID); ok {
-			return time.Duration(group.LookupTTLSeconds().Value) * time.Second, group.LookupAutoDeleteEnabled().Value
+			duration, valid := config.SecondsToDuration(group.LookupTTLSeconds().Value)
+			return duration, group.LookupAutoDeleteEnabled().Value && valid
 		}
 	}
 	seconds := 180
 	if s.cfg.LookupTTLSeconds != nil {
 		seconds = max(*s.cfg.LookupTTLSeconds, 0)
 	}
-	return time.Duration(seconds) * time.Second, seconds > 0
+	duration, valid := config.SecondsToDuration(seconds)
+	return duration, seconds > 0 && valid
 }
 
 func (s *Service) isGroup(groupID int64) bool {

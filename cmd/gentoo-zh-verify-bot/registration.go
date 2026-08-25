@@ -87,6 +87,7 @@ type registrationService struct {
 	now                 func() time.Time
 	onRegistered        func(context.Context, int64)
 	onMembershipChanged func(context.Context, int64)
+	onUnregistered      func(int64)
 
 	transitions registrationTransitionLocks
 	waitingMu   sync.Mutex
@@ -104,6 +105,7 @@ func newRegistrationService(
 	selfID int64,
 	onRegistered func(context.Context, int64),
 	onMembershipChanged func(context.Context, int64),
+	onUnregistered func(int64),
 ) *registrationService {
 	s := &registrationService{
 		root:                root,
@@ -115,6 +117,7 @@ func newRegistrationService(
 		now:                 time.Now,
 		onRegistered:        onRegistered,
 		onMembershipChanged: onMembershipChanged,
+		onUnregistered:      onUnregistered,
 		waiting:             make(map[int64]time.Time),
 		reportAfter:         make(map[int64]time.Time),
 	}
@@ -513,6 +516,9 @@ func (s *registrationService) onUnregisterCommand(ctx *th.Context, update telego
 		s.sendRegistrationText(ctx.Context(), message.Chat.ID, text)
 		log.Printf("group unregister refused: group=%d owner=%d error=%v", groupID, message.From.ID, err)
 		return nil
+	}
+	if s.onUnregistered != nil {
+		s.onUnregistered(groupID)
 	}
 	s.leaveUnknown(ctx.Context(), telego.Chat{
 		ID: groupID, Type: telego.ChatTypeSupergroup, Title: title,

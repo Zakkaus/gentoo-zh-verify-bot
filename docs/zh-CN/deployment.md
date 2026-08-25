@@ -10,7 +10,7 @@
 
 `STATE_DIRECTORY` 非空时，`loadRuntimeState` 尝试以 `0700` 创建目录，清理遗留的 `.<name>.tmp-*`，并把 `settings.json` 放在该目录中。创建失败只记录警告，启动继续，之后的持久化可能失败。变量为空时，普通设置只存在于内存，验证、警告和 feed 状态都不能跨重启保存。Owner 认领和运行时群组注册要求更严格：没有持久设置存储时直接拒绝。
 
-随后，程序创建 Bot API 客户端，以五秒间隔配置 long polling 重试，创建处理器，并强制执行 `GetMe`。机器人创建、首次 long polling、处理器创建或启动、`GetMe` 失败都会结束进程。Owner 和注册路由先于普通应用路由注册。程序再启动异步权限检查、注册命令菜单、启动可选 feed、查询缓存预热和 heartbeat，最后运行处理器。更新流在没有停止信号时结束，进程以非零状态退出，交由 systemd 重启。
+随后，程序创建 Bot API 客户端，强制执行 `GetMe`，创建处理器，并先注册 owner 和 enrollment 路由，再注册普通应用路由。处理器启动并确认正在接收 update 后，long polling 才能首次获取 backlog。机器人创建、处理器创建或启动、首次 long polling 或 `GetMe` 失败都会结束进程。程序还会启动异步权限检查，注册命令菜单，并启动可选 feed、查询缓存预热和 heartbeat。更新流在没有停止信号时结束，进程以非零状态退出，交由 systemd 重启。
 
 ## Owner 认领
 
@@ -69,16 +69,19 @@ Feed 目标另有非致命启动检查。频道要求机器人是管理员且具
 30 秒重试一次，不会在五次失败后永久停止。管理员执行 `systemctl stop` 后，unit 仍会保持
 停止。
 
-服务使用 `Type=notify`。程序完成身份查询、状态恢复和处理器注册后才发送 `READY=1`。每次
-`getUpdates` 调用结束后发送 `WATCHDOG=1`；独立 ticker 无法掩盖停滞的 poll 循环。无更新时，
-正常 long poll 会在 30 秒内结束。每次 API 调用最多执行 45 秒，失败后等待五秒再重试，因此
-两次进度信号之间最长为 50 秒。`WatchdogSec=120s` 超过该间隔的两倍。网络、DNS 或 Telegram
-故障仍会结束一次调用，所以 watchdog 会继续收到信号，并由重试和验证中断恢复逻辑处理。
-如果 poll 循环连续 120 秒未结束任何调用，systemd 会终止进程，并在 30 秒后重启。
+服务使用 `Type=notify`。程序完成身份查询、状态恢复和处理器注册，并确认处理器正在接收 update
+后，才会启动 long polling；`READY=1` 在此之后发送。每次 `getUpdates` 调用结束后发送
+`WATCHDOG=1`；独立 ticker 无法掩盖停滞的 poll 循环。无更新时，正常 long poll 会在 30 秒内
+结束。每次 API 调用最多执行 45 秒，失败后等待五秒再重试，因此两次进度信号之间最长为 50 秒。
+`WatchdogSec=120s` 超过该间隔的两倍。网络、DNS 或 Telegram 故障仍会结束一次调用，所以
+watchdog 会继续收到信号，并由重试和验证中断恢复逻辑处理。如果 poll 循环连续 120 秒未结束
+任何调用，systemd 会终止进程，并在 30 秒后重启。
 
-SIGINT 或 SIGTERM 会触发 `STOPPING=1`，停止接收 update，并让正在执行的 update 处理器、
-Telegram 心跳和 feed 状态写入共用 20 秒截止时间。随后，程序冻结验证计时器并同步保存验证
-状态。`TimeoutStopSec=30s` 会在强制终止前额外保留十秒。停止日志会列出当前等待的组件。
+SIGINT 或 SIGTERM 会触发 `STOPPING=1`，并先停止 long polling。程序随后处理 Telego buffer 中
+已经获取的全部 update；后续 poll 的 offset 可能已在上游确认这些 update，因此不能直接丢弃。
+该处理过程、正在执行的 update 处理器、Telegram heartbeat 和 feed 状态写入共用 20 秒截止时间。
+随后，程序冻结验证计时器并同步保存验证状态。`TimeoutStopSec=30s` 会在强制终止前额外保留
+十秒。停止日志会列出当前等待的组件。
 
 所有状态写入共用一把进程级 mutex。程序在目标目录创建模式为 `0600` 的临时文件，写入并执行
 `fsync`，关闭文件，原子重命名为状态文件，再对父目录执行 `fsync`。如果进程在重命名前终止，

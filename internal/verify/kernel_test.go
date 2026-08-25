@@ -16,6 +16,7 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 )
 
 // TestKernelAnswerUnameA pins the real-world `uname -a` shapes. The vocabulary check that guards the
@@ -546,6 +547,127 @@ func TestNoLinuxFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAnswerIsNotGradedWhilePromptDeliveryIsInFlight(t *testing.T) {
+	v, bot := kernelTestV()
+	release := make(chan struct{}, 1)
+	bot.sendStarted = make(chan struct{}, 1)
+	bot.releaseSend = release
+	done := make(chan struct{})
+	go func() {
+		v.gradeKernelAnswer(context.Background(), bot, -100, 5, noLinuxNow("not installed yet"))
+		close(done)
+	}()
+	select {
+	case <-bot.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("fallback prompt did not block in delivery")
+	}
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+
+	v.gradeKernelAnswer(context.Background(), newFakeVerifyBot(), -100, 5, "wrong")
+	if p := v.pend[pkey{-100, 5}]; p == nil || p.tries != 0 {
+		t.Fatalf("text sent before fallback confirmation changed attempts: %+v", p)
+	}
+
+	release <- struct{}{}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("fallback prompt delivery did not finish after release")
+	}
+	if p := v.pend[pkey{-100, 5}]; p == nil || len(p.fbAnswers) == 0 {
+		t.Fatalf("confirmed fallback delivery did not activate the fallback: %+v", p)
+	}
+}
+
+func TestDefiniteFallbackPromptFailureRestoresRetryableKernelState(t *testing.T) {
+	v, failed := kernelTestV()
+	failed.sendErr = &ta.Error{ErrorCode: 429, Description: "Too Many Requests"}
+	failed.sendFailN = 1
+
+	v.gradeKernelAnswer(context.Background(), failed, -100, 5, noLinuxNow("not installed yet"))
+
+	key := pkey{int64(-100), int64(5)}
+	p := v.pend[key]
+	if p == nil || p.tries != 0 || p.hinted || len(p.fbAnswers) != 0 {
+		t.Fatalf("definite fallback send failure left non-retryable state: %+v", p)
+	}
+
+	retry := newFakeVerifyBot()
+	v.gradeKernelAnswer(context.Background(), retry, key.gid, key.uid, noLinuxNow("not installed yet"))
+	p = v.pend[key]
+	if p == nil || p.tries != 0 || !p.hinted || len(p.fbAnswers) == 0 {
+		t.Fatalf("retry after definite fallback failure did not deliver fallback: %+v", p)
+	}
+}
+
+func TestUncertainFallbackPromptDeliveryDoesNotChargeAnswersBeforeRetry(t *testing.T) {
+	v, uncertain := kernelTestV()
+	uncertain.sendErr = errors.New("connection reset after request write")
+	uncertain.sendFailN = 1
+
+	v.gradeKernelAnswer(context.Background(), uncertain, -100, 5, noLinuxNow("not installed yet"))
+	v.gradeKernelAnswer(context.Background(), newFakeVerifyBot(), -100, 5, "wrong")
+
+	key := pkey{int64(-100), int64(5)}
+	p := v.pend[key]
+	if p == nil || p.tries != 0 {
+		t.Fatalf("uncertain fallback delivery charged an unconfirmed answer: %+v", p)
+	}
+
+	retry := newFakeVerifyBot()
+	active, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid)
+	if err != nil || !active {
+		t.Fatalf("fallback retry = active %v error %v, want confirmed delivery", active, err)
+	}
+	answer := p.fbAnswers[0]
+	v.gradeKernelAnswer(context.Background(), retry, key.gid, key.uid, answer)
+	if retry.approves != 1 {
+		t.Fatalf("confirmed fallback answer produced %d approvals, want 1", retry.approves)
+	}
+}
+
+func TestUncertainFallbackDeliveryRemainsUngraduatedAfterRestart(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	path := t.TempDir() + "/pending.json"
+	before, uncertain := kernelTestV()
+	before.statePath = path
+	uncertain.sendErr = errors.New("connection reset after request write")
+	uncertain.sendFailN = 1
+	before.gradeKernelAnswer(context.Background(), uncertain, gid, uid, noLinuxNow("not installed yet"))
+	before.Shutdown()
+
+	after := newTestService(&config.Config{
+		Groups:         []config.GroupConfig{{ID: gid}},
+		GroupIDs:       []int64{gid},
+		VerifyMaxFails: 3,
+	})
+	after.statePath = path
+	after.load(newFakeVerifyBot())
+	t.Cleanup(after.Shutdown)
+	p := after.pend[pkey{gid, uid}]
+	if p == nil || !p.fallbackPending || len(p.fbAnswers) == 0 {
+		t.Fatalf("restored uncertain fallback state = %+v", p)
+	}
+	dm := telego.Update{Message: &telego.Message{
+		Chat: telego.Chat{Type: telego.ChatTypePrivate, ID: uid},
+		From: &telego.User{ID: uid},
+		Text: "wrong",
+	}}
+	if after.KernelAnswerDM(context.Background(), dm) {
+		t.Error("uncertain fallback was gradeable after restart")
+	}
+	after.gradeKernelAnswer(context.Background(), newFakeVerifyBot(), gid, uid, dm.Message.Text)
+	if p.tries != 0 {
+		t.Fatalf("uncertain fallback charged %d attempts after restart, want 0", p.tries)
+	}
+}
+
 func TestFallbackAnswerMatching(t *testing.T) {
 	v := newTestService(&config.Config{FallbackQuestions: []config.ShortQuestion{{
 		Q:       "Which package manager?",
@@ -691,7 +813,14 @@ func TestUnpromptedDMIsNotAnAnswer(t *testing.T) {
 	if v.KernelAnswerDM(context.TODO(), dm) {
 		t.Error("a DM must not be graded before the question has been sent")
 	}
-	v.markPrompted(-100, 5)
+	prompt, ok := v.pendingDMChallenge(-100, 5)
+	if !ok {
+		t.Fatal("pending challenge disappeared")
+	}
+	result, err := v.sendDMQuestion(context.Background(), newFakeVerifyBot(), 5, prompt)
+	if err != nil || !result.current {
+		t.Fatalf("prompt delivery = current %v error %v", result.current, err)
+	}
 	if !v.KernelAnswerDM(context.TODO(), dm) {
 		t.Error("once the question has been sent, a DM is the answer")
 	}
@@ -858,10 +987,10 @@ func TestRepliesCannotChargeAReplacedPending(t *testing.T) {
 		t.Error("a stale reply must not charge the replacement pending an attempt")
 	}
 	if v.markNoLinuxReminded(-100, 5, stale) || v.markSampleBounced(-100, 5, stale) ||
-		v.markOSClarified(-100, 5, stale) || v.markKernelHinted(-100, 5, stale) {
+		v.markOSClarified(-100, 5, stale) {
 		t.Error("a stale reply must not spend the replacement pending's free-reply guards")
 	}
-	if v.setKernelFallback(-100, 5, stale, "q", []string{"a"}) {
+	if v.beginKernelFallback(newFakeVerifyBot(), -100, 5, stale, "q", []string{"a"}) {
 		t.Error("a stale reply must not switch the replacement pending's question")
 	}
 	if p := v.pend[key]; p.tries != 0 || p.hinted || p.sampleBounced || p.noLinuxReminded || p.osClarified {

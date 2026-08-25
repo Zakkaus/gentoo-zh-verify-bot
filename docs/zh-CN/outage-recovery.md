@@ -50,6 +50,6 @@ DM 发送错误会被忽略。新群内提示发送失败时，程序记录并�
 
 **实现位置：**`internal/verify` 包；`internal/verify/service.go` 中的 `(*Service).Shutdown`；`main` 包；`cmd/gentoo-zh-verify-bot/main.go` 中的 `streamEndedUnexpectedly` 和 `main`。
 
-通过信号停止时，处理器先停止，`Shutdown` 再把验证服务标记为正在停止，停止所有计时器，拒绝之后的结束处理，并保存待验证、失败计数和 heartbeat。与停止并发的计时器不能在冻结后拒绝、计失败或封禁申请者。
+通过信号停止时，程序先停止 long polling，再由处理器处理 Telego 已经获取的全部 update，然后停止处理器。`Shutdown` 随后把验证服务标记为正在停止，停止所有计时器，拒绝之后的结束处理，并保存待验证、失败计数和 heartbeat。与停止并发的计时器不能在冻结后拒绝、计失败或封禁申请者。
 
 Long polling 对暂时错误使用五秒重试。进程上下文仍有效时更新流却结束，程序以非零状态退出，供 systemd 重启。致命路径不会执行优雅停止中的 defer 清理，只能依赖每次事件的原子保存和此前持久化的 heartbeat；尚未完成保存的变更可能不会出现在重启后的状态中。

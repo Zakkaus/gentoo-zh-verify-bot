@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -218,13 +219,14 @@ func main() {
 		func(checkCtx context.Context, groupID int64) {
 			moderation.LogGroupSetup(checkCtx, bot, identity.ID, groupID)
 		},
+		verification.RemoveGroup,
 	)
 	if err := registration.EnsureOwnerClaim(); err != nil {
 		log.Printf("WARNING: owner claim is unavailable until durable settings storage is restored: %v", err)
 	}
 
 	application.SetupCommands(ctx, bot)
-	bh, err := prepareUpdateHandler(
+	bh, handlerDone, err := prepareUpdateHandler(
 		ctx,
 		bot,
 		func(handler *th.BotHandler) {
@@ -270,20 +272,34 @@ func main() {
 	log.Printf("verify bot @%s (%s) started — groups=%d", identity.Username, version, len(runtimeSettings.GroupIDs()))
 	close(startupComplete)
 
-	handlerErr := bh.Start()
-	if streamEndedUnexpectedly(ctx.Err()) {
+	var handlerErr error
+	handlerStopped := false
+	select {
+	case handlerErr = <-handlerDone:
+		handlerStopped = true
+	case <-ctx.Done():
+	}
+	if handlerStopped && streamEndedUnexpectedly(ctx.Err()) {
 		if handlerErr != nil {
 			log.Fatalf("handler stopped unexpectedly: %v", handlerErr)
 		}
 		log.Fatal("update stream ended without a shutdown signal — exiting non-zero so systemd restarts us")
 	}
-	if handlerErr != nil {
-		log.Printf("shutdown: handler loop stopped: %v", handlerErr)
-	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownDeadline)
 	defer shutdownCancel()
-	log.Printf("shutdown: waiting up to %s for in-flight update handlers", shutdownDeadline)
+	log.Printf("shutdown: waiting up to %s to drain fetched updates and in-flight update handlers", shutdownDeadline)
+	if !handlerStopped {
+		select {
+		case handlerErr = <-handlerDone:
+			handlerStopped = true
+		case <-shutdownCtx.Done():
+			log.Printf("shutdown: fetched updates did not drain before deadline: %v", shutdownCtx.Err())
+		}
+	}
+	if handlerStopped && handlerErr != nil {
+		log.Printf("shutdown: handler loop stopped: %v", handlerErr)
+	}
 	if err := bh.StopWithContext(shutdownCtx); err != nil {
 		log.Printf("shutdown: update handlers did not stop cleanly: %v", err)
 	}
@@ -308,25 +324,42 @@ func prepareUpdateHandler(
 	bot *telego.Bot,
 	register func(*th.BotHandler),
 	startPolling func() (<-chan telego.Update, error),
-) (*th.BotHandler, error) {
+) (*th.BotHandler, <-chan error, error) {
 	handlerUpdates := make(chan telego.Update)
 	inFlight := make(chan struct{}, maxConcurrentUpdateHandlers)
 	handler, err := th.NewBotHandler(bot, handlerUpdates)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	handler.Use(func(handlerCtx *th.Context, update telego.Update) error {
 		defer func() { <-inFlight }()
 		return handlerCtx.Next(update)
 	})
 	register(handler)
+
+	handlerDone := make(chan error, 1)
+	go func() {
+		handlerDone <- handler.Start()
+	}()
+	// Polling must not start until Start has initialized the update consumer.
+	for !handler.IsRunning() {
+		select {
+		case err := <-handlerDone:
+			return nil, nil, fmt.Errorf("update handler stopped before polling started: %v", err)
+		default:
+			runtime.Gosched()
+		}
+	}
+
 	updates, err := startPolling()
 	if err != nil {
 		close(handlerUpdates)
-		return nil, err
+		_ = handler.Stop()
+		<-handlerDone
+		return nil, nil, err
 	}
 	go forwardUpdates(ctx, updates, handlerUpdates, inFlight)
-	return handler, nil
+	return handler, handlerDone, nil
 }
 
 func forwardUpdates(
@@ -336,25 +369,52 @@ func forwardUpdates(
 	inFlight chan struct{},
 ) {
 	defer close(destination)
+	// Telego may already have confirmed buffered offsets. Cancellation switches to
+	// an uncancelable drain instead of abandoning an update held at any blocking step.
+	draining := false
 	for {
-		select {
-		case <-ctx.Done():
+		var (
+			update telego.Update
+			ok     bool
+		)
+		if draining {
+			update, ok = <-source
+		} else {
+			select {
+			case <-ctx.Done():
+				draining = true
+				continue
+			case update, ok = <-source:
+			}
+		}
+		if !ok {
 			return
-		case update, ok := <-source:
-			if !ok {
-				return
-			}
+		}
+
+		slotAcquired := false
+		if !draining {
 			select {
 			case <-ctx.Done():
-				return
+				draining = true
 			case inFlight <- struct{}{}:
+				slotAcquired = true
 			}
+		}
+		if !slotAcquired {
+			inFlight <- struct{}{}
+		}
+
+		sent := false
+		if !draining {
 			select {
 			case <-ctx.Done():
-				<-inFlight
-				return
+				draining = true
 			case destination <- update:
+				sent = true
 			}
+		}
+		if !sent {
+			destination <- update
 		}
 	}
 }

@@ -199,10 +199,10 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 	if ttl, on := testLookupService(v).AutoDelete(groupB); ttl != 3*time.Minute || !on {
 		t.Fatalf("group B lookup cleanup = (%v, %v)", ttl, on)
 	}
-	if count, ban := v.recordVerifyFail(groupA, 7); count != 1 || !ban {
+	if count, ban := v.recordVerifyFail(groupA, 7, v.wallNow()); count != 1 || !ban {
 		t.Fatalf("group A failure threshold = (%d, %v)", count, ban)
 	}
-	if count, ban := v.recordVerifyFail(groupB, 7); count != 1 || ban {
+	if count, ban := v.recordVerifyFail(groupB, 7, v.wallNow()); count != 1 || ban {
 		t.Fatalf("group B failure threshold = (%d, %v)", count, ban)
 	}
 	if v.verifyRetrySeconds(groupA) != 30 || v.verifyRetrySeconds(groupB) != 180 ||

@@ -127,52 +127,104 @@ func isPkgPath(p string) bool {
 }
 
 func splitVer(v string) []string {
-	return strings.FieldsFunc(v, func(r rune) bool { return r == '.' || r == '-' || r == '_' })
+	return strings.FieldsFunc(v, func(r rune) bool { return r == '.' || r == '-' })
+}
+
+type gentooSuffix struct {
+	class  int
+	number string
+	raw    string
+}
+
+type gentooVersion struct {
+	base     []string
+	suffixes []gentooSuffix
+	revision string
 }
 
 // verLess implements the Gentoo ordering needed to select the latest version.
 func verLess(a, b string) bool {
-	as, bs := splitVer(a), splitVer(b)
-	n := len(as)
-	if len(bs) < n {
-		n = len(bs)
+	av, bv := parseGentooVersion(a), parseGentooVersion(b)
+	if c := compareVersionTokens(av.base, bv.base); c != 0 {
+		return c < 0
 	}
-	for i := 0; i < n; i++ {
-		if c := cmpToken(as[i], bs[i]); c != 0 {
+	for i := range max(len(av.suffixes), len(bv.suffixes)) {
+		as, bs := gentooSuffix{}, gentooSuffix{}
+		if i < len(av.suffixes) {
+			as = av.suffixes[i]
+		}
+		if i < len(bv.suffixes) {
+			bs = bv.suffixes[i]
+		}
+		if as.class != bs.class {
+			return as.class < bs.class
+		}
+		if as.raw != "" || bs.raw != "" {
+			if c := cmpToken(as.raw, bs.raw); c != 0 {
+				return c < 0
+			}
+		} else if c := cmpNum(as.number, bs.number); c != 0 {
 			return c < 0
 		}
 	}
-	if len(as) == len(bs) {
-		return false
-	}
-	// Extra pre-release suffixes are older; patch, revision, and numeric suffixes are newer.
-	aLonger := len(as) > len(bs)
-	var extra string // the first token only the longer side has (index n into it)
-	if aLonger {
-		extra = as[n]
-	} else {
-		extra = bs[n]
-	}
-	if suffixWeight(extra) < 0 { // longer side is a pre-release => it is the OLDER one
-		return aLonger
-	}
-	return !aLonger // longer side is a patch/revision/extra component => the NEWER one
+	return cmpNum(av.revision, bv.revision) < 0
 }
 
-// Negative suffixes precede a bare release; patches and revisions follow it.
-func suffixWeight(tok string) int {
-	switch {
-	case strings.HasPrefix(tok, "alpha"):
-		return -4
-	case strings.HasPrefix(tok, "beta"):
-		return -3
-	case strings.HasPrefix(tok, "pre"):
-		return -2
-	case strings.HasPrefix(tok, "rc"):
-		return -1
-	default:
-		return 1
+func parseGentooVersion(version string) gentooVersion {
+	revision := ""
+	if index := strings.LastIndex(version, "-r"); index >= 0 && decimalDigits(version[index+2:]) {
+		revision = version[index+2:]
+		version = version[:index]
 	}
+	parts := strings.Split(version, "_")
+	parsed := gentooVersion{base: splitVer(parts[0]), revision: revision}
+	if len(parts) > 1 {
+		parsed.suffixes = make([]gentooSuffix, 0, len(parts)-1)
+		for _, token := range parts[1:] {
+			parsed.suffixes = append(parsed.suffixes, parseGentooSuffix(token))
+		}
+	}
+	return parsed
+}
+
+func parseGentooSuffix(token string) gentooSuffix {
+	for _, suffix := range []struct {
+		name  string
+		class int
+	}{
+		{name: "alpha", class: -4},
+		{name: "beta", class: -3},
+		{name: "pre", class: -2},
+		{name: "rc", class: -1},
+		{name: "p", class: 1},
+	} {
+		if number, ok := strings.CutPrefix(token, suffix.name); ok && (number == "" || decimalDigits(number)) {
+			return gentooSuffix{class: suffix.class, number: number}
+		}
+	}
+	// Unknown underscore components retain the old behavior of sorting after a release.
+	return gentooSuffix{class: 2, raw: token}
+}
+
+func compareVersionTokens(a, b []string) int {
+	for i := range min(len(a), len(b)) {
+		if c := cmpToken(a[i], b[i]); c != 0 {
+			return c
+		}
+	}
+	return len(a) - len(b)
+}
+
+func decimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := range len(value) {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // Compare digit runs numerically without changing byte-wise ordering for other runs.

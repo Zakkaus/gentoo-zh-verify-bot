@@ -243,6 +243,27 @@ func TestDeferExpiryGuards(t *testing.T) {
 	}
 }
 
+func TestNonPositiveExpiryDelayGetsStrikeFreeGrace(t *testing.T) {
+	const gid, uid = int64(-999), int64(5)
+	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	p := &pending{nonce: "unknown"}
+	key := pkey{gid, uid}
+
+	v.mu.Lock()
+	v.pend[key] = p
+	v.armExpiry(newFakeVerifyBot(), p, gid, uid, v.timeout(gid), "timeout")
+	deadline := p.deadline
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	delete(v.pend, key)
+	v.mu.Unlock()
+
+	if remaining := time.Until(deadline); remaining < noFaultGrace-time.Second {
+		t.Fatalf("non-positive expiry delay produced deadline %v (%s remaining), want strike-free grace", deadline, remaining)
+	}
+}
+
 func TestHeartbeatTickRecovers(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240})
 	v.botUsername = "bot"
@@ -331,6 +352,91 @@ func TestOnRecoveryRenotifyCooldown(t *testing.T) {
 		if p.timer != nil {
 			p.timer.Stop()
 		}
+	}
+}
+
+func TestRenotifyFailureKeepsWorkingGroupChallenge(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	v.botUsername = "bot"
+	key := pkey{gid, uid}
+	p := &pending{
+		nonce:              "current",
+		name:               "Applicant",
+		lang:               i18n.LangEN,
+		groupMsgID:         41,
+		challengeDelivered: true,
+		deadline:           time.Now().Add(time.Hour),
+	}
+	v.pend[key] = p
+	bot := newFakeVerifyBot()
+	bot.sendErrAt = map[int]error{2: errors.New("group repost failed")}
+
+	v.renotifyPending(context.Background(), bot, gid, uid, p.name, p.groupMsgID, p, time.Minute)
+
+	if p.groupMsgID != 41 || !p.challengeDelivered {
+		t.Fatalf("failed repost changed working challenge to message %d delivered=%v, want 41/true",
+			p.groupMsgID, p.challengeDelivered)
+	}
+	if bot.deletes != 0 {
+		t.Fatalf("failed repost deleted %v, want no challenge deletion", bot.deletedMessageIDs)
+	}
+}
+
+func TestRenotifySuccessfulSendDeletesNewOrphanWhenPendingWasReplaced(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	v.botUsername = "bot"
+	key := pkey{gid, uid}
+	old := &pending{
+		nonce:              "old",
+		name:               "Applicant",
+		lang:               i18n.LangEN,
+		groupMsgID:         41,
+		challengeDelivered: true,
+		deadline:           time.Now().Add(time.Hour),
+	}
+	v.pend[key] = old
+	release := make(chan struct{}, 1)
+	bot := newFakeVerifyBot()
+	bot.sendMessageID = 99
+	bot.sendStarted = make(chan struct{}, 1)
+	bot.releaseSend = release
+	bot.blockSendN = 2
+	done := make(chan struct{})
+	go func() {
+		v.renotifyPending(context.Background(), bot, gid, uid, old.name, old.groupMsgID, old, time.Minute)
+		close(done)
+	}()
+	select {
+	case <-bot.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("recovery repost did not block after the private notice")
+	}
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+
+	replacement := &pending{nonce: "replacement", groupMsgID: 77, challengeDelivered: true}
+	v.mu.Lock()
+	v.pend[key] = replacement
+	v.mu.Unlock()
+	release <- struct{}{}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recovery repost did not finish after release")
+	}
+
+	if v.pend[key] != replacement || replacement.groupMsgID != 77 || !replacement.challengeDelivered {
+		t.Fatalf("stale recovery changed replacement pending: %+v", v.pend[key])
+	}
+	if bot.deletes != 1 || bot.deletedChats[0] != gid || bot.deletedMessageIDs[0] != 99 {
+		t.Fatalf("stale recovery deleted chats/messages %v/%v, want [%d]/[99]",
+			bot.deletedChats, bot.deletedMessageIDs, gid)
 	}
 }
 

@@ -103,10 +103,14 @@ func TestSendHTMLFallback(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			caller := &scriptedCaller{responses: map[string][]scriptedResult{"sendMessage": tt.responses}}
 			client := newTestClient(t, caller)
-			got, err := client.SendHTMLFallback(context.Background(), 5,
+			sent, err := client.SendHTMLFallback(context.Background(), 5,
 				`<blockquote expandable><b>rich</b></blockquote>`, `<b>simple &amp; safe</b>`)
-			if got != tt.wantOK || (err == nil) != tt.wantOK {
-				t.Fatalf("SendHTMLFallback() = (%v, %v), want success %v", got, err, tt.wantOK)
+			ok := sent != nil
+			if ok != tt.wantOK || (err == nil) != tt.wantOK {
+				t.Fatalf("SendHTMLFallback() = (%v, %v), want success %v", sent, err, tt.wantOK)
+			}
+			if sent != nil && sent.MessageID != 101 {
+				t.Errorf("sent message ID = %d, want 101", sent.MessageID)
 			}
 			calls := caller.methodCalls("sendMessage")
 			if len(calls) != tt.wantCalls {

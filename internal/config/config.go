@@ -47,6 +47,44 @@ func ValidLanguage(lang string) bool {
 // Telegram treats until_date below 30 seconds or above 366 days as permanent.
 const telegramBanMax = 366 * 86400
 
+const (
+	maxDurationSeconds           = int64((1<<63 - 1) / int64(time.Second))
+	maxFeedIntervalSeconds       = 24 * 60 * 60
+	maxOwnerClaimLifetimeSeconds = 24 * 60 * 60
+	maxMessageTTLSeconds         = 24 * 60 * 60
+	maxVerifyRetrySeconds        = telegramBanMax
+)
+
+// SecondsToDuration converts seconds without overflowing time.Duration.
+func SecondsToDuration(seconds int) (time.Duration, bool) {
+	value := int64(seconds)
+	if value < -maxDurationSeconds || value > maxDurationSeconds {
+		return 0, false
+	}
+	return time.Duration(value) * time.Second, true
+}
+
+func checkedConfigDuration(key string, seconds int, minimum, operationalMaximum int64) (time.Duration, error) {
+	maximum := min(operationalMaximum, maxDurationSeconds)
+	value := int64(seconds)
+	if value < minimum || value > maximum {
+		return 0, fmt.Errorf("%s=%d is outside the accepted range %d..%d seconds", key, seconds, minimum, maximum)
+	}
+	duration, ok := SecondsToDuration(seconds)
+	if !ok {
+		return 0, fmt.Errorf("%s=%d is outside the accepted range %d..%d seconds", key, seconds, minimum, maximum)
+	}
+	return duration, nil
+}
+
+func validatePositiveConfigDuration(key string, seconds int, operationalMaximum int64) error {
+	if seconds <= 0 {
+		return nil
+	}
+	_, err := checkedConfigDuration(key, seconds, 1, operationalMaximum)
+	return err
+}
+
 // ClampBanSeconds maps a ban duration into Telegram's enforced range.
 func ClampBanSeconds(seconds int) int {
 	switch {
@@ -127,7 +165,7 @@ type FeedConfig struct {
 	ChatID int64 `json:"chat_id"`
 	// Lang selects zh, zh-Hant, or en and defaults to zh.
 	Lang string `json:"lang"`
-	// IntervalSeconds is the polling interval with a 300-second default and 60-second minimum.
+	// IntervalSeconds is the polling interval with a 300-second default and one-day maximum.
 	IntervalSeconds int `json:"interval_seconds"`
 	// Bugs enables Bugzilla posts and defaults to true.
 	Bugs *bool `json:"bugs"`
@@ -149,14 +187,17 @@ func (f *FeedConfig) NewsOn() bool { return f.News == nil || *f.News }
 
 // Interval returns this feed's clamped polling interval.
 func (f *FeedConfig) Interval() time.Duration {
+	seconds := f.IntervalSeconds
 	switch {
-	case f.IntervalSeconds <= 0:
-		return 5 * time.Minute // unset -> default
-	case f.IntervalSeconds < 60:
-		return 60 * time.Second // clamp a too-fast interval to the 60 s floor
-	default:
-		return time.Duration(f.IntervalSeconds) * time.Second
+	case seconds <= 0:
+		seconds = 5 * 60
+	case seconds < 60:
+		seconds = 60
+	case seconds > maxFeedIntervalSeconds:
+		seconds = maxFeedIntervalSeconds
 	}
+	duration, _ := SecondsToDuration(seconds)
+	return duration
 }
 
 // Config contains the validated JSON configuration.
@@ -179,7 +220,7 @@ type Config struct {
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 	// KnownChatIDs prevents auto-leave without granting verification or bypass semantics.
 	KnownChatIDs []int64 `json:"known_chat_ids"`
-	// OwnerClaimLifetimeSeconds limits the one-use journal claim and defaults to 10 minutes.
+	// OwnerClaimLifetimeSeconds limits the one-use journal claim to at most one day.
 	OwnerClaimLifetimeSeconds int `json:"owner_claim_lifetime_seconds"`
 	// OwnerClaimUserID optionally restricts the first owner claim to one Telegram user.
 	OwnerClaimUserID int64 `json:"owner_claim_user_id"`
@@ -189,9 +230,9 @@ type Config struct {
 	TimeoutSeconds int `json:"timeout_seconds"`
 	// AdminLogChatID receives moderation and failed-action notices.
 	AdminLogChatID int64 `json:"admin_log_chat_id"`
-	// NotifyTTLSeconds controls notice deletion, defaults to 60, and is disabled when negative.
+	// NotifyTTLSeconds controls notice deletion, defaults to 60, and has a one-day maximum.
 	NotifyTTLSeconds int `json:"notify_ttl_seconds"`
-	// LookupTTLSeconds controls lookup deletion, defaults to 180, and is disabled when non-positive.
+	// LookupTTLSeconds controls lookup deletion, defaults to 180, and has a one-day maximum.
 	LookupTTLSeconds *int `json:"lookup_ttl_seconds"`
 	// WarnLimit is the strike count before an automatic kick and defaults to three.
 	WarnLimit int `json:"warn_limit"`
@@ -203,7 +244,7 @@ type Config struct {
 	BanSeconds int `json:"ban_seconds"`
 	// MuteSeconds is the finite default mute duration.
 	MuteSeconds int `json:"mute_seconds"`
-	// VerifyRetrySeconds is the cooldown and a negative value disables it.
+	// VerifyRetrySeconds is the cooldown, capped at 366 days; a negative value disables it.
 	VerifyRetrySeconds int `json:"verify_retry_seconds"`
 	// VerifyMaxFails is the automatic-ban threshold and a negative value disables it.
 	VerifyMaxFails int `json:"verify_max_fails"`
@@ -395,6 +436,29 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("default runtime group: required_channel_id is set but the channel has no reachable link (set channel_display to an @handle, or channel_invite_url for a private channel)")
 		}
 	}
+	if err := validatePositiveConfigDuration("timeout_seconds", c.TimeoutSeconds, maxDurationSeconds); err != nil {
+		return nil, err
+	}
+	if err := validatePositiveConfigDuration("notify_ttl_seconds", c.NotifyTTLSeconds, maxMessageTTLSeconds); err != nil {
+		return nil, err
+	}
+	if c.LookupTTLSeconds != nil {
+		if err := validatePositiveConfigDuration("lookup_ttl_seconds", *c.LookupTTLSeconds, maxMessageTTLSeconds); err != nil {
+			return nil, err
+		}
+	}
+	if err := validatePositiveConfigDuration("ban_seconds", c.BanSeconds, maxDurationSeconds); err != nil {
+		return nil, err
+	}
+	if err := validatePositiveConfigDuration("mute_seconds", c.MuteSeconds, maxDurationSeconds); err != nil {
+		return nil, err
+	}
+	if err := validatePositiveConfigDuration("verify_retry_seconds", c.VerifyRetrySeconds, maxVerifyRetrySeconds); err != nil {
+		return nil, err
+	}
+	if err := validatePositiveConfigDuration("owner_claim_lifetime_seconds", c.OwnerClaimLifetimeSeconds, maxOwnerClaimLifetimeSeconds); err != nil {
+		return nil, err
+	}
 	if c.OwnerClaimLifetimeSeconds < 0 {
 		return nil, fmt.Errorf("owner_claim_lifetime_seconds must not be negative")
 	}
@@ -438,6 +502,11 @@ func LoadConfig(path string) (*Config, error) {
 		c.Feeds = append(c.Feeds, *c.Feed)
 	}
 	for i := range c.Feeds {
+		if err := validatePositiveConfigDuration(
+			fmt.Sprintf("feeds[%d].interval_seconds", i), c.Feeds[i].IntervalSeconds, maxFeedIntervalSeconds,
+		); err != nil {
+			return nil, err
+		}
 		if !ValidLanguage(c.Feeds[i].Lang) {
 			return nil, fmt.Errorf("feed %d: lang %q is not one of %q, %q, %q", i, c.Feeds[i].Lang, "zh", "zh-Hant", "en")
 		}
@@ -466,10 +535,12 @@ func LoadConfig(path string) (*Config, error) {
 
 // OwnerClaimLifetime returns the configured first-owner claim lifetime.
 func (c *Config) OwnerClaimLifetime() time.Duration {
-	if c.OwnerClaimLifetimeSeconds <= 0 {
-		return 10 * time.Minute
+	seconds := c.OwnerClaimLifetimeSeconds
+	if seconds <= 0 || seconds > maxOwnerClaimLifetimeSeconds {
+		seconds = 10 * 60
 	}
-	return time.Duration(c.OwnerClaimLifetimeSeconds) * time.Second
+	duration, _ := SecondsToDuration(seconds)
+	return duration
 }
 
 // IsGroup reports whether id is one of the guarded groups.

@@ -282,29 +282,36 @@ func TestJoinRequestAmbiguousDMFailureDoesNotRiskDuplicateGroupChallenge(t *test
 // exercised without a real Telegram connection; it records call counts and returns configured
 // errors for those network actions.
 type fakeVerifyBot struct {
-	approveErr      error
-	declineErr      error
-	banErr          error
-	getMeErr        error
-	sendErr         error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
-	sendFailN       int
-	approves        int
-	declines        int
-	bans            int
-	deletes         int
-	sends           int
-	getMeCalls      int
-	lastSendChat    int64
-	lastSendText    string
-	lastParseMode   string
-	sendChats       []int64
-	sendTexts       []string
-	member          telego.ChatMember
-	memberByID      map[int64]telego.ChatMember
-	memberErr       error
-	memberRequests  []telego.GetChatMemberParams
-	answers         int
-	callbackAnswers []telego.AnswerCallbackQueryParams
+	approveErr        error
+	declineErr        error
+	banErr            error
+	getMeErr          error
+	sendErr           error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
+	sendFailN         int
+	sendErrAt         map[int]error
+	sendMessageID     int
+	sendStarted       chan struct{}
+	releaseSend       <-chan struct{}
+	blockSendN        int
+	approves          int
+	declines          int
+	bans              int
+	deletes           int
+	sends             int
+	getMeCalls        int
+	lastSendChat      int64
+	lastSendText      string
+	lastParseMode     string
+	sendChats         []int64
+	sendTexts         []string
+	deletedChats      []int64
+	deletedMessageIDs []int
+	member            telego.ChatMember
+	memberByID        map[int64]telego.ChatMember
+	memberErr         error
+	memberRequests    []telego.GetChatMemberParams
+	answers           int
+	callbackAnswers   []telego.AnswerCallbackQueryParams
 }
 
 func newFakeVerifyBot() *fakeVerifyBot { return &fakeVerifyBot{} }
@@ -330,52 +337,70 @@ func (b *fakeVerifyBot) BanChatMember(context.Context, *telego.BanChatMemberPara
 	b.bans++
 	return b.banErr
 }
-func (b *fakeVerifyBot) DeleteMessage(context.Context, *telego.DeleteMessageParams) error {
+func (b *fakeVerifyBot) DeleteMessage(_ context.Context, p *telego.DeleteMessageParams) error {
 	b.deletes++
+	b.deletedChats = append(b.deletedChats, p.ChatID.ID)
+	b.deletedMessageIDs = append(b.deletedMessageIDs, p.MessageID)
 	return nil
 }
 func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
 	b.sends++
+	sendN := b.sends
 	b.lastSendChat = p.ChatID.ID
 	b.lastSendText = p.Text
 	b.lastParseMode = p.ParseMode
 	b.sendChats = append(b.sendChats, p.ChatID.ID)
 	b.sendTexts = append(b.sendTexts, p.Text)
-	if b.sendErr != nil && b.sends <= b.sendFailN {
+	block := b.releaseSend != nil && (b.blockSendN == 0 || b.blockSendN == sendN)
+	if block && b.sendStarted != nil {
+		select {
+		case b.sendStarted <- struct{}{}:
+		default:
+		}
+	}
+	if block {
+		<-b.releaseSend
+	}
+	if err := b.sendErrAt[sendN]; err != nil {
+		return nil, err
+	}
+	if b.sendErr != nil && sendN <= b.sendFailN {
 		return nil, b.sendErr
 	}
-	return &telego.Message{MessageID: 1}, nil
+	messageID := b.sendMessageID
+	if messageID == 0 {
+		messageID = 1
+	}
+	return &telego.Message{MessageID: messageID}, nil
 }
 
-func (b *fakeVerifyBot) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (bool, error) {
-	send := func(text, parseMode string) error {
-		_, err := b.SendMessage(ctx, &telego.SendMessageParams{
+func (b *fakeVerifyBot) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (*telego.Message, error) {
+	send := func(text, parseMode string) (*telego.Message, error) {
+		return b.SendMessage(ctx, &telego.SendMessageParams{
 			ChatID:    telego.ChatID{ID: chatID},
 			Text:      text,
 			ParseMode: parseMode,
 		})
-		return err
 	}
-	err := send(rich, telego.ModeHTML)
+	sent, err := send(rich, telego.ModeHTML)
 	if err == nil {
-		return true, nil
+		return sent, nil
 	}
 	message := strings.ToLower(err.Error())
 	if !strings.Contains(message, "parse") && !strings.Contains(message, "entit") && !strings.Contains(message, "bad request") {
-		return false, err
+		return nil, err
 	}
 	if simpler != "" && simpler != rich {
-		err = send(simpler, telego.ModeHTML)
+		sent, err = send(simpler, telego.ModeHTML)
 		if err == nil {
-			return true, nil
+			return sent, nil
 		}
 		message = strings.ToLower(err.Error())
 		if !strings.Contains(message, "parse") && !strings.Contains(message, "entit") && !strings.Contains(message, "bad request") {
-			return false, err
+			return nil, err
 		}
 	}
-	err = send(simpler, "")
-	return err == nil, err
+	return send(simpler, "")
 }
 
 func (b *fakeVerifyBot) Delete(ctx context.Context, chatID int64, messageID int) {
@@ -935,6 +960,103 @@ func TestTerminalActionBlocksReapplication(t *testing.T) {
 	}
 }
 
+func TestBlockedDeclineCountsStrikeAtClaimTime(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	failedAt := time.Unix(2_000_000_000, 0)
+	now := failedAt
+	v := newTestService(&config.Config{VerifyMaxFails: 2, TimeoutSeconds: 3600})
+	v.timeNow = func() time.Time { return now }
+	key := pkey{gid, uid}
+	p := &pending{nonce: "current", deadline: failedAt.Add(time.Hour)}
+	v.pend[key] = p
+	v.vfail[key] = &vfailRec{count: 1, last: failedAt.Add(-verifyFailWindow + 10*time.Second)}
+	bot := newBlockingTerminalBot()
+	bot.release = make(chan struct{}, 1)
+	type outcome struct {
+		handled bool
+		settled bool
+		banned  bool
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		handled, settled, banned := v.decline(context.Background(), bot, gid, uid, p.nonce, "wrong answer")
+		result <- outcome{handled: handled, settled: settled, banned: banned}
+	}()
+	select {
+	case <-bot.declineStarted:
+	case <-time.After(time.Second):
+		t.Fatal("decline did not reach the blocking Telegram call")
+	}
+	defer func() {
+		select {
+		case bot.release <- struct{}{}:
+		default:
+		}
+	}()
+
+	now = failedAt.Add(20 * time.Second)
+	bot.release <- struct{}{}
+	select {
+	case got := <-result:
+		if !got.handled || !got.settled || !got.banned {
+			t.Fatalf("blocked decline outcome = %+v, want handled, settled, and banned", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("decline did not finish after release")
+	}
+	if bot.bans != 1 {
+		t.Fatalf("automatic bans = %d, want 1", bot.bans)
+	}
+}
+
+func TestRemoveGroupCancelsBlockedDeclineWithoutStrike(t *testing.T) {
+	const gid, uid = int64(-100), int64(6)
+	v := newTestService(&config.Config{VerifyMaxFails: 1, TimeoutSeconds: 3600})
+	key := pkey{gid, uid}
+	p := &pending{nonce: "current", deadline: time.Now().Add(time.Hour)}
+	v.pend[key] = p
+	bot := newBlockingTerminalBot()
+	bot.release = make(chan struct{}, 1)
+	type outcome struct {
+		handled bool
+		settled bool
+		banned  bool
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		handled, settled, banned := v.decline(context.Background(), bot, gid, uid, p.nonce, "wrong answer")
+		result <- outcome{handled: handled, settled: settled, banned: banned}
+	}()
+	select {
+	case <-bot.declineStarted:
+	case <-time.After(time.Second):
+		t.Fatal("decline did not reach the blocking Telegram call")
+	}
+	defer func() {
+		select {
+		case bot.release <- struct{}{}:
+		default:
+		}
+	}()
+
+	v.RemoveGroup(gid)
+	bot.release <- struct{}{}
+	select {
+	case got := <-result:
+		if !got.handled || !got.settled || got.banned {
+			t.Fatalf("cancelled decline outcome = %+v, want settled without a ban", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled decline did not finish after release")
+	}
+	if _, struck := v.vfail[key]; struck {
+		t.Error("group removal allowed an in-flight decline to record a strike")
+	}
+	if v.declined != 0 || bot.bans != 0 {
+		t.Fatalf("group removal recorded decline/ban counters %d/%d, want 0/0", v.declined, bot.bans)
+	}
+}
+
 func TestConsumeThenExecuteBan(t *testing.T) {
 	v := newTestService(&config.Config{})
 	key := pkey{-100, 5}
@@ -944,8 +1066,8 @@ func TestConsumeThenExecuteBan(t *testing.T) {
 	if !ok {
 		t.Fatal("consume should claim a live pending")
 	}
-	if _, ok := v.pend[key]; ok {
-		t.Error("consume must REMOVE the pending (no reopen for a ban)")
+	if current, ok := v.pend[key]; !ok || current != p || !p.done {
+		t.Error("consume must keep the claimed pending recoverable until settlement")
 	}
 	fb := &fakeVerifyBot{}
 	if banned := v.executeBan(context.Background(), fb, -100, 5, p); !banned {
@@ -1469,5 +1591,237 @@ func TestPendingCapAlertThrottled(t *testing.T) {
 				t.Errorf("an alert after the cooldown brought sends to %d, want 2", fb.sends)
 			}
 		})
+	}
+}
+
+func TestRemoveGroupCancelsAllPendingStateWithoutStrikes(t *testing.T) {
+	const removedGroup, otherGroup = int64(-100), int64(-200)
+	v := newTestService(&config.Config{
+		Groups:   []config.GroupConfig{{ID: removedGroup}, {ID: otherGroup}},
+		GroupIDs: []int64{removedGroup, otherGroup},
+	})
+	liveKey := pkey{removedGroup, 1}
+	claimedKey := pkey{removedGroup, 2}
+	otherKey := pkey{otherGroup, 3}
+	live := livePending(41)
+	live.timer = time.AfterFunc(time.Hour, func() {})
+	claimed := livePending(42)
+	claimed.done = true
+	claimed.timer = time.AfterFunc(time.Hour, func() {})
+	other := livePending(43)
+	other.timer = time.AfterFunc(time.Hour, func() {})
+	t.Cleanup(func() { other.timer.Stop() })
+	v.pend[liveKey] = live
+	v.pend[claimedKey] = claimed
+	v.pend[otherKey] = other
+	v.terminal[claimedKey] = claimed
+
+	remover, ok := any(v).(interface{ RemoveGroup(int64) })
+	if !ok {
+		t.Fatal("Service has no explicit group-removal transition")
+	}
+	remover.RemoveGroup(removedGroup)
+
+	for _, key := range []pkey{liveKey, claimedKey} {
+		if _, exists := v.pend[key]; exists {
+			t.Errorf("removed group pending %v remains live", key)
+		}
+		if _, exists := v.terminal[key]; exists {
+			t.Errorf("removed group terminal %v remains live", key)
+		}
+		if _, struck := v.vfail[key]; struck {
+			t.Errorf("removing pending %v recorded a verification strike", key)
+		}
+	}
+	if v.pend[otherKey] != other {
+		t.Error("group removal changed another group's pending")
+	}
+	if live.timer.Stop() || claimed.timer.Stop() {
+		t.Error("group removal left an expiry timer armed")
+	}
+}
+
+func TestShutdownSnapshotKeepsBlockedExpirySettlement(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	v := newTestService(&config.Config{TimeoutSeconds: 3600, VerifyMaxFails: 3})
+	v.statePath = t.TempDir() + "/pending.json"
+	key := pkey{gid, uid}
+	p := &pending{
+		mode:               config.ModeKernel,
+		lang:               i18n.LangEN,
+		qText:              "question",
+		nonce:              "blocked",
+		name:               "Applicant",
+		deadline:           time.Now().Add(time.Hour),
+		challengeDelivered: true,
+	}
+	v.pend[key] = p
+	bot := newBlockingTerminalBot()
+	done := make(chan struct{})
+	go func() {
+		v.onExpiry(context.Background(), bot, gid, uid, p.nonce, p.epoch, "timeout")
+		close(done)
+	}()
+	select {
+	case <-bot.declineStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expiry settlement did not reach the blocking decline")
+	}
+	defer func() {
+		select {
+		case bot.release <- struct{}{}:
+		default:
+		}
+	}()
+
+	v.Shutdown()
+	var during []pendingRec
+	if err := store.Load(v.statePath, &during); err != nil {
+		t.Fatal(err)
+	}
+	if len(during) != 1 || during[0].GroupID != gid || during[0].UserID != uid {
+		t.Fatalf("shutdown snapshot during settlement = %+v, want the claimed pending", during)
+	}
+
+	bot.release <- struct{}{}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expiry settlement did not finish after release")
+	}
+	var after []pendingRec
+	if err := store.Load(v.statePath, &after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("snapshot after confirmed settlement = %+v, want empty", after)
+	}
+}
+
+func TestLatePrivateDeliveryDoesNotPromptReplacement(t *testing.T) {
+	const gid, uid = int64(-100), int64(701)
+	v := newTestService(&config.Config{
+		Groups:         []config.GroupConfig{{ID: gid}},
+		GroupIDs:       []int64{gid},
+		Lang:           "en",
+		VerifyMode:     config.ModeKernel,
+		TimeoutSeconds: 30,
+	})
+	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: gid},
+		From: telego.User{ID: uid, FirstName: "Applicant", LanguageCode: "en"},
+	}}
+	release := make(chan struct{}, 1)
+	first := newFakeVerifyBot()
+	first.sendMessageID = 101
+	first.sendStarted = make(chan struct{}, 1)
+	first.releaseSend = release
+	firstDone := make(chan struct{})
+	go func() {
+		runFakeHandler(t, newAPITestBot(t, first), v.OnJoinRequest, update)
+		close(firstDone)
+	}()
+	select {
+	case <-first.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first private challenge did not block in delivery")
+	}
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+		v.Shutdown()
+	}()
+
+	second := newFakeVerifyBot()
+	second.sendErr = errors.New("connection reset after request write")
+	second.sendFailN = 1
+	runFakeHandler(t, newAPITestBot(t, second), v.OnJoinRequest, update)
+	key := pkey{gid, uid}
+	v.mu.Lock()
+	replacement := v.pend[key]
+	v.mu.Unlock()
+	if replacement == nil || replacement.prompted {
+		t.Fatalf("replacement before old delivery completion = %+v, want unprompted", replacement)
+	}
+
+	release <- struct{}{}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first private delivery did not finish after release")
+	}
+	v.mu.Lock()
+	current := v.pend[key]
+	v.mu.Unlock()
+	if current != replacement || current.prompted {
+		t.Fatalf("late old delivery changed replacement = %+v, want same unprompted pending", current)
+	}
+	if first.deletes != 1 || first.deletedChats[0] != uid || first.deletedMessageIDs[0] != 101 {
+		t.Fatalf("late private message cleanup = chats %v messages %v, want [%d]/[101]",
+			first.deletedChats, first.deletedMessageIDs, uid)
+	}
+}
+
+func TestPrivateDeliveryCompletedAfterExpiryIsDeleted(t *testing.T) {
+	const gid, uid = int64(-100), int64(702)
+	v := newTestService(&config.Config{
+		Groups:         []config.GroupConfig{{ID: gid}},
+		GroupIDs:       []int64{gid},
+		Lang:           "en",
+		VerifyMode:     config.ModeKernel,
+		TimeoutSeconds: 30,
+	})
+	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: gid},
+		From: telego.User{ID: uid, FirstName: "Applicant", LanguageCode: "en"},
+	}}
+	release := make(chan struct{}, 1)
+	caller := newFakeVerifyBot()
+	caller.sendMessageID = 102
+	caller.sendStarted = make(chan struct{}, 1)
+	caller.releaseSend = release
+	handlerDone := make(chan struct{})
+	go func() {
+		runFakeHandler(t, newAPITestBot(t, caller), v.OnJoinRequest, update)
+		close(handlerDone)
+	}()
+	select {
+	case <-caller.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("private challenge did not block in delivery")
+	}
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+		v.Shutdown()
+	}()
+
+	key := pkey{gid, uid}
+	v.mu.Lock()
+	p := v.pend[key]
+	if p == nil {
+		v.mu.Unlock()
+		t.Fatal("pending disappeared before manual expiry")
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	nonce, epoch := p.nonce, p.epoch
+	v.mu.Unlock()
+	v.onExpiry(context.Background(), newFakeVerifyBot(), gid, uid, nonce, epoch, "challenge-post-failed")
+
+	release <- struct{}{}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("private delivery did not finish after release")
+	}
+	if caller.deletes != 1 || caller.deletedChats[0] != uid || caller.deletedMessageIDs[0] != 102 {
+		t.Fatalf("expired private message cleanup = chats %v messages %v, want [%d]/[102]",
+			caller.deletedChats, caller.deletedMessageIDs, uid)
 	}
 }

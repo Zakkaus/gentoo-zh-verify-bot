@@ -15,7 +15,7 @@ func TestVerifyStrikes(t *testing.T) {
 	v.vfailPath = path
 
 	for i := 1; i <= 2; i++ {
-		count, ban := v.recordVerifyFail(-100, 42)
+		count, ban := v.recordVerifyFail(-100, 42, v.wallNow())
 		if count != i || ban {
 			t.Errorf("strike %d before restart = (%d, %v), want (%d, false)", i, count, ban, i)
 		}
@@ -27,7 +27,7 @@ func TestVerifyStrikes(t *testing.T) {
 	if remaining := restored.verifyCooldownRemaining(-100, 42); remaining <= 0 {
 		t.Errorf("restored cooldown = %v, want an active cooldown", remaining)
 	}
-	if count, ban := restored.recordVerifyFail(-100, 42); count != 3 || !ban {
+	if count, ban := restored.recordVerifyFail(-100, 42, restored.wallNow()); count != 3 || !ban {
 		t.Errorf("first strike after restart = (%d, %v), want (3, true)", count, ban)
 	}
 
@@ -35,10 +35,10 @@ func TestVerifyStrikes(t *testing.T) {
 	if remaining := restored.verifyCooldownRemaining(-100, 42); remaining != 0 {
 		t.Errorf("cooldown after clear = %v, want 0", remaining)
 	}
-	if count, _ := restored.recordVerifyFail(-100, 42); count != 1 {
+	if count, _ := restored.recordVerifyFail(-100, 42, restored.wallNow()); count != 1 {
 		t.Errorf("strikes after clear restart at %d, want 1", count)
 	}
-	if count, ban := restored.recordVerifyFail(-100, 99); count != 1 || ban {
+	if count, ban := restored.recordVerifyFail(-100, 99, restored.wallNow()); count != 1 || ban {
 		t.Errorf("independent user's first strike = (%d, %v), want (1, false)", count, ban)
 	}
 }
@@ -46,7 +46,7 @@ func TestVerifyStrikes(t *testing.T) {
 func TestVerifyNoAutoBan(t *testing.T) {
 	v := newTestService(&config.Config{VerifyMaxFails: -1})
 	for i := range 10 {
-		if _, ban := v.recordVerifyFail(-100, 7); ban {
+		if _, ban := v.recordVerifyFail(-100, 7, v.wallNow()); ban {
 			t.Fatalf("auto-ban should be disabled with verify_max_fails=-1 (fired at strike %d)", i+1)
 		}
 	}
@@ -54,7 +54,7 @@ func TestVerifyNoAutoBan(t *testing.T) {
 
 func TestVerifyCooldownDisabled(t *testing.T) {
 	v := newTestService(&config.Config{VerifyRetrySeconds: -1})
-	v.recordVerifyFail(-100, 5)
+	v.recordVerifyFail(-100, 5, v.wallNow())
 	if v.verifyCooldownRemaining(-100, 5) != 0 {
 		t.Error("cooldown should be disabled with verify_retry_seconds=-1")
 	}
@@ -62,14 +62,14 @@ func TestVerifyCooldownDisabled(t *testing.T) {
 
 func TestVerifyStrikeDecay(t *testing.T) {
 	v := newTestService(&config.Config{VerifyMaxFails: 3})
-	if count, _ := v.recordVerifyFail(-100, 42); count != 1 {
+	if count, _ := v.recordVerifyFail(-100, 42, v.wallNow()); count != 1 {
 		t.Fatalf("first strike count=%d, want 1", count)
 	}
 	// back-date the last failure beyond the window
 	v.mu.Lock()
 	v.vfail[pkey{-100, 42}].last = time.Now().Add(-verifyFailWindow - time.Minute)
 	v.mu.Unlock()
-	if count, ban := v.recordVerifyFail(-100, 42); count != 1 || ban {
+	if count, ban := v.recordVerifyFail(-100, 42, v.wallNow()); count != 1 || ban {
 		t.Errorf("after window elapsed, strike = (%d,%v), want fresh (1,false)", count, ban)
 	}
 }
@@ -114,7 +114,7 @@ func TestSaveVerifyFailsPrunesOnlyFullyExpiredRecords(t *testing.T) {
 	if remaining := v.verifyCooldownRemaining(cooldownLive.gid, cooldownLive.uid); remaining <= 0 {
 		t.Errorf("group-specific live cooldown was pruned, remaining = %v", remaining)
 	}
-	if count, ban := v.recordVerifyFail(historyLive.gid, historyLive.uid); count != 3 || !ban {
+	if count, ban := v.recordVerifyFail(historyLive.gid, historyLive.uid, v.wallNow()); count != 3 || !ban {
 		t.Errorf("live ban history after pruning = (%d, %v), want (3, true)", count, ban)
 	}
 
@@ -131,7 +131,7 @@ func TestRecordVerifyFailPrunesExpiredRecordsBeforeInsertion(t *testing.T) {
 	dead := pkey{-100, 1}
 	v.vfail[dead] = &vfailRec{count: 1, last: time.Now().Add(-verifyFailWindow - time.Minute)}
 
-	v.recordVerifyFail(-100, 2)
+	v.recordVerifyFail(-100, 2, v.wallNow())
 
 	if _, ok := v.vfail[dead]; ok {
 		t.Error("insertion retained a record whose strike and cooldown windows had expired")
@@ -149,7 +149,7 @@ func TestVerifyFailCapacityEvictsOldestWithoutClearingLiveState(t *testing.T) {
 	v.vfail[protected] = &vfailRec{count: 2, last: now}
 	v.vfail[oldest].last = now.Add(-verifyFailWindow + time.Minute)
 
-	v.recordVerifyFail(-100, vfailMax+1)
+	v.recordVerifyFail(-100, vfailMax+1, v.wallNow())
 
 	if len(v.vfail) != vfailMax {
 		t.Fatalf("ledger size after capacity insertion = %d, want %d", len(v.vfail), vfailMax)
@@ -157,7 +157,7 @@ func TestVerifyFailCapacityEvictsOldestWithoutClearingLiveState(t *testing.T) {
 	if _, ok := v.vfail[oldest]; ok {
 		t.Error("oldest remaining strike record was not evicted")
 	}
-	if count, ban := v.recordVerifyFail(protected.gid, protected.uid); count != 3 || !ban {
+	if count, ban := v.recordVerifyFail(protected.gid, protected.uid, v.wallNow()); count != 3 || !ban {
 		t.Errorf("live cooldown and ban history were lost at capacity: (%d, %v)", count, ban)
 	}
 }
@@ -178,4 +178,22 @@ func TestClaimPendingNonce(t *testing.T) {
 		t.Fatalf("matching nonce claim = (%p, %v), pending done=%v", got, ok, p.done)
 	}
 	p.timer.Stop()
+}
+
+func TestRecordVerifyFailCountsAtClaimTime(t *testing.T) {
+	const gid, uid = int64(-100), int64(42)
+	v := newTestService(&config.Config{VerifyMaxFails: 2})
+	failedAt := time.Unix(2_000_000_000, 0)
+	key := pkey{gid, uid}
+	v.vfail[key] = &vfailRec{count: 1, last: failedAt.Add(-verifyFailWindow + 10*time.Second)}
+
+	recorder, ok := any(v).(interface {
+		recordVerifyFail(int64, int64, time.Time) (int, bool)
+	})
+	if !ok {
+		t.Fatal("verification failure recording is not bound to the claim timestamp")
+	}
+	if count, ban := recorder.recordVerifyFail(gid, uid, failedAt); count != 2 || !ban {
+		t.Fatalf("failure recorded at claim time = (%d, %v), want (2, true)", count, ban)
+	}
 }

@@ -130,7 +130,7 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 
 `BOT_TOKEN` is required and has no default. Optional `GITHUB_TOKEN` needs no scopes and raises the GitHub API allowance for overlay requests from 60/h to about 5,000/h. Optional `TELEGRAM_API_URL` selects a self-hosted Bot API server instead of Telegram's hosted API.
 
-`config.json` is optional. When present, it supplies a validated baseline; malformed JSON and invalid configured values still stop startup. Sparse values saved through Telegram take precedence over the file, and file values take precedence over built-in defaults. Changing the file requires a restart.
+`config.json` is optional. When present, it supplies a validated baseline; malformed JSON and invalid configured values still stop startup. Sparse values saved through Telegram take precedence over the file, and file values take precedence over built-in defaults. Changing the file requires a restart. Positive `*_seconds` values above 9,223,372,036 are rejected before conversion; lower operational maxima are listed below.
 
 ### Groups and verification
 | Key | Purpose | Default and normalization |
@@ -144,12 +144,12 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 | `channel_invite_url` | Global join link, required for a private channel without an `@handle`. | Empty. |
 | `trusted_member_group_ids` | Groups whose confirmed members bypass verification. An unreadable membership falls back to normal verification. | `[]`: no bypass. |
 | `known_chat_ids` | Other chats the bot may remain in; they gain no guarded, channel, or trust semantics. | `[]`. |
-| `owner_claim_lifetime_seconds` | Lifetime of the private, one-use first-owner claim logged at startup. | `0` becomes 600; negative is invalid; positive values are unchanged. |
+| `owner_claim_lifetime_seconds` | Lifetime of the private, one-use first-owner claim logged at startup. | `0` becomes 600; negative is invalid; maximum 86,400. |
 | `owner_claim_user_id` | Optional Telegram user allowed to use the first-owner claim. | `0`: any journal reader with the link; negative is invalid. |
 | `verify_mode` | Global `kernel`, `quiz`, or `mixed` mode; per-group values and `/vmode ...|auto` may override it. | Empty becomes `kernel`; any other value is a load error. |
 | `timeout_seconds` | Verification window. | `<=0` becomes 240; 1–29 becomes 30; maximum 1,800. |
 | `required_channel_fail_open` | Result when required-channel membership cannot be read after the challenge passes. Admins are alerted in either mode. | `true`: approve; `false`: decline for retry. |
-| `verify_retry_seconds` | Cooldown after a failed verification. | `0` becomes 180; negative disables; positive unchanged. |
+| `verify_retry_seconds` | Cooldown after a failed verification. | `0` becomes 180; negative disables; maximum 31,622,400 (366 days). |
 | `verify_max_fails` | Failures before automatic ban. | `0` becomes 3; negative disables; positive unchanged. |
 | `fallback_questions` | Short-answer pool for applicants without Linux: `[{q,answers:[…]}]`. | `[]` selects the built-in localized pool. Each item needs a nonempty `q` and at least one nonempty whole-answer value. |
 | `questions` | Global quiz pool: `[{q,options:[…],answer}]`. | `[]` is valid only when every configured group is kernel-only. At least two options; `answer` defaults to index 0 and must be in range; `q` is used verbatim. |
@@ -157,8 +157,8 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 ### Moderation, messages, and runtime defaults
 | Key | Purpose | Default and normalization |
 | --- | --- | --- |
-| `notify_ttl_seconds` | Delete bot group messages after this many seconds. | `0` becomes 60; negative keeps messages; positive unchanged. |
-| `lookup_ttl_seconds` | Delete lookup commands and replies together. `/autodel` saves a runtime override in `settings.json`. | Unset becomes 180; `0` or negative disables; positive unchanged. |
+| `notify_ttl_seconds` | Delete bot group messages after this many seconds. | `0` becomes 60; negative keeps messages; maximum 86,400. |
+| `lookup_ttl_seconds` | Delete lookup commands and replies together. `/autodel` saves a runtime override in `settings.json`. | Unset becomes 180; `0` or negative disables; maximum 86,400. |
 | `warn_limit` | `/warn` count before auto-kick. | `<=0` becomes 3; no maximum. |
 | `private_query_per_min` | Per-user DM lookup limit; guarded groups are unlimited. | `<=0` becomes 3; no maximum. |
 | `ban_seconds` | Default duration for `/ban`, `/sb`, and verification auto-ban. `/bantime` saves a runtime override in `settings.json`. | `<=0`: permanent; 1–29 becomes 30; more than 366 days becomes permanent. |
@@ -182,7 +182,7 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 | --- | --- | --- |
 | `chat_id` | Destination channel or group; the bot needs permission to post. | `0`: disabled. |
 | `lang` | Language for bug field labels and news posts. | Empty selects `zh`. Accepted values are `zh`, `zh-Hant`, and `en`; any other value stops startup. |
-| `interval_seconds` | Poll interval. | `<=0` becomes 300; 1–59 becomes 60; no maximum. |
+| `interval_seconds` | Poll interval. | `<=0` becomes 300; 1–59 becomes 60; maximum 86,400. |
 | `bugs` / `news` | Enable new Bugzilla issues and news items independently. | Unset becomes `true`. |
 | `bug_product` / `bug_component` | Optional Bugzilla filters. | Empty matches all. |
 | `silent_bugs` | Silence notifications for bug posts. | `true` silences all; unset or `false` silences only UNCONFIRMED bugs and permits the one-time confirmation notice. |
