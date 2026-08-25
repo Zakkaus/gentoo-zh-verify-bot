@@ -10,9 +10,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -26,12 +28,25 @@ const (
 	recheckPrefix = "ch:"  // "I followed the channel, continue" (in DM): ch:<uid>
 )
 
+// Bound queues and mutable counters before adversarial traffic can exhaust memory.
+const (
+	pendingGlobalCap        = 2000
+	pendingPerGroupCap      = 500
+	pendingCapAlertCooldown = 10 * time.Minute
+	warnCounterMax          = 4096
+)
+
+type pendingStartStatus uint8
+
+const (
+	pendingStarted pendingStartStatus = iota
+	pendingBlockedCapacity
+	pendingBlockedTerminal
+)
+
 type pkey struct{ gid, uid int64 }
 
-// verifyBot is the slice of the telego.Bot API the verification approve / decline / ban path uses.
-// Threading it (instead of *telego.Bot) through approve, decline, banApplicant, applyBan,
-// deleteChallenge and adminAlert lets those critical handler branches be unit-tested with a fake
-// bot — the test seam the reviews keep asking for. *telego.Bot satisfies it; callers are unchanged.
+// verifyBot is the Telegram API used by verification settlement.
 type verifyBot interface {
 	ApproveChatJoinRequest(ctx context.Context, params *telego.ApproveChatJoinRequestParams) error
 	DeclineChatJoinRequest(ctx context.Context, params *telego.DeclineChatJoinRequestParams) error
@@ -40,11 +55,8 @@ type verifyBot interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 }
 
-// modBot is the wider slice of the telego.Bot API the admin-gate + moderation paths use — a superset
-// of verifyBot. Threading it instead of a concrete *telego.Bot lets the admin gate (adminStatus /
-// isGroupAdmin), the mute/unmute helpers, and the warn-limit kick be unit-tested with a fake; so the
-// security-critical "who is allowed / does the deny path act" branches get regression coverage.
-// *telego.Bot satisfies it, so callers are unchanged — pure compile-checked type-widening.
+// modBot adds fresh authorization and moderation operations.
+// Keeping authorization on this interface makes fail-closed paths testable.
 type modBot interface {
 	verifyBot
 	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
@@ -94,8 +106,7 @@ type pendingRec struct {
 	Lang       string   `json:"lang,omitempty"`       // applicant locale; empty => Simplified Chinese
 	FbAnswers  []string `json:"fb_answers,omitempty"` // set once the applicant moved to the short-answer fallback
 	Prompted   bool     `json:"prompted,omitempty"`   // the question was DM'd, so a reply counts as an answer
-	// The free-reply guards are persisted too: a restart used to hand each of them out again, so a
-	// script could replay a malformed declaration or a copied example once per restart for free.
+	// Persist one-shot guards so process restarts cannot replenish free replies.
 	Hinted          bool     `json:"hinted,omitempty"`
 	SampleBounced   bool     `json:"sample_bounced,omitempty"`
 	NoLinuxReminded bool     `json:"no_linux_reminded,omitempty"`
@@ -109,8 +120,7 @@ type pendingRec struct {
 	Deadline        int64    `json:"deadline"`
 }
 
-// newNonce returns a short random token used to bind a DM quiz button to the pending it was
-// issued for, so a stale button from a previous (overwritten) request can't answer a new quiz.
+// Per-pending randomness makes stale quiz buttons unable to answer replacements.
 func newNonce() string {
 	var b [5]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -119,50 +129,65 @@ func newNonce() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Verifier holds the bot's runtime state: config, the pending-verification map
-// (keyed by group+user), the daily approve/decline counters, and the enabled /
-// rich-output toggles. All mutable fields are guarded by mu.
+// Warning paths mutate their map directly, so the state lock enforces the cap at every release.
+type verifierStateMutex struct {
+	sync.Mutex
+	owner *Verifier
+}
+
+func (m *verifierStateMutex) Unlock() {
+	if m.owner != nil {
+		m.owner.pruneWarnsLocked()
+	}
+	m.Mutex.Unlock()
+}
+
+// Verifier owns mutable runtime state; fields document their guarding mutex.
 type Verifier struct {
-	cfg          *Config
-	botUsername  string
-	botID        int64
-	statePath    string
-	warnPath     string
-	acPath       string
-	loc          *time.Location
-	startTime    time.Time
-	mu           sync.Mutex
-	pend         map[pkey]*pending
-	warns        map[pkey]int // group+user -> warning count (persisted)
-	enabled      bool
-	shuttingDown bool   // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
-	rich         bool   // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
-	nameSpoiler  bool   // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
-	vmode        string // runtime verification-mode override (/vmode, persisted); "" => follow the config
-	statDate     string
-	approved     int
-	declined     int
-	acMu         sync.RWMutex // guards the channel-sock-puppet filter's runtime state
-	acOn         bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
-	acWhite      map[int64]bool
-	chanAlert    map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
-	dmLast       map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
-	challengeAt  map[int64]time.Time   // user -> last verification prompt sent (resend throttle), guarded by mu
-	queryHits    map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
-	lookupOn     bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
-	lookupTTL    time.Duration         // how long before that deletion, guarded by mu
-	banSecs      int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
-	vfail        map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
-	vfailPath    string                // persistence path for vfail
-	agentMu      sync.Mutex            // guards agents; separate from mu so the tally's file write never blocks the verification hot paths
-	agents       agentTally            // tripped automated agents, counted per claimed model
-	agentPath    string                // persistence path for the automated-agent tally
-	settingsPath string                // persistence path for runtime settings (verification enabled state)
-	adminMu      sync.Mutex            // guards adminCache
-	adminCache   map[pkey]time.Time    // group+user -> admin-status cache expiry; only ADMINS are cached (short TTL) so the verify/moderation admin checks skip a GetChatMember round-trip on repeat use
-	lastOnline   time.Time             // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
-	hbPath       string                // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
-	probe        liveProbe             // liveness prober (the bot) for reachable(); nil in tests => assume reachable
+	cfg               *Config
+	botUsername       string
+	botID             int64
+	statePath         string
+	warnPath          string
+	acPath            string
+	loc               *time.Location
+	startTime         time.Time
+	mu                verifierStateMutex
+	pend              map[pkey]*pending
+	warns             map[pkey]int      // group+user -> warning count (persisted)
+	terminal          map[pkey]*pending // claimed terminal actions remain here until their Telegram call returns
+	enabled           bool
+	shuttingDown      bool   // set at graceful shutdown; consumeNonce refuses so a firing timeout timer can't decline/strike/ban a mid-verification user (guarded by mu)
+	rich              bool   // runtime toggle for rich-message output (init from cfg.RichMessages, flipped by /rich)
+	nameSpoiler       bool   // hide a joiner's display name behind a Telegram spoiler in the in-group challenge (anti-advert; /spoiler, persisted)
+	vmode             string // runtime verification-mode override (/vmode, persisted); "" => follow the config
+	statDate          string
+	approved          int
+	declined          int
+	acMu              sync.RWMutex // guards the channel-sock-puppet filter's runtime state
+	acOn              bool         // /bc toggle (seeded from cfg.BlockChannelSenders, persisted)
+	acWhite           map[int64]bool
+	acWhiteOrder      []int64
+	chanAlert         map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
+	pendingCapAlertAt time.Time             // last queue-cap alert; one global throttle prevents a join flood from flooding the admin log
+	dmLast            map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
+	challengeAt       map[int64]time.Time   // user -> last verification prompt sent (resend throttle), guarded by mu
+	queryHits         map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
+	lookupOn          bool                  // auto-delete lookup command+answer (seeded from cfg, toggled by /autodel), guarded by mu
+	lookupTTL         time.Duration         // how long before that deletion, guarded by mu
+	banSecs           int                   // default ban duration in seconds, 0 = permanent (seeded from cfg, set by /bantime), guarded by mu
+	vfail             map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
+	vfailPath         string                // persistence path for vfail
+	agentMu           sync.Mutex            // guards agents; separate from mu so the tally's file write never blocks the verification hot paths
+	agents            agentTally            // tripped automated agents, counted per claimed model
+	agentPath         string                // persistence path for the automated-agent tally
+	settingsPath      string                // persistence path for runtime settings (verification enabled state)
+	adminMu           sync.Mutex            // guards adminCache
+	adminCache        map[pkey]time.Time    // group+user -> admin-status cache expiry; only ADMINS are cached (short TTL) so the verify/moderation admin checks skip a GetChatMember round-trip on repeat use
+	cleanupTimers     atomic.Int32          // outstanding transient-message deletion timers
+	lastOnline        time.Time             // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
+	hbPath            string                // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
+	probe             liveProbe             // liveness prober (the bot) for reachable(); nil in tests => assume reachable
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -174,18 +199,14 @@ func loadStatsLoc(name string) *time.Location {
 	return time.FixedZone("UTC+8", 8*3600)
 }
 
-// htmlMessage builds the bot's standard outbound message: HTML parse mode with link
-// previews disabled. Chain .WithReplyMarkup / .WithDisableNotification as needed.
+// Standard outbound HTML disables link previews.
 func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
 	return tu.Message(tu.ID(chatID), text).
 		WithParseMode(telego.ModeHTML).
 		WithLinkPreviewOptions(&telego.LinkPreviewOptions{IsDisabled: true})
 }
 
-// replyParams binds a response to the user's command message. The lookup commands hit
-// slow external APIs, so when several are in flight at once their free-floating answers
-// could be mistaken for one another — replying to the trigger ties each answer to its
-// question. A zero msgID yields nil (no binding).
+// Reply binding disambiguates concurrent slow lookups; zero means no binding.
 func replyParams(msgID int) *telego.ReplyParameters {
 	if msgID == 0 {
 		return nil
@@ -193,11 +214,38 @@ func replyParams(msgID int) *telego.ReplyParameters {
 	return &telego.ReplyParameters{MessageID: msgID}
 }
 
-// NewVerifier builds a Verifier from config: verification starts enabled, rich output
-// follows cfg.RichMessages, and the stats timezone is resolved (default UTC+8).
+// Evict the least severe counters first; key order makes equal-count eviction deterministic.
+func (v *Verifier) pruneWarnsLocked() {
+	over := len(v.warns) - warnCounterMax
+	if over <= 0 {
+		return
+	}
+	type warning struct {
+		key   pkey
+		count int
+	}
+	all := make([]warning, 0, len(v.warns))
+	for key, count := range v.warns {
+		all = append(all, warning{key: key, count: count})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].count != all[j].count {
+			return all[i].count < all[j].count
+		}
+		if all[i].key.gid != all[j].key.gid {
+			return all[i].key.gid < all[j].key.gid
+		}
+		return all[i].key.uid < all[j].key.uid
+	})
+	for _, item := range all[:over] {
+		delete(v.warns, item.key)
+	}
+}
+
+// NewVerifier seeds runtime defaults and bounds mutable maps.
 func NewVerifier(cfg *Config) *Verifier {
 	v := &Verifier{cfg: cfg, startTime: time.Now(), loc: loadStatsLoc(cfg.StatsTimezone),
-		pend: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
+		pend: make(map[pkey]*pending), terminal: make(map[pkey]*pending), warns: make(map[pkey]int), acWhite: map[int64]bool{},
 		chanAlert: map[int64]time.Time{}, dmLast: map[int64]time.Time{}, challengeAt: map[int64]time.Time{},
 		queryHits:  map[int64][]time.Time{},
 		adminCache: map[pkey]time.Time{},
@@ -205,8 +253,9 @@ func NewVerifier(cfg *Config) *Verifier {
 		enabled: true, rich: cfg.RichMessages, acOn: cfg.BlockChannelSenders,
 		lastOnline:  time.Now(), // begin online; the heartbeat only flips us offline after missed contact
 		nameSpoiler: true}       // default ON: spam joiners often set their NAME to an advert; hide it behind a spoiler
+	v.mu.owner = v
 	for _, id := range cfg.ChannelWhitelist {
-		v.acWhite[id] = true
+		v.addChannelWhiteLocked(id)
 	}
 	// Lookup auto-delete: unset => on at 3 min; 0/negative => off; positive => that many seconds.
 	v.lookupTTL = 180 * time.Second
@@ -221,14 +270,12 @@ func NewVerifier(cfg *Config) *Verifier {
 	return v
 }
 
-// lookupAutoDelete reports the lookup-response auto-delete TTL and whether it's enabled.
 func (v *Verifier) lookupAutoDelete() (time.Duration, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.lookupTTL, v.lookupOn
 }
 
-// setLookupAutoDelete updates the toggle and, when ttl > 0, the duration (/autodel).
 func (v *Verifier) setLookupAutoDelete(ttl time.Duration, on bool) {
 	v.mu.Lock()
 	if ttl > 0 {
@@ -238,9 +285,7 @@ func (v *Verifier) setLookupAutoDelete(ttl time.Duration, on bool) {
 	v.mu.Unlock()
 }
 
-// scheduleLookupCleanup deletes a lookup command and its answer after the configured TTL,
-// when auto-delete is enabled — so the group doesn't fill up with query/answer pairs. Uses
-// a fresh context because the timer fires minutes after the request context is done.
+// Delete group lookup commands and answers together using a fresh timer context.
 func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID, respMsgID int) {
 	ttl, on := v.lookupAutoDelete()
 	if !on || respMsgID == 0 || chatID >= 0 {
@@ -254,7 +299,6 @@ func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID
 	})
 }
 
-// msgID returns m's id, or 0 if m is nil.
 func msgID(m *telego.Message) int {
 	if m == nil {
 		return 0
@@ -262,11 +306,7 @@ func msgID(m *telego.Message) int {
 	return m.MessageID
 }
 
-// replyLookupPlain sends a PLAIN-text reply to a lookup command (a usage hint, "not found",
-// disambiguation, or transient error) and schedules the same timed cleanup as a real answer,
-// so the command and this reply are removed together after lookup_ttl instead of the command
-// lingering. Plain text — not HTML — because these messages carry literal <包名> placeholders
-// that HTML parse mode would reject. Mirrors sendRichOrHTML's reply+cleanup for the success path.
+// Plain text preserves angle-bracket placeholders and still follows reply/cleanup semantics.
 func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID int64, replyTo int, text string) {
 	m := tu.Message(tu.ID(chatID), text)
 	if rp := replyParams(replyTo); rp != nil {
@@ -276,9 +316,7 @@ func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID i
 	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
 }
 
-// replyLookupHTML sends an HTML-formatted reply to a lookup command and schedules the timed
-// cleanup — the HTML sibling of replyLookupPlain / sendRichOrHTML. The caller is responsible
-// for html-escaping any dynamic content in htmlText. Returns the sent message (may be nil).
+// HTML lookup replies require callers to escape dynamic content.
 func (v *Verifier) replyLookupHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, htmlText string) *telego.Message {
 	m := htmlMessage(chatID, htmlText)
 	if rp := replyParams(replyTo); rp != nil {
@@ -291,8 +329,7 @@ func (v *Verifier) replyLookupHTML(c context.Context, bot *telego.Bot, chatID in
 
 const privateQueryWindow = time.Minute
 
-// queryRateOK records a private-chat lookup for userID and reports whether it is within the
-// per-minute limit (sliding window, cfg.PrivateQueryPerMin). Groups are never rate-limited.
+// Sliding-window limits apply only to private-chat lookups.
 func (v *Verifier) queryRateOK(userID int64) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -322,16 +359,12 @@ func (v *Verifier) queryRateOK(userID int64) bool {
 	return true
 }
 
-// dmOrGroup reports whether msg is in a guarded group or a private chat — where the cheap,
-// no-external-request member commands (/help /ping /stats) are allowed WITHOUT a rate limit
-// (only the API-hitting lookups are throttled, via queryAllowed).
+// Cheap informational commands are unrestricted in guarded groups and DMs.
 func (v *Verifier) dmOrGroup(msg *telego.Message) bool {
 	return v.cfg.IsGroup(msg.Chat.ID) || msg.Chat.Type == "private"
 }
 
-// queryAllowed reports whether a lookup command may run for this message: unlimited in a
-// guarded group, rate-limited per user in a private chat (anti-abuse), and not elsewhere. It
-// sends the rate-limit notice itself when a DM user is over the limit.
+// External lookups are unlimited in guarded groups and rate-limited in DMs.
 func (v *Verifier) queryAllowed(ctx *th.Context, msg *telego.Message) bool {
 	if v.cfg.IsGroup(msg.Chat.ID) {
 		return true
@@ -360,8 +393,7 @@ func (v *Verifier) toggleRich() bool {
 
 func (v *Verifier) nameSpoilerOn() bool { v.mu.Lock(); defer v.mu.Unlock(); return v.nameSpoiler }
 
-// toggleNameSpoiler flips the name-spoiler and persists it (like /start /stop) so a /spoiler choice
-// survives a restart.
+// Persist /spoiler like /start and /stop.
 func (v *Verifier) toggleNameSpoiler() bool {
 	v.mu.Lock()
 	v.nameSpoiler = !v.nameSpoiler
@@ -371,12 +403,8 @@ func (v *Verifier) toggleNameSpoiler() bool {
 	return on
 }
 
-// joinerLabel renders the applicant's name for the in-group challenge. Normally a clickable
-// mention; when the name-spoiler is on, the HTML-escaped name is hidden behind a Telegram spoiler —
-// a single, always-valid entity (NOT a nested link, so it can never produce an HTML parse error
-// that would break the critical challenge post) — so a spammer who set their display name to an
-// advert can't show it in the group without a deliberate tap. The 👮/🚫 buttons act by id, so
-// losing the click-through on a spoilered name costs admins nothing.
+// Spoilered names use one non-nested entity so hostile names cannot break challenge HTML.
+// Admin buttons act by ID, so losing the clickable mention does not affect moderation.
 func joinerLabel(uid int64, name string, spoiler bool) string {
 	esc := html.EscapeString(name)
 	if spoiler {
@@ -411,23 +439,28 @@ func (v *Verifier) stats() (date string, approved, declined int) {
 	return v.statDate, v.approved, v.declined
 }
 
-// stateWriteMu serializes all state-file writes. The files are small and written rarely, so a
-// single global lock is cheap and removes the race where two concurrent saves (e.g. an approve
-// and a timeout-decline) would otherwise interleave on a shared temp file.
+// Serialize snapshot creation and commit so an older snapshot cannot overwrite a newer save.
 var stateWriteMu sync.Mutex
 
-// writeJSONFile atomically writes val as JSON to path: marshal, write to a UNIQUE temp file in
-// the same directory, then rename. The unique temp name (vs a fixed "path.tmp") means
-// concurrent writers can't clobber each other's temp; the global lock serializes the rename.
-// Any failure is logged so a missing/unwritable state directory is visible.
+// Callers must enter before taking their state mutex to preserve lock order.
+func saveJSONFile(path string, snapshot func() any) {
+	stateWriteMu.Lock()
+	defer stateWriteMu.Unlock()
+	writeJSONFileLocked(path, snapshot())
+}
+
+// Stable values still use the ordered atomic-write path.
 func writeJSONFile(path string, val any) {
+	saveJSONFile(path, func() any { return val })
+}
+
+// The caller holds stateWriteMu; fsync precedes same-directory atomic rename.
+func writeJSONFileLocked(path string, val any) {
 	data, err := json.Marshal(val)
 	if err != nil {
 		log.Printf("state: marshal %s: %v", path, err)
 		return
 	}
-	stateWriteMu.Lock()
-	defer stateWriteMu.Unlock()
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*") // mode 0600
 	if err != nil {
 		log.Printf("state: temp for %s: %v", path, err)
@@ -436,7 +469,7 @@ func writeJSONFile(path string, val any) {
 	tmp := f.Name()
 	_, werr := f.Write(data)
 	if werr == nil {
-		werr = f.Sync() // flush data to disk before the rename so a crash can't leave a torn/zero file
+		werr = f.Sync() // flush data before rename so a crash cannot expose a torn/empty state
 	}
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
@@ -451,21 +484,34 @@ func writeJSONFile(path string, val any) {
 		log.Printf("state: rename %s: %v", path, err)
 		return
 	}
-	// fsync the directory so the rename itself is durable across a power loss.
+	// The file sync does not make the directory entry durable across a power loss.
 	if d, derr := os.Open(filepath.Dir(path)); derr == nil {
 		_ = d.Sync()
 		_ = d.Close()
 	}
 }
 
-// loadJSONFile reads path and JSON-unmarshals it into dst. A MISSING file is not an error (first
-// run — the caller keeps its seeded/empty default). On a CORRUPT file (readable but invalid JSON) it
-// renames the file to path+".corrupt" before returning the error, so the next save can't silently
-// overwrite the original — the same hardening loadFeedState has, now shared by every state loader.
+type stateReadError struct {
+	cause error
+}
+
+func (e *stateReadError) Error() string { return e.cause.Error() }
+func (e *stateReadError) Unwrap() error { return e.cause }
+
+func stateReadFailed(err error) bool {
+	_, ok := err.(*stateReadError)
+	return ok
+}
+
+// Only absence is a first run; unreadable state disables writes to preserve recoverable data.
 func loadJSONFile(path string, dst any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil
+		}
+		log.Printf("ERROR state load %s: %v; writes disabled until restart", path, err)
+		return &stateReadError{cause: err}
 	}
 	if err := json.Unmarshal(data, dst); err != nil {
 		log.Printf("state load %s: %v — backing up to %s.corrupt and starting fresh", path, err, path)
@@ -481,19 +527,21 @@ func (v *Verifier) save() {
 	if v.statePath == "" {
 		return
 	}
-	v.mu.Lock()
-	recs := make([]pendingRec, 0, len(v.pend))
-	for k, p := range v.pend {
-		if p.done {
-			continue
+	saveJSONFile(v.statePath, func() any {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		recs := make([]pendingRec, 0, len(v.pend))
+		for k, p := range v.pend {
+			if p.done {
+				continue
+			}
+			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
+				Mode: p.mode, Lang: string(p.lang), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries,
+				Hinted: p.hinted, SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
+				Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 		}
-		recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-			Mode: p.mode, Lang: string(p.lang), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries,
-			Hinted: p.hinted, SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
-			Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
-	}
-	v.mu.Unlock()
-	writeJSONFile(v.statePath, recs)
+		return recs
+	})
 }
 
 func (v *Verifier) load(bot verifyBot) {
@@ -502,11 +550,12 @@ func (v *Verifier) load(bot verifyBot) {
 	}
 	var recs []pendingRec
 	if err := loadJSONFile(v.statePath, &recs); err != nil {
-		return // corrupt file backed up to .corrupt; start empty
+		if stateReadFailed(err) {
+			v.statePath = ""
+		}
+		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
 	}
-	// Estimate how long the bot was down from the last persisted heartbeat. A long gap means every
-	// in-progress window was eaten while we were away, so those pendings get a fresh full window and a
-	// re-notify; a quick restart keeps the existing (short) behaviour so a routine deploy is quiet.
+	// Long downtime gets fresh windows and re-notification; quick restarts stay quiet.
 	var downtime time.Duration
 	if last := v.loadHeartbeat(); !last.IsZero() {
 		if d := time.Since(last); d > 0 {
@@ -518,8 +567,7 @@ func (v *Verifier) load(bot verifyBot) {
 	var refresh []renotifyItem
 	for _, r := range recs {
 		gid, uid := r.GroupID, r.UserID
-		// Don't restore a pending for a group no longer configured (it would decline/strike against an
-		// unguarded chat), nor one whose question payload is out of range (an unwinnable quiz).
+		// Never restore pendings for unguarded chats or unwinnable quiz payloads.
 		if !v.cfg.IsGroup(gid) {
 			log.Printf("state load: skip pending for unconfigured group %d (user %d)", gid, uid)
 			continue
@@ -528,8 +576,7 @@ func (v *Verifier) load(bot verifyBot) {
 		if mode == "" {
 			mode = modeQuiz // a record written before kernel mode existed always held a quiz
 		}
-		// A quiz pending needs a usable option payload (a restored out-of-range answer index would be
-		// unwinnable); a kernel pending carries no options at all, so it is exempt from that check.
+		// Kernel challenges have no options; quiz payloads must remain winnable.
 		if mode == modeQuiz && (len(r.QOpts) < 2 || r.CorrectIdx < 0 || r.CorrectIdx >= len(r.QOpts)) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
@@ -538,18 +585,17 @@ func (v *Verifier) load(bot verifyBot) {
 			hinted: r.Hinted, sampleBounced: r.SampleBounced, noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts,
 			correctIdx: r.CorrectIdx, nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
-		reason := "timeout"
+		reason := challengeExpiryReason(r.GroupMsgID)
 		switch {
 		case longOutage:
-			// Down long enough to eat the whole window: a fresh full one, don't strike if it lapses
-			// (the user never had a fair shot), and re-notify below.
+			// The outage consumed the window, so refresh and do not strike on this lapse.
 			delay = v.timeout()
 			p.deadline = time.Now().Add(delay)
 			p.lastRenotify = time.Now() // mark re-notified so a runtime recovery right after doesn't re-message
 			reason = "recovered"
 			refresh = append(refresh, renotifyItem{gid, uid, r.Name, r.GroupMsgID, p})
 		case delay <= 0:
-			// Deadline lapsed during a SHORT restart — a fresh grace window, no strike.
+			// Short-restart lapses receive a strike-free grace window.
 			delay = noFaultGrace
 			p.deadline = time.Now().Add(delay)
 			reason = "restart-lapsed"
@@ -557,18 +603,22 @@ func (v *Verifier) load(bot verifyBot) {
 			delay = time.Second
 		}
 		v.mu.Lock()
-		v.pend[pkey{gid, uid}] = p
-		// arm the timer with the entry already in the map (mirrors onJoinRequest), so a
-		// near-immediate fire can't decline()->consume() before the entry exists. The captured
-		// nonce makes the decline a no-op if a fresh request has since replaced this pending.
+		key := pkey{gid, uid}
+		if _, replacing := v.pend[key]; !replacing && !v.pendingCapacityOKLocked(gid) {
+			v.mu.Unlock()
+			log.Printf("state load: pending cap reached; leaving user %d in group %d for manual review", uid, gid)
+			v.alertPendingCap(context.Background(), bot, gid)
+			continue
+		}
+		v.pend[key] = p
+		// Publish the entry before arming even a near-zero timer.
 		v.armExpiry(bot, p, gid, uid, delay, reason)
 		v.mu.Unlock()
 	}
 	if len(recs) > 0 {
 		log.Printf("restored %d pending verification(s)", len(recs))
 	}
-	// After a real outage, proactively refresh the restored applicants (bounded) — a DM plus a fresh
-	// in-group challenge — instead of leaving them staring at a stale, already-expired one.
+	// A real outage replaces stale restored challenges, bounded by renotifyCap.
 	if longOutage && len(refresh) > 0 {
 		capped := 0
 		if len(refresh) > renotifyCap {
@@ -584,24 +634,21 @@ func (v *Verifier) load(bot verifyBot) {
 }
 
 func (v *Verifier) register(bh *th.BotHandler) {
-	// Contain a panic in any single handler (e.g. an unexpected nil) so one bad
-	// update can't take the whole bot down — the update is dropped, the bot lives.
+	// One malformed update must not terminate the bot.
 	bh.Use(th.PanicRecoveryHandler(func(recovered any) error {
 		log.Printf("recovered from handler panic: %v", recovered)
 		return nil
 	}))
-	// drop channel sock-puppet posts before any handler (no-op unless block_channel_senders)
+	// Channel-sender filtering runs before handlers.
 	bh.Use(v.antispam)
 	bh.Handle(v.onAnswer, th.CallbackDataPrefix(answerPrefix))
 	bh.Handle(v.onAdminAction, th.CallbackDataPrefix(adminPrefix))
 	bh.Handle(v.onChannelRecheck, th.CallbackDataPrefix(recheckPrefix))
 	bh.Handle(v.onJoinRequest, th.AnyChatJoinRequest())
 	bh.Handle(v.onMyChatMember, th.AnyMyChatMember())
-	// before the DM auto-reply: a plain private message from someone mid-kernel-verification IS
-	// their answer (routes are first-match, so this must be registered first)
+	// First-match routing requires kernel answers before the generic DM reply.
 	bh.Handle(v.onKernelAnswer, v.kernelAnswerDM)
-	// before the command handlers: any private message except /start (verify deep link)
-	// gets the unified auto-reply — so DM'd commands respond instead of silently no-opping
+	// The generic DM reply precedes command handlers except /start and allowed DM commands.
 	bh.Handle(v.onPrivateDM, privateNonStart)
 	bh.Handle(v.onSb, th.CommandEqual("sb"))
 	bh.Handle(v.onBan, th.CommandEqual("ban"))
@@ -632,10 +679,8 @@ func (v *Verifier) register(bh *th.BotHandler) {
 	bh.Handle(v.onHelp, th.CommandEqual("help"))
 }
 
-// onMyChatMember auto-leaves any group or channel the bot is added to that isn't a
-// configured chat (guarded group / required channel / feed target / admin-log). So
-// being pulled into a random group is a no-op and the bot removes itself instead of
-// lingering. To add a NEW guarded group, put its id in the config first, then add the bot.
+// Leave any group or channel outside Config.IsKnownChat.
+// Configure a guarded group before adding the bot.
 func (v *Verifier) onMyChatMember(ctx *th.Context, update telego.Update) error {
 	cm := update.MyChatMember
 	if cm == nil || cm.Chat.Type == "private" {
@@ -659,9 +704,7 @@ func (v *Verifier) onMyChatMember(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-// isChatMember reports whether uid is currently in chatID (creator/admin/member, or restricted but
-// still a member). Returns false on ANY lookup error and for left/kicked/banned, so an exempt check
-// fails SAFE — an unconfirmable membership just falls through to the normal verification.
+// Membership lookup errors fail safe into normal verification, never bypass it.
 func (v *Verifier) isChatMember(c context.Context, bot modBot, chatID, uid int64) bool {
 	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(chatID), UserID: uid})
 	if err != nil {
@@ -676,15 +719,9 @@ func (v *Verifier) isChatMember(c context.Context, bot modBot, chatID, uid int64
 	}
 }
 
-// tryTrustedBypass tries the trusted-member fast path for a join request: if the applicant is already
-// a member of one of group gid's configured trusted groups (config: trusted_member_group_ids), it
-// approves WITHOUT a quiz. It reports two things: handled (the request was approved — caller should
-// stop) and trusted (the applicant was CONFIRMED to be in a trusted group). Fails SAFE — a
-// membership-lookup error or a non-member yields trusted=false (so the caller runs the ordinary flow,
-// including the failure cooldown). A confirmed member whose auto-approve FAILS yields handled=false,
-// trusted=true (logged + admin-alerted): the caller runs the NORMAL verification but, because the
-// member is trusted, must NOT decline it under the cooldown. On success it clears prior failed-verify
-// strikes and records the approval — creating no pending and posting no quiz.
+// Confirmed members of trusted chats bypass verification and cooldowns.
+// Lookup failure is untrusted and follows normal verification.
+// Approval failure returns trusted=true so normal verification runs without cooldown rejection.
 func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) (handled, trusted bool) {
 	for _, src := range v.cfg.trustedGroups(gid) {
 		if src == 0 || src == gid {
@@ -693,7 +730,7 @@ func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int6
 		if !v.isChatMember(c, bot, src, uid) { // fail-closed: error / non-member / unreadable => not trusted
 			continue
 		}
-		// Confirmed member of a trusted group — this takes PRIORITY over the failure cooldown.
+		// Trusted membership takes priority over failure cooldown.
 		if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 			log.Printf("trusted-bypass: approve %d in %d failed (%v) — falling back to normal verification", uid, gid, err)
 			v.adminAlert(c, bot, fmt.Sprintf("⚠️ 用户 %d 是可信群 %d 的成员,但在群 %d 免验证批准失败(%v);将改用常规验证流程", uid, src, gid, err))
@@ -707,11 +744,7 @@ func (v *Verifier) tryTrustedBypass(c context.Context, bot modBot, gid, uid int6
 	return false, false
 }
 
-// joinGate runs the pre-challenge handling for a join request and reports whether it was fully handled
-// (the caller should stop). The trusted-member fast path takes PRIORITY over the failure cooldown: a
-// confirmed trusted member is approved (handled), and even if its auto-approve fails it proceeds to the
-// normal verification WITHOUT being declined by the cooldown. Only a non-member / unconfirmable
-// applicant is subject to the ordinary failed-applicant cooldown.
+// Trusted membership is evaluated before the failed-applicant cooldown.
 func (v *Verifier) joinGate(c context.Context, bot modBot, gid, uid int64) (done bool) {
 	handled, trusted := v.tryTrustedBypass(c, bot, gid, uid)
 	if handled {
@@ -720,8 +753,7 @@ func (v *Verifier) joinGate(c context.Context, bot modBot, gid, uid int64) (done
 	if trusted {
 		return false // confirmed trusted member, approve failed -> normal verification, skip the cooldown
 	}
-	// Anti-spam cooldown: a recently-failed applicant must wait out cfg.VerifyRetrySeconds before
-	// re-applying. Decline an early re-try silently rather than reposting a challenge.
+	// Early retries are declined without posting another challenge.
 	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
 		if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
@@ -730,6 +762,87 @@ func (v *Verifier) joinGate(c context.Context, bot modBot, gid, uid int64) (done
 		return true
 	}
 	return false
+}
+
+// Caller holds v.mu; replacements do not grow either queue cap.
+func (v *Verifier) pendingCapacityOKLocked(gid int64) bool {
+	if len(v.pend) >= pendingGlobalCap {
+		return false
+	}
+	groupN := 0
+	for k := range v.pend {
+		if k.gid == gid {
+			groupN++
+		}
+	}
+	return groupN < pendingPerGroupCap
+}
+
+// A zero groupMsgID means Telegram never confirmed challenge delivery, so expiry is no-fault.
+func challengeExpiryReason(groupMsgID int) string {
+	if groupMsgID == 0 {
+		return "challenge-post-failed"
+	}
+	return "timeout"
+}
+
+// Reserve capacity before delivery; only a confirmed challenge may install a striking timeout.
+func (v *Verifier) startPending(bot verifyBot, gid, uid int64, p *pending) (oldMsgID int, status pendingStartStatus) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key := pkey{gid, uid}
+	old, replacing := v.pend[key]
+	if inFlight := v.terminal[key]; inFlight != nil || replacing && old.done {
+		return 0, pendingBlockedTerminal
+	}
+	if !replacing && !v.pendingCapacityOKLocked(gid) {
+		return 0, pendingBlockedCapacity
+	}
+	if replacing {
+		old.done = true
+		if old.timer != nil {
+			old.timer.Stop()
+		}
+		oldMsgID = old.groupMsgID
+		// Re-applying must not replenish attempts or one-shot guards.
+		p.tries, p.hinted, p.sampleBounced = old.tries, old.hinted, old.sampleBounced
+		p.noLinuxReminded, p.osClarified = old.noLinuxReminded, old.osClarified
+	}
+	delay := v.timeout()
+	p.deadline = time.Now().Add(delay)
+	v.pend[key] = p
+	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(0))
+	return oldMsgID, pendingStarted
+}
+
+// Start a full window after delivery while preserving no-fault status on send failure.
+func (v *Verifier) finishPendingChallenge(bot verifyBot, gid, uid int64, p *pending, groupMsgID int) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.pend[pkey{gid, uid}]; !ok || cur != p || p.done {
+		return false
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	p.groupMsgID = groupMsgID
+	delay := v.timeout()
+	p.deadline = time.Now().Add(delay)
+	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(groupMsgID))
+	return true
+}
+
+// One process-wide throttle prevents a multi-group flood from spamming operator alerts.
+func (v *Verifier) alertPendingCap(c context.Context, bot verifyBot, gid int64) {
+	now := time.Now()
+	v.mu.Lock()
+	if !v.pendingCapAlertAt.IsZero() && now.Sub(v.pendingCapAlertAt) < pendingCapAlertCooldown {
+		v.mu.Unlock()
+		return
+	}
+	v.pendingCapAlertAt = now
+	v.mu.Unlock()
+	v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ 待验证队列已达上限(全局 %d,单群 %d);群 %d 的新申请将保留给管理员手动审核。", pendingGlobalCap, pendingPerGroupCap, gid))
 }
 
 func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
@@ -745,44 +858,37 @@ func (v *Verifier) onJoinRequest(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	gid := jr.Chat.ID
 	uid := jr.From.ID
-	// Pre-challenge gate: the trusted-member fast path (which takes priority over the failure
-	// cooldown), then the anti-spam cooldown for everyone else. Returns true if fully handled.
+	// Trusted bypass precedes cooldown enforcement.
+	// Untrusted applicants then face the retry cooldown.
 	if v.joinGate(c, bot, gid, uid) {
 		return nil
 	}
-	// Everything this applicant reads is rendered in their own Telegram interface language.
+	// Applicant messages follow Telegram's interface language.
 	ul := langFor(jr.From.LanguageCode)
 	mode, text, opts, correctIdx := v.newChallenge(gid, ul)
 	name := displayName(&jr.From)
-	groupMsgID := v.postGroupChallenge(c, bot, gid, uid, name, ul)
-
-	key := pkey{gid, uid}
-	v.mu.Lock()
-	oldMsgID := 0
-	used, hinted, bounced, reminded, clarified := 0, false, false, false, false
-	if old, ok := v.pend[key]; ok {
-		old.done = true // mark replaced, so a stale callback for it bails even before the nonce check
-		if old.timer != nil {
-			old.timer.Stop()
-		}
-		oldMsgID = old.groupMsgID
-		// Carry the attempts and the one-shot guards across the replacement. Cancelling the join
-		// request and re-applying used to hand back three fresh attempts without recording a failure,
-		// so an applicant could keep answering wrong and never reach the strike threshold.
-		used, hinted, bounced = old.tries, old.hinted, old.sampleBounced
-		reminded, clarified = old.noLinuxReminded, old.osClarified
+	p := &pending{mode: mode, lang: ul, qText: text, qOpts: opts, correctIdx: correctIdx,
+		nonce: newNonce(), name: name}
+	oldMsgID, status := v.startPending(bot, gid, uid, p)
+	switch status {
+	case pendingBlockedCapacity:
+		log.Printf("join %d in group %d: pending cap reached; left for manual review", uid, gid)
+		v.alertPendingCap(c, bot, gid)
+		return nil
+	case pendingBlockedTerminal:
+		log.Printf("join %d in group %d: terminal action still in flight; deferred re-application", uid, gid)
+		return nil
 	}
-	p := &pending{groupMsgID: groupMsgID, mode: mode, lang: ul, qText: text, qOpts: opts, correctIdx: correctIdx,
-		nonce: newNonce(), name: name, deadline: time.Now().Add(v.timeout()),
-		tries: used, hinted: hinted, sampleBounced: bounced, noLinuxReminded: reminded, osClarified: clarified}
-	v.armExpiry(bot, p, gid, uid, v.timeout(), "timeout")
-	v.pend[key] = p
-	v.mu.Unlock()
-	if oldMsgID != 0 && oldMsgID != groupMsgID {
-		v.deleteChallenge(c, bot, gid, oldMsgID) // drop the stale challenge from a previous request
+	if oldMsgID != 0 {
+		v.deleteChallenge(c, bot, gid, oldMsgID)
+	}
+	groupMsgID := v.postGroupChallenge(c, bot, gid, uid, name, ul)
+	if !v.finishPendingChallenge(bot, gid, uid, p, groupMsgID) {
+		v.deleteChallenge(c, bot, gid, groupMsgID)
+		return nil // another action handled or replaced this request while the post was in flight
 	}
 	v.save()
-	log.Printf("join %d (@%s) in group %d: pending (%s challenge), in-group verify link posted", uid, jr.From.Username, gid, mode)
+	log.Printf("join %d (@%s) in group %d: pending (%s challenge), group message=%d", uid, jr.From.Username, gid, mode, groupMsgID)
 	return nil
 }
 
@@ -797,9 +903,7 @@ func (v *Verifier) hasPending(uid int64) bool {
 	return false
 }
 
-// firstPending returns the group id of one of the user's live verifications. Used to
-// resolve a single channel for the DM follow-prompt (groups usually share one channel);
-// the per-group channel is still enforced per group at answer time.
+// Use one pending for the DM channel prompt; each answer still enforces its own group's channel.
 func (v *Verifier) firstPending(uid int64) (gid int64, ul lang, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -811,12 +915,7 @@ func (v *Verifier) firstPending(uid int64) (gid int64, ul lang, ok bool) {
 	return 0, langZH, false
 }
 
-// sendDMChallenge runs when the applicant opens the bot via the deep link.
-// Two-step: if a channel is required and not yet joined, ask them to follow it
-// first (with a "I've followed, continue" button); otherwise send the quiz.
-// challengeResendOK reports whether this user may be sent the verification prompt again, and
-// records the send. /start is free to press, and every press fans out one message per pending, so
-// the resend is throttled — a flood in the bot's own DM must not turn into a Bot API flood.
+// Throttle /start fan-out per user without delaying normal channel-follow completion.
 func (v *Verifier) challengeResendOK(uid int64) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -830,8 +929,7 @@ func (v *Verifier) challengeResendOK(uid int64) bool {
 	return true
 }
 
-// challengeResendCooldown throttles repeated /start presses; short enough that a user who really
-// did just follow the channel isn't left waiting.
+// Fifteen seconds limits prompt floods without materially delaying a user.
 const challengeResendCooldown = 15 * time.Second
 
 func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64) {
@@ -844,8 +942,7 @@ func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64
 		return
 	}
 	t := tr(ul)
-	// The follow-prompt uses the first pending group's channel (groups usually share one);
-	// the per-group channel is still enforced at answer time in onAnswer.
+	// The DM prompt uses one channel; answer settlement enforces each group separately.
 	if v.cfg.requiredChannel(gid) != 0 && !v.isChannelMember(c, bot, gid, uid) {
 		var rows [][]telego.InlineKeyboardButton
 		if curl := v.channelURL(gid); curl != "" {
@@ -861,10 +958,8 @@ func (v *Verifier) sendDMChallenge(c context.Context, bot *telego.Bot, uid int64
 	v.sendQuizzes(c, bot, uid)
 }
 
-// sendQuizzes DMs the challenge for every group where this user has a live verification: the
-// button quiz, or — in kernel mode — the typed-answer prompt (no buttons; their next DM is the
-// answer, handled by onKernelAnswer).
-func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
+// DM every live challenge; kernel mode routes the next text DM as its answer.
+func (v *Verifier) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 	type dmq struct {
 		gid      int64
 		mode     string
@@ -890,10 +985,11 @@ func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 			if dq.fallback { // already moved to the short-answer question — re-send THAT, not the kernel one
 				render = fallbackPromptHTML
 			}
-			v.sendVerifyDM(c, bot, uid,
-				render(dq.lang, dq.text, left, dq.nonce, true),  // collapsed tripwire (Bot API 7.4)
-				render(dq.lang, dq.text, left, dq.nonce, false)) // …without the blockquote, for an old API server
-			v.markPrompted(dq.gid, uid) // only now may a DM be graded as their answer
+			if v.sendVerifyDM(c, bot, uid,
+				render(dq.lang, dq.text, left, dq.nonce, true),    // collapsed tripwire (Bot API 7.4)
+				render(dq.lang, dq.text, left, dq.nonce, false)) { // without the blockquote, for an old API server
+				v.markPrompted(dq.gid, uid) // only a delivered question makes the next DM gradeable
+			}
 			continue
 		}
 		gidStr, uidStr := strconv.FormatInt(dq.gid, 10), strconv.FormatInt(uid, 10)
@@ -908,9 +1004,7 @@ func (v *Verifier) sendQuizzes(c context.Context, bot *telego.Bot, uid int64) {
 	}
 }
 
-// markPrompted records that the question has actually been delivered to this applicant, so their
-// next plain DM may be graded as an answer. Until then a stray message ("hi", "已关注") must NOT
-// cost an attempt — the applicant may not have seen a question at all yet.
+// Grade DMs only after successful prompt delivery; stray pre-prompt messages cost nothing.
 func (v *Verifier) markPrompted(gid, uid int64) {
 	v.mu.Lock()
 	if p, ok := v.pend[pkey{gid, uid}]; ok && !p.done {
@@ -919,37 +1013,31 @@ func (v *Verifier) markPrompted(gid, uid int64) {
 	v.mu.Unlock()
 }
 
-// sendVerifyDM delivers a verification DM, degrading instead of failing: the rich rendering first,
-// then a simpler HTML one if Telegram rejected the markup (an old self-hosted Bot API server, an
-// entity it doesn't know), then plain text with the tags stripped. An applicant must never be left
-// with no question — and therefore auto-declined at timeout — because of markup, so unlike the other
-// best-effort DMs this path inspects the send error instead of discarding it.
-func (v *Verifier) sendVerifyDM(c context.Context, bot verifyBot, uid int64, rich, simpler string) {
+// Return success only when some rendering was delivered.
+func (v *Verifier) sendVerifyDM(c context.Context, bot verifyBot, uid int64, rich, simpler string) bool {
 	_, err := bot.SendMessage(c, htmlMessage(uid, rich))
 	if err == nil {
-		return
+		return true
 	}
 	if !markupRejected(err) {
-		// A transient failure, not bad markup: re-sending could deliver the question twice if the
-		// first one actually landed. The applicant can re-open the link, and the timeout defers
-		// while the bot is unreachable.
+		// Do not retry transient failures: the first request may have landed despite the error.
 		log.Printf("verify DM to %d failed (%v)", uid, err)
-		return
+		return false
 	}
 	log.Printf("verify DM to %d rejected (%v) — retrying without the collapsed quote", uid, err)
 	if simpler != "" && simpler != rich {
 		if _, err := bot.SendMessage(c, htmlMessage(uid, simpler)); err == nil {
-			return
+			return true
 		}
 	}
 	if _, err := bot.SendMessage(c, tu.Message(tu.ID(uid), stripHTML(simpler))); err != nil {
 		log.Printf("verify DM to %d failed even as plain text: %v", uid, err)
+		return false
 	}
+	return true
 }
 
-// markupRejected reports whether Telegram refused the message because of its HTML — the case worth
-// re-rendering. Matched on the Bot API's wording ("Bad Request: can't parse entities…"), because the
-// error arrives as an opaque string.
+// Re-render only opaque Bot API errors that indicate rejected HTML.
 func markupRejected(err error) bool {
 	if err == nil {
 		return false
@@ -958,8 +1046,7 @@ func markupRejected(err error) bool {
 	return strings.Contains(e, "parse") || strings.Contains(e, "entit") || strings.Contains(e, "bad request")
 }
 
-// stripHTML renders our own outgoing HTML as plain text: drop the tags, unescape the entities. Only
-// ever applied to messages this bot built, so a simple scanner is enough.
+// Strip tags only from bot-generated HTML before the plain-text fallback.
 func stripHTML(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -981,7 +1068,6 @@ func stripHTML(s string) string {
 	return out
 }
 
-// onChannelRecheck: user tapped "I've followed, continue" — re-check channel then show the quiz.
 func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error {
 	cq := update.CallbackQuery
 	if cq == nil {
@@ -1010,9 +1096,7 @@ func (v *Verifier) onChannelRecheck(ctx *th.Context, update telego.Update) error
 			WithText(fmt.Sprintf(t.NotFollowedYet, v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
-	// ACK first so the button stops spinning, THEN send the quiz DM(s) — sendQuizzes swallows send
-	// errors, so the early ack loses no feedback (the channel-membership check above stays before
-	// the ack because its toast is result-driven).
+	// Acknowledge before sends; membership toasts remain result-driven and happen first.
 	_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.ContinueOK))
 	v.sendQuizzes(c, bot, uid)
 	return nil
@@ -1025,9 +1109,7 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	// callback data: v:<gid>:<uid>:<nonce>:<idx> (current). A legacy 3-part button
-	// v:<gid>:<uid>:<idx> from a pre-nonce version still on a user's screen across the upgrade
-	// restart is accepted with an empty nonce, which matches a restored pending (nonce "").
+	// Accept legacy nonce-less buttons only for restored nonce-less pendings.
 	parts := strings.Split(strings.TrimPrefix(cq.Data, answerPrefix), ":")
 	var nonce, idxStr string
 	switch len(parts) {
@@ -1080,7 +1162,8 @@ func (v *Verifier) onAnswer(ctx *th.Context, update telego.Update) error {
 			WithText(fmt.Sprintf(t.NotFollowedYet, v.cfg.channelDisplay(gid))).WithShowAlert())
 		return nil
 	}
-	if v.approve(c, bot, gid, owner) {
+	p, claimed := v.claimPendingNonce(gid, owner, nonce)
+	if claimed && v.executeApprove(c, bot, gid, owner, p) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(t.Approved))
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), t.Approved))
 	} else {
@@ -1116,8 +1199,7 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理或无法批准。"))
 			return nil
 		}
-		// ACK first so the button stops spinning, THEN do the approve round-trip(s). A failed
-		// approve reopens the pending and alerts admins (executeApprove), so the early ack is safe.
+		// Acknowledge before approval; failures reopen the pending and alert admins.
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("✅ 已直接通过"))
 		v.executeApprove(c, bot, gid, target, p)
 	case "ban":
@@ -1126,8 +1208,7 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText("该申请已处理。"))
 			return nil
 		}
-		// ACK first (button stops spinning), THEN decline/ban/delete. A ban failure is surfaced
-		// via adminAlert (executeBan) and the applicant is declined either way.
+		// Acknowledge before ban; failures remain visible and the request stays declined.
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(fmt.Sprintf("🚫 已拒绝并封禁(%s)", banDurationText(v.banDuration()))))
 		v.executeBan(c, bot, gid, target, p)
 	default:
@@ -1136,9 +1217,7 @@ func (v *Verifier) onAdminAction(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-// isChannelMember reports whether userID satisfies group gid's required-channel gate. Takes the
-// modBot slice rather than *telego.Bot so the gate — including its fail-open branch — is unit-testable
-// with a fake; *telego.Bot satisfies it, so callers are unchanged.
+// Required-channel lookup uses modBot so fail-open policy remains testable.
 func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID int64) bool {
 	rc := v.cfg.requiredChannel(gid)
 	if rc == 0 {
@@ -1146,10 +1225,8 @@ func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID in
 	}
 	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: userID})
 	if err != nil {
-		// Distinguish "the bot itself can't read this channel" (a misconfiguration — the bot
-		// isn't an admin there) from a per-user/transient error. If the bot can't even see its
-		// OWN membership, the requirement is unenforceable, so fail OPEN — a permission slip
-		// must NOT lock every applicant out — and alert admins instead of silently blocking.
+		// If the bot cannot read its own membership, the gate is unenforceable.
+		// Apply configured fail-open policy and alert admins instead of silently blocking everyone.
 		if v.botID != 0 {
 			if _, e2 := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: v.botID}); e2 != nil {
 				open := v.cfg.failOpenChannel()
@@ -1169,9 +1246,7 @@ func (v *Verifier) isChannelMember(c context.Context, bot modBot, gid, userID in
 	}
 }
 
-// channelURL returns a join link for the required channel: an explicit
-// channel_invite_url if set (needed for private channels with no @handle), else
-// the t.me link derived from an @handle, else "".
+// Prefer an explicit private-channel invite; otherwise derive a public t.me URL.
 func (v *Verifier) channelURL(gid int64) string {
 	if u := v.cfg.channelInvite(gid); u != "" {
 		return u
@@ -1182,7 +1257,6 @@ func (v *Verifier) channelURL(gid int64) string {
 	return ""
 }
 
-// channelLinkHTML returns the channel as a clickable HTML link (or escaped text).
 func (v *Verifier) channelLinkHTML(gid int64, ul lang) string {
 	d := v.cfg.channelDisplay(gid)
 	if d == "" {
@@ -1192,6 +1266,21 @@ func (v *Verifier) channelLinkHTML(gid int64, ul lang) string {
 		return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(d))
 	}
 	return html.EscapeString(d)
+}
+
+// Caller holds v.mu. A pointer match prevents an old action from releasing a newer claim.
+func (v *Verifier) markTerminalLocked(key pkey, p *pending) {
+	if v.terminal == nil {
+		v.terminal = make(map[pkey]*pending)
+	}
+	v.terminal[key] = p
+}
+
+// Caller holds v.mu.
+func (v *Verifier) releaseTerminalLocked(key pkey, p *pending) {
+	if v.terminal[key] == p {
+		delete(v.terminal, key)
+	}
 }
 
 func (v *Verifier) consume(gid, uid int64) (*pending, bool) {
@@ -1206,13 +1295,12 @@ func (v *Verifier) consume(gid, uid int64) (*pending, bool) {
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	v.markTerminalLocked(key, p)
 	delete(v.pend, key)
 	return p, true
 }
 
-// consumeNonce is consume but only claims the pending if its nonce still matches — used by the
-// wrong-answer path so a STALE callback from a since-replaced request can't decline/strike/ban a
-// freshly re-issued pending under the same (gid,uid) key.
+// Nonce matching prevents stale answers from consuming replacement pendings.
 func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1228,14 +1316,12 @@ func (v *Verifier) consumeNonce(gid, uid int64, nonce string) (*pending, bool) {
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	v.markTerminalLocked(key, p)
 	delete(v.pend, key)
 	return p, true
 }
 
-// consumeExpiry is the timer path's claim: it takes the pending only if BOTH the nonce and the epoch
-// still match. The epoch is bumped on every (re-)arm, so a timer that fired just before a defer /
-// recovery re-armed the pending finds a stale epoch and no-ops here — closing the race where a
-// pre-recovery timeout could decline (and strike) the very applicant recovery just refreshed.
+// Nonce and timer epoch must both match, so superseded timers cannot act after recovery.
 func (v *Verifier) consumeExpiry(gid, uid int64, nonce string, epoch uint64) (*pending, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1251,14 +1337,13 @@ func (v *Verifier) consumeExpiry(gid, uid int64, nonce string, epoch uint64) (*p
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	v.markTerminalLocked(key, p)
 	delete(v.pend, key)
 	return p, true
 }
 
-// stopForShutdown freezes verification for a clean exit: it flags shutting-down (so a timeout timer
-// that fires during the exit window no-ops in consumeNonce instead of declining/striking/banning a
-// user who is still mid-verification) and stops every pending timer. Call it before the final save()
-// so in-progress verifications persist intact across the restart (the README's documented guarantee).
+// Stop all timers before the final save; callbacks also refuse settlement during shutdown.
+// Pendings therefore survive a graceful restart intact.
 func (v *Verifier) stopForShutdown() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1284,10 +1369,8 @@ func (v *Verifier) adminAlert(c context.Context, bot verifyBot, text string) {
 	}
 }
 
-// failAlert surfaces a failure notice to admins: to the admin-log chat if one is configured,
-// otherwise to the group itself (gid) where the acting admin is. The ack-first admin buttons answer
-// the callback optimistically, so this guarantees a rare approve/ban failure is never invisible
-// (it would otherwise only reach the server log when admin_log_chat_id is unset).
+// Failure notices fall back to the acting group when no admin-log chat is configured.
+// This keeps optimistic callback acknowledgements from hiding rare network failures.
 func (v *Verifier) failAlert(c context.Context, bot verifyBot, gid int64, text string) {
 	target := v.cfg.AdminLogChatID
 	if target == 0 {
@@ -1298,9 +1381,7 @@ func (v *Verifier) failAlert(c context.Context, bot verifyBot, gid int64, text s
 	}
 }
 
-// channelAccessAlert warns admins that the bot can't read a required channel (so the
-// follow-gate can't be enforced and applicants are being passed through). Throttled to at
-// most once per 10 minutes per channel so a busy join queue doesn't flood the admin log.
+// Throttle unreadable-channel alerts per channel to avoid flooding operators.
 func (v *Verifier) channelAccessAlert(c context.Context, bot verifyBot, channelID int64) {
 	v.mu.Lock()
 	if last, ok := v.chanAlert[channelID]; ok && time.Since(last) < 10*time.Minute {
@@ -1316,10 +1397,7 @@ func (v *Verifier) channelAccessAlert(c context.Context, bot verifyBot, channelI
 	v.adminAlert(c, bot, fmt.Sprintf("⚠️ 机器人无法读取必需关注频道 %d 的成员状态(可能已不再是该频道管理员)——频道门槛暂时无法核验,%s。请重新把机器人设为该频道管理员。", channelID, mode))
 }
 
-// claimPending atomically marks a pending done and stops its timeout timer but KEEPS it in the map,
-// so a FAILED network action can reopenPending() it (re-arm the timeout) instead of stranding the
-// applicant. Returns the claimed pending, or ok=false if it is gone/already handled. consume() is
-// the sibling that DELETES — use it where there is no reopen-on-failure (e.g. a ban).
+// Keep claimed approvals in the map so network failure can reopen them; consume deletes final claims.
 func (v *Verifier) claimPending(gid, uid int64) (*pending, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1331,13 +1409,28 @@ func (v *Verifier) claimPending(gid, uid int64) (*pending, bool) {
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	v.markTerminalLocked(pkey{gid, uid}, p)
 	return p, true
 }
 
-// approve claims the pending (stopping its timeout so the timer can't decline/strike/auto-ban a
-// user we're about to approve) and approves the join request. A callback handler that wants to
-// ACK the button first (so it stops spinning) can instead claimPending() itself, answer the
-// callback, then call executeApprove() with the claimed pending.
+// Bind answer validation and claiming to the same nonce.
+func (v *Verifier) claimPendingNonce(gid, uid int64, nonce string) (*pending, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	if !ok || p.done || p.nonce != nonce {
+		return nil, false
+	}
+	p.done = true
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	v.markTerminalLocked(pkey{gid, uid}, p)
+	return p, true
+}
+
+// Claim before approval so its timeout cannot decline or strike concurrently.
+// Callback handlers may acknowledge between claimPending and executeApprove.
 func (v *Verifier) approve(c context.Context, bot verifyBot, gid, uid int64) bool {
 	p, ok := v.claimPending(gid, uid)
 	if !ok {
@@ -1346,8 +1439,7 @@ func (v *Verifier) approve(c context.Context, bot verifyBot, gid, uid int64) boo
 	return v.executeApprove(c, bot, gid, uid, p)
 }
 
-// executeApprove runs the network approve + cleanup for an ALREADY-claimed pending p. On failure it
-// reopens p as retryable (re-arms the timeout) so a transient error doesn't strand the applicant.
+// Failed approval reopens the claimed pending instead of stranding the applicant.
 func (v *Verifier) executeApprove(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		log.Printf("approve %d in %d: %v", uid, gid, err)
@@ -1355,12 +1447,12 @@ func (v *Verifier) executeApprove(c context.Context, bot verifyBot, gid, uid int
 		v.reopenPending(bot, gid, uid, p) // restore as retryable (re-arm the timeout)
 		return false
 	}
-	// Succeeded — drop the (already-claimed) pending and clean up. Only delete if it's still ours,
-	// so a request that replaced it while the approve was in flight isn't clobbered.
 	v.mu.Lock()
-	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
-		delete(v.pend, pkey{gid, uid})
+	key := pkey{gid, uid}
+	if cur, ok := v.pend[key]; ok && cur == p {
+		delete(v.pend, key)
 	}
+	v.releaseTerminalLocked(key, p)
 	v.mu.Unlock()
 	v.clearVerifyFails(gid, uid) // verified successfully — reset any failure strikes
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
@@ -1370,14 +1462,14 @@ func (v *Verifier) executeApprove(c context.Context, bot verifyBot, gid, uid int
 	return true
 }
 
-// reopenPending re-arms a pending that was claimed for an approve that then FAILED, so the
-// applicant can still retry, be approved by an admin, or time out normally. No-op if a newer
-// request has since replaced the entry, or it was otherwise consumed.
+// Reopen failed approvals with a retry timer unless the pending was replaced or consumed.
 func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if cur, ok := v.pend[pkey{gid, uid}]; !ok || cur != p || !p.done {
-		return // replaced or already consumed — leave it alone
+	key := pkey{gid, uid}
+	defer v.releaseTerminalLocked(key, p)
+	if cur, ok := v.pend[key]; !ok || cur != p || !p.done {
+		return
 	}
 	p.done = false
 	delay := time.Until(p.deadline)
@@ -1388,8 +1480,7 @@ func (v *Verifier) reopenPending(bot verifyBot, gid, uid int64, p *pending) {
 	v.armExpiry(bot, p, gid, uid, delay, "approve-retry")
 }
 
-// wrongAnswerText is the callback alert shown after a wrong answer: a ban notice if this
-// failure triggered the auto-ban, otherwise a decline + retry-after-cooldown hint.
+// Wrong-answer feedback distinguishes automatic ban from cooldown retry.
 func (v *Verifier) wrongAnswerText(l lang, banned bool) string {
 	t := tr(l)
 	if banned {
@@ -1401,30 +1492,21 @@ func (v *Verifier) wrongAnswerText(l lang, banned bool) string {
 	return t.WrongNoWait
 }
 
-// noFaultGrace is the retry window granted when a decline would NOT be the user's fault — after the
-// bot's own approve call failed, or when a restored pending's deadline lapsed while the bot was down
-// — so a returning/retrying legitimate user gets a real chance instead of being declined within ~1s.
+// Bot-caused failures receive a meaningful strike-free retry window.
 const noFaultGrace = 60 * time.Second
 
-// strikesUser reports whether a decline with this reason counts a verification strike against the
-// applicant. A genuine timeout or wrong answer does; a decline that isn't the user's fault does NOT,
-// so it can never push a legitimate user toward the auto-ban: OUR OWN failed approve ("approve-retry"),
-// a deadline that lapsed while the bot was DOWN ("restart-lapsed"), or the first fresh window granted
-// right after the bot recovered from an outage ("recovered").
+// Timeouts and wrong answers strike; delivery, approval, restart, and recovery failures do not.
 func strikesUser(reason string) bool {
 	switch reason {
-	case "approve-retry", "restart-lapsed", "recovered":
+	case "approve-retry", "restart-lapsed", "recovered", "challenge-post-failed":
 		return false
 	default:
 		return true
 	}
 }
 
-// decline rejects a failed verification from the wrong-answer path — a live user action, so no offline
-// check is needed. nonce identifies the exact pending, so a stale callback can't decline a
-// since-replaced one (see consumeNonce). Returns handled=false if there was no matching live pending,
-// banned=true if this crossed the auto-ban. The timeout path goes through onExpiry -> consumeExpiry ->
-// finishDecline instead, so it can defer while the bot is offline.
+// Live wrong answers use nonce claims; timeout settlement uses epoch claims so outages may defer it.
+// handled=false means no matching pending; banned reports only a successful threshold ban.
 func (v *Verifier) decline(c context.Context, bot verifyBot, gid, uid int64, nonce, reason string) (handled, banned bool) {
 	p, ok := v.consumeNonce(gid, uid, nonce)
 	if !ok {
@@ -1433,11 +1515,9 @@ func (v *Verifier) decline(c context.Context, bot verifyBot, gid, uid int64, non
 	return true, v.finishDecline(c, bot, gid, uid, p, reason)
 }
 
-// finishDecline performs the reject on an ALREADY-claimed pending: drop the challenge, record a strike
-// (unless strikesUser(reason) is false — a decline that isn't the user's fault), decline the join
-// request, and auto-ban once the applicant reaches cfg.VerifyMaxFails strikes. Returns whether the ban
-// itself succeeded. Shared by the wrong-answer path (decline) and the timeout path (onExpiry).
+// Settle an already-claimed decline, striking only user-caused failures and banning at threshold.
 func (v *Verifier) finishDecline(c context.Context, bot verifyBot, gid, uid int64, p *pending, reason string) (banned bool) {
+	defer v.finishTerminal(gid, uid, p)
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	var count int
 	var doBan bool
@@ -1445,7 +1525,10 @@ func (v *Verifier) finishDecline(c context.Context, bot verifyBot, gid, uid int6
 		v.recordDecision(false)
 		count, doBan = v.recordVerifyFail(gid, uid)
 	}
-	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}) // benign if already gone
+	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+		log.Printf("decline %d in %d failed: %v", uid, gid, err)
+		v.adminAlert(c, bot, fmt.Sprintf("⚠️ 拒绝用户 %d 加入群 %d 失败(可能缺权限):%v;该申请仍需管理员手动处理", uid, gid, err))
+	}
 	if doBan {
 		secs := v.banDuration()
 		if err := v.applyBan(c, bot, gid, uid, secs, false); err != nil {
@@ -1458,9 +1541,7 @@ func (v *Verifier) finishDecline(c context.Context, bot verifyBot, gid, uid int6
 		}
 		if banned {
 			v.clearVerifyFails(gid, uid) // ONLY on a successful ban (so a later unban starts fresh).
-			// On ban FAILURE keep the strikes: the threshold stays tripped, every further failure
-			// re-attempts the ban and re-alerts admins, and the cooldown keeps throttling — so a
-			// missing "ban users" right can't turn the cap into an infinite-retry loop.
+			// Keep threshold strikes after ban failure so later failures retry and alert again.
 		}
 	}
 	v.save()
@@ -1468,9 +1549,13 @@ func (v *Verifier) finishDecline(c context.Context, bot verifyBot, gid, uid int6
 	return banned
 }
 
-// banApplicant declines the join request and bans the user. It returns handled=false if there
-// was no live pending to act on, and banned=false if the BanChatMember call failed (e.g. the
-// bot lacks ban rights) — so the admin gets honest feedback instead of a false "banned".
+func (v *Verifier) finishTerminal(gid, uid int64, p *pending) {
+	v.mu.Lock()
+	v.releaseTerminalLocked(pkey{gid, uid}, p)
+	v.mu.Unlock()
+}
+
+// banApplicant reports ban failure honestly even though the join request is still declined.
 func (v *Verifier) banApplicant(c context.Context, bot verifyBot, gid, uid int64) (handled, banned bool) {
 	p, ok := v.consume(gid, uid)
 	if !ok {
@@ -1479,11 +1564,9 @@ func (v *Verifier) banApplicant(c context.Context, bot verifyBot, gid, uid int64
 	return true, v.executeBan(c, bot, gid, uid, p)
 }
 
-// executeBan declines + bans an ALREADY-consumed applicant and clears the challenge. A callback
-// handler can consume() + ACK the button first, then call this, so the button doesn't spin through
-// the decline/ban/delete round-trips. Returns whether the ban itself succeeded (a failure is
-// surfaced via adminAlert; the applicant is still declined regardless).
+// executeBan settles an already-consumed pending; ban failure remains visible after callback ACK.
 func (v *Verifier) executeBan(c context.Context, bot verifyBot, gid, uid int64, p *pending) (banned bool) {
+	defer v.finishTerminal(gid, uid, p)
 	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
 	banned = true
 	if err := v.applyBan(c, bot, gid, uid, v.banDuration(), true); err != nil { // honour /bantime like the other ban paths
@@ -1498,8 +1581,6 @@ func (v *Verifier) executeBan(c context.Context, bot verifyBot, gid, uid int64, 
 	return banned
 }
 
-// --- outage resilience: heartbeat, offline-aware expiry, and post-recovery re-notify ---
-
 const (
 	heartbeatInterval     = 25 * time.Second // how often the bot pings Telegram to confirm it is reachable
 	heartbeatProbeTimeout = 10 * time.Second // per-probe timeout for the GetMe liveness call
@@ -1508,28 +1589,22 @@ const (
 	renotifyCap           = 30               // most applicants to re-notify per recovery, so a big backlog can't become a message storm
 )
 
-// timeout is the configured verification window as a Duration.
 func (v *Verifier) timeout() time.Duration { return time.Duration(v.cfg.TimeoutSeconds) * time.Second }
 
-// liveProbe is the slice of the bot used for a liveness check (a cheap GetMe). *telego.Bot satisfies
-// it; a fake satisfies it in tests.
+// liveProbe is the cheap GetMe liveness surface.
 type liveProbe interface {
 	GetMe(ctx context.Context) (*telego.User, error)
 }
 
-// offlineNow reports whether the bot currently cannot reach Telegram: the heartbeat has had no
-// successful contact within offlineThreshold. Seeded online at startup, so before the first heartbeat
-// it reads online and normal declines proceed.
+// Seeded online; only stale successful contact marks the bot offline.
 func (v *Verifier) offlineNow() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return !v.lastOnline.IsZero() && time.Since(v.lastOnline) > offlineThreshold
 }
 
-// reachable does an on-demand liveness probe, so an expiry that fires in the detection-lag window at
-// the very START of an outage — before offlineNow flips true (the heartbeat only samples every
-// heartbeatInterval) — still isn't acted on if the bot really can't reach Telegram. No probe wired
-// (tests) => assume reachable, so the ordinary decline path is unchanged.
+// Probe at expiry to cover heartbeat detection lag at outage onset.
+// Tests without a probe remain reachable.
 func (v *Verifier) reachable(c context.Context) bool {
 	if v.probe == nil {
 		return true
@@ -1540,11 +1615,8 @@ func (v *Verifier) reachable(c context.Context) bool {
 	return err == nil
 }
 
-// armExpiry arms p's expiry timer to fire after delay. It BUMPS p.epoch and captures that epoch in the
-// callback, so a timer replaced by a later re-arm (defer / recovery) no-ops in consumeExpiry rather
-// than acting on the pending it was superseded on. The callback routes through onExpiry, which DEFERS
-// the expiry (re-arming a fresh window) whenever the bot can't reach Telegram, so an outage can't
-// decline or strike a user we simply couldn't hear from. Callers must hold v.mu.
+// Caller holds v.mu. Every re-arm bumps epoch so replaced timers become stale.
+// Expiry settlement defers while Telegram is unreachable.
 func (v *Verifier) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay time.Duration, reason string) {
 	p.epoch++
 	epoch := p.epoch
@@ -1552,10 +1624,8 @@ func (v *Verifier) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay ti
 	p.timer = time.AfterFunc(delay, func() { v.onExpiry(context.Background(), bot, gid, uid, nonce, epoch, reason) })
 }
 
-// onExpiry is the pending-timer callback. If the bot is offline (or a quick probe can't reach Telegram)
-// the expiry is not trusted — the user may have answered without us receiving it, and we couldn't
-// deliver a decline anyway — so it is DEFERRED for a fresh window rather than declining/striking. When
-// online it declines. The epoch guard (consumeExpiry) makes a superseded timer a no-op.
+// Unreachable expiries receive a fresh window without consume or strike.
+// Online settlement still requires the captured nonce and epoch.
 func (v *Verifier) onExpiry(c context.Context, bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
 	if v.offlineNow() || !v.reachable(c) {
 		v.deferExpiry(bot, gid, uid, nonce, epoch, reason)
@@ -1568,10 +1638,7 @@ func (v *Verifier) onExpiry(c context.Context, bot verifyBot, gid, uid int64, no
 	v.finishDecline(c, bot, gid, uid, p, reason)
 }
 
-// deferExpiry re-arms an expiry for a fresh full window instead of acting on it, used when the bot is
-// offline at expiry. The pending is kept intact (no consume, no strike) and keeps its original reason,
-// so once the bot is back and the user still hasn't finished within a fresh window it is handled
-// normally. No-op if the pending was replaced/handled/superseded meanwhile (nonce + epoch guard).
+// Keep the original reason while re-arming offline expiries; nonce and epoch guard replacement.
 func (v *Verifier) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -1587,10 +1654,7 @@ func (v *Verifier) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoc
 	log.Printf("verify: bot offline — deferred %s for %d in %d, re-armed a fresh window", reason, uid, gid)
 }
 
-// postGroupChallenge posts the in-group verification challenge for an applicant — the "click to
-// verify" deep link, the admin pass/ban buttons, and an optional channel-follow hint — and returns the
-// sent message id (0 on failure, with an admin alert). Shared by onJoinRequest and the post-outage
-// re-notify so both render the challenge identically.
+// Shared challenge rendering returns zero and alerts admins on delivery failure.
 func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, ul lang) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 	mention := joinerLabel(uid, name, v.nameSpoilerOn())
@@ -1598,8 +1662,7 @@ func (v *Verifier) postGroupChallenge(c context.Context, bot verifyBot, gid, uid
 	if v.botUsername != "" {
 		link = "https://t.me/" + v.botUsername + "?start=verify"
 	}
-	// The channel requirement is plain text only — the actual follow button lives in the DM step, so
-	// users aren't sent away from the verify flow.
+	// Keep channel navigation inside the DM verification flow.
 	t := tr(ul)
 	channelHint := ""
 	if v.cfg.requiredChannel(gid) != 0 {
@@ -1632,8 +1695,7 @@ type heartbeatRec struct {
 	LastOnline int64 `json:"last_online"`
 }
 
-// saveHeartbeat records the last time the bot reached Telegram, so a later restart can estimate the
-// downtime. A no-op when the heartbeat path is unset (no STATE_DIRECTORY).
+// Persist reachability so restart recovery can estimate downtime.
 func (v *Verifier) saveHeartbeat() {
 	if v.hbPath == "" {
 		return
@@ -1647,27 +1709,30 @@ func (v *Verifier) saveHeartbeat() {
 	writeJSONFile(v.hbPath, heartbeatRec{LastOnline: t.Unix()})
 }
 
-// loadHeartbeat returns the last persisted online time, or the zero time if there is none / it is
-// unreadable (first run, or a corrupt file already backed up by loadJSONFile).
+// Missing or unreadable heartbeat state returns zero time.
 func (v *Verifier) loadHeartbeat() time.Time {
 	if v.hbPath == "" {
 		return time.Time{}
 	}
 	var r heartbeatRec
-	if err := loadJSONFile(v.hbPath, &r); err != nil || r.LastOnline == 0 {
+	if err := loadJSONFile(v.hbPath, &r); err != nil {
+		if stateReadFailed(err) {
+			v.hbPath = ""
+		}
+		return time.Time{}
+	}
+	if r.LastOnline == 0 {
 		return time.Time{}
 	}
 	return time.Unix(r.LastOnline, 0)
 }
 
-// heartbeatBot is what the heartbeat needs: a liveness probe plus the verifyBot actions the recovery
-// re-notify uses. *telego.Bot satisfies it; a fake satisfies it in tests.
+// heartbeatBot combines liveness with recovery notification operations.
 type heartbeatBot interface {
 	liveProbe
 	verifyBot
 }
 
-// runHeartbeat ticks a liveness probe every heartbeatInterval until ctx is cancelled (shutdown).
 func (v *Verifier) runHeartbeat(ctx context.Context, bot heartbeatBot) {
 	t := time.NewTicker(heartbeatInterval)
 	defer t.Stop()
@@ -1683,10 +1748,7 @@ func (v *Verifier) runHeartbeat(ctx context.Context, bot heartbeatBot) {
 	}
 }
 
-// heartbeatTick runs one liveness probe (a cheap GetMe): on success it advances lastOnline (which
-// offlineNow / onExpiry read to pause timeouts during an outage) and, if that success ends an outage
-// longer than outageRecovery, refreshes + re-notifies in-progress verifications so an outage doesn't
-// quietly eat a legitimate applicant's window. Returns whether the probe succeeded.
+// Successful probes advance reachability and refresh pendings after a real outage.
 func (v *Verifier) heartbeatTick(ctx context.Context, bot heartbeatBot) bool {
 	pc, cancel := context.WithTimeout(ctx, heartbeatProbeTimeout)
 	_, err := bot.GetMe(pc)
@@ -1710,12 +1772,8 @@ func (v *Verifier) heartbeatTick(ctx context.Context, bot heartbeatBot) bool {
 	return true
 }
 
-// onRecovery refreshes every in-progress verification after the bot returns from an outage: each
-// pending gets a fresh full window (its old one was eaten by the downtime) and, unless it was already
-// re-notified within the last window, a best-effort re-notify — a DM to the applicant and a fresh
-// in-group challenge. Bounded by renotifyCap so a large backlog can't become a message storm, and the
-// per-pending cooldown keeps repeated flapping from re-messaging the same applicant every cycle. A
-// no-op during shutdown.
+// Recovery grants every pending a fresh strike-free window.
+// Re-notification is capped and suppressed during flapping or shutdown.
 func (v *Verifier) onRecovery(c context.Context, bot verifyBot, outage time.Duration) {
 	now := time.Now()
 	v.mu.Lock()
@@ -1757,10 +1815,7 @@ func (v *Verifier) onRecovery(c context.Context, bot verifyBot, outage time.Dura
 	log.Printf("recovery: refreshed %d verification(s), re-notified %d after ~%s offline%s", refreshed, len(items), outage.Round(time.Second), capNote(capped))
 }
 
-// renotifyPending re-notifies one applicant after a recovery: a best-effort DM (silently skipped if
-// they've never opened the bot, so Telegram rejects it) and a fresh in-group challenge that replaces
-// the stale one. Only network calls here — no lock is held across them; the pending's message id is
-// updated afterward if it is still the live one.
+// Re-notify without holding v.mu, then update only the still-current pending's message ID.
 func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid int64, name string, oldMsg int, p *pending, outage time.Duration) {
 	ul := p.lang
 	_, _ = bot.SendMessage(c, htmlMessage(uid, fmt.Sprintf(tr(ul).Renotify, outageText(ul, outage))))
@@ -1775,8 +1830,7 @@ func (v *Verifier) renotifyPending(c context.Context, bot verifyBot, gid, uid in
 	v.mu.Unlock()
 }
 
-// outageText renders an outage duration for a user-facing notice: whole seconds under a minute, whole
-// minutes under an hour, whole hours above that.
+// Render whole seconds, minutes, or hours in the applicant's locale.
 func outageText(l lang, d time.Duration) string {
 	units := [3]string{" 秒", " 分钟", " 小时"}
 	switch l {
@@ -1795,7 +1849,6 @@ func outageText(l lang, d time.Duration) string {
 	}
 }
 
-// capNote renders the " (… over the cap)" suffix for a recovery log line, or "" when nothing was capped.
 func capNote(capped int) string {
 	if capped <= 0 {
 		return ""

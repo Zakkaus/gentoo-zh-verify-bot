@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,9 +22,7 @@ type useFlag struct {
 	def  bool // default-enabled (+ prefix)
 }
 
-// useExpandGroup is one USE_EXPAND variable (e.g. l10n, llvm_slot) and its values, taken from
-// packages.gentoo.org's grouped top-level use_expand. Keeping them grouped (and bounded) avoids
-// flattening 100+ l10n_* entries into the local-flag list.
+// Preserve USE_EXPAND groups so large sets such as l10n do not flood local flags.
 type useExpandGroup struct {
 	name  string
 	flags []useFlag
@@ -46,7 +45,6 @@ var infoC = struct {
 	m  map[string]pkgFullInfo
 }{m: map[string]pkgFullInfo{}}
 
-// useEntry mirrors packages.gentoo.org's USE flag JSON ({name, description}).
 type useEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -64,12 +62,12 @@ func toUseFlags(in []useEntry) []useFlag {
 	return out
 }
 
-// officialInfo fetches description + USE flags + versions for an official-tree atom (cached).
-func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
+// Only an authoritative 404 proves absence; other failures leave it unknown.
+func officialInfo(ctx context.Context, atom string) (info pkgFullInfo, found, available bool) {
 	infoC.mu.Lock()
 	if v, ok := infoC.m[atom]; ok && time.Since(v.fetched) < verCacheTTL {
 		infoC.mu.Unlock()
-		return v, true
+		return v, true, true
 	}
 	infoC.mu.Unlock()
 
@@ -80,17 +78,17 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 			Local  []useEntry `json:"local"`
 			Global []useEntry `json:"global"`
 		} `json:"use"`
-		// use_expand is a sibling of use: USE_EXPAND variables grouped with their values
-		// (e.g. l10n -> [ach, af, …], llvm_slot -> [20, +21, 22]).
+		// USE_EXPAND is a sibling of use in the upstream schema.
 		UseExpand []struct {
 			Name  string     `json:"name"`
 			Flags []useEntry `json:"flags"`
 		} `json:"use_expand"`
 	}
-	if err := httpGetJSON(ctx, "https://packages.gentoo.org/packages/"+atom+".json", nil, &pj); err != nil {
-		return pkgFullInfo{}, false
+	err := httpGetJSON(ctx, "https://packages.gentoo.org/packages/"+atom+".json", nil, &pj)
+	if err != nil {
+		return pkgFullInfo{}, false, httpStatusCode(err) == http.StatusNotFound
 	}
-	info := pkgFullInfo{atom: atom, description: pj.Description, fetched: time.Now()}
+	info = pkgFullInfo{atom: atom, description: pj.Description, fetched: time.Now()}
 	info.stable, info.latest = pickStableLatest(pj.Versions)
 	info.local = toUseFlags(pj.Use.Local)
 	info.global = toUseFlags(pj.Use.Global)
@@ -105,7 +103,7 @@ func officialInfo(ctx context.Context, atom string) (pkgFullInfo, bool) {
 	}
 	infoC.m[atom] = info
 	infoC.mu.Unlock()
-	return info, true
+	return info, true, true
 }
 
 func fetchRaw(ctx context.Context, url string) []byte {
@@ -113,8 +111,7 @@ func fetchRaw(ctx context.Context, url string) []byte {
 	return b
 }
 
-// parseIUSE extracts USE flag tokens from an ebuild's IUSE="..."/IUSE+="..."
-// assignments (handles multi-line; drops tokens containing shell metachars).
+// Parse multiline IUSE assignments while dropping shell expressions.
 func parseIUSE(eb []byte) []string {
 	lines := strings.Split(string(eb), "\n")
 	var toks []string
@@ -183,8 +180,7 @@ func parseMetadataUse(md []byte) map[string]string {
 	return out
 }
 
-// overlayInfo best-effort extracts description/homepage/USE for an overlay package
-// from its latest ebuild (IUSE) + metadata.xml (flag descriptions), via raw.githubusercontent.com.
+// Overlay metadata comes from the latest ebuild and metadata.xml.
 func overlayInfo(ctx context.Context, o overlay, atom, version string) (pkgFullInfo, bool) {
 	if version == "" {
 		return pkgFullInfo{}, false
@@ -214,8 +210,7 @@ func overlayInfo(ctx context.Context, o overlay, atom, version string) (pkgFullI
 	return info, true
 }
 
-// shortDesc trims a USE flag description to one short line (first sentence, no
-// URLs, capped) so /use stays compact.
+// Keep compact output to one short, URL-free sentence.
 func shortDesc(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.Index(s, "http"); i > 0 {
@@ -238,13 +233,11 @@ func flagMark(f useFlag) string {
 	return ""
 }
 
-// useLink renders a flag as "[+]name" with the name linked to its useflags page.
 func useLink(f useFlag) string {
 	u := "https://packages.gentoo.org/useflags/" + f.name
 	return flagMark(f) + fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(u), html.EscapeString(f.name))
 }
 
-// writeLocalFlags lists package-specific flags with a one-line description.
 func writeLocalFlags(b *strings.Builder, flags []useFlag) {
 	if len(flags) == 0 {
 		return
@@ -263,7 +256,6 @@ func writeLocalFlags(b *strings.Builder, flags []useFlag) {
 	}
 }
 
-// writeGlobalFlags lists generic flags as a compact name-only line (Gentoo users know them).
 func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	if len(flags) == 0 {
 		return
@@ -275,13 +267,10 @@ func writeGlobalFlags(b *strings.Builder, flags []useFlag) {
 	fmt.Fprintf(b, "\n<b>全局 USE</b>(%d):%s", len(flags), strings.Join(links, " "))
 }
 
-// expandCap bounds how many values of a single USE_EXPAND group the compact /use lists before
-// truncating with a "…(共 N)" tail — l10n alone can carry 100+ language codes.
+// Bound compact USE_EXPAND output; l10n commonly exceeds 100 values.
 const expandCap = 16
 
-// writeExpandFlags lists USE_EXPAND groups (l10n, llvm_slot, …) one compact line each: the group
-// name, its value count, and up to expandCap values (name-only, + marks a default-on value) so a
-// huge group can't flood the plain-text message. Full descriptions live in the rich view.
+// Compact output truncates values; the rich view retains full descriptions.
 func writeExpandFlags(b *strings.Builder, groups []useExpandGroup) {
 	for _, g := range groups {
 		if len(g.flags) == 0 {
@@ -302,7 +291,6 @@ func writeExpandFlags(b *strings.Builder, groups []useExpandGroup) {
 	}
 }
 
-// overlayByName looks up a configured overlay by its display name.
 func overlayByName(name string) (overlay, bool) {
 	for _, o := range overlays {
 		if o.name == name {
@@ -312,8 +300,7 @@ func overlayByName(name string) (overlay, bool) {
 	return overlay{}, false
 }
 
-// overlayRefs renders the overlays in alsoIn (that also carry atom) as a
-// comma-separated list of linked names — the "overlay 也有此包" footer.
+// overlayRefs renders linked overlay names for the cross-source footer.
 func overlayRefs(alsoIn []string, atom string) string {
 	refs := make([]string, 0, len(alsoIn))
 	for _, ovName := range alsoIn {
@@ -369,10 +356,8 @@ func renderUse(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn [
 	return b.String()
 }
 
-// sendRichOrHTML sends via Bot API 10.1 sendRichMessage when enabled (richer, for
-// upgraded clients), and falls back to a plain HTML message if rich is off or the
-// server rejects it (e.g. Bot API < 10.1). Client-side render failures can't be
-// detected here — that's the accepted trade-off, kept off the verification path.
+// Bot API 10.1 rich messages fall back to HTML on server rejection.
+// Client-side rendering failures are not observable.
 func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, richHTML, plainHTML string) {
 	rp := replyParams(replyTo)
 	if v.isRichEnabled() && richHTML != "" {
@@ -395,8 +380,7 @@ func (v *Verifier) sendRichOrHTML(c context.Context, bot *telego.Bot, chatID int
 	v.scheduleLookupCleanup(bot, chatID, replyTo, msgID(sent))
 }
 
-// renderUseRich builds the Bot API 10.1 rich-message /use — no truncation, full flag
-// descriptions, and the (long) global USE list inside a collapsible <details> block.
+// Rich output keeps full flag descriptions in collapsible sections.
 func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, alsoIn []string) string {
 	esc := html.EscapeString
 	var b strings.Builder
@@ -409,8 +393,7 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 	} else {
 		fmt.Fprintf(&b, "<h3>🧩 %s%s</h3>", esc(info.atom), label)
 	}
-	// pack description + homepage + version into ONE block; separate <p> blocks each
-	// get paragraph spacing (= big gaps), so use <br> as a light intra-block break.
+	// One paragraph with <br> avoids large inter-paragraph gaps.
 	var hdr []string
 	if info.description != "" {
 		hdr = append(hdr, esc(info.description))
@@ -446,9 +429,7 @@ func renderUseRich(info pkgFullInfo, srcLabel, pkgURL string, overlay bool, also
 	return b.String()
 }
 
-// writeFlagsRich renders a USE-flag section for rich messages as a <ul> with full
-// descriptions; a long section (global) is wrapped in a collapsible <details>.
-// Rich messages treat newlines as whitespace, so structure MUST be block tags.
+// Rich messages require block structure; newlines are whitespace.
 func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse bool) {
 	if len(flags) == 0 {
 		return
@@ -471,8 +452,7 @@ func writeFlagsRich(b *strings.Builder, title string, flags []useFlag, collapse 
 	}
 }
 
-// writeExpandFlagsRich renders USE_EXPAND groups for rich messages: each group is its own
-// collapsible <details> (they can be large, e.g. l10n) listing every value with its description.
+// Each large USE_EXPAND group gets its own collapsible section.
 func writeExpandFlagsRich(b *strings.Builder, groups []useExpandGroup) {
 	for _, g := range groups {
 		if len(g.flags) == 0 {
@@ -490,8 +470,7 @@ func writeExpandFlagsRich(b *strings.Builder, groups []useExpandGroup) {
 	}
 }
 
-// normalizeQuery turns a pasted packages.gentoo.org / GitHub-overlay tree URL
-// into a "category/package" atom; otherwise returns the input unchanged. Shared by /pkg and /use.
+// Normalize supported package and overlay URLs to category/package atoms.
 func normalizeQuery(q string) string {
 	q = strings.TrimSpace(q)
 	q = strings.SplitN(q, "?", 2)[0]
@@ -521,18 +500,25 @@ func normalizeQuery(q string) string {
 	return q
 }
 
-// useSrc records where a /use atom was found: the official tree and/or named overlays.
 type useSrc struct {
 	official bool
 	ovs      []string
 }
 
-// resolveUseSources finds which atom(s) match q for /use and from which sources. An
-// exact "category/package" query resolves directly via the official JSON + overlay
-// caches; a bare name is matched (name-exact) against the official tree search and
-// the overlay caches. Returns atom -> sources (caller picks single / disambiguates).
-func resolveUseSources(ctx context.Context, q string) map[string]*useSrc {
+// Empty matches are definitive only when every source answered.
+func resolveUseSources(ctx context.Context, q string, overlayOK map[string]bool) (map[string]*useSrc, pkgLookupAvailability) {
+	return resolveUseSourcesWith(ctx, q, overlayOK, officialInfo, searchMainTree)
+}
+
+func resolveUseSourcesWith(
+	ctx context.Context,
+	q string,
+	overlayOK map[string]bool,
+	info func(context.Context, string) (pkgFullInfo, bool, bool),
+	search func(context.Context, string) ([]string, bool),
+) (map[string]*useSrc, pkgLookupAvailability) {
 	srcs := map[string]*useSrc{}
+	availability := pkgLookupAvailability{overlays: overlayOK}
 	get := func(a string) *useSrc {
 		s := srcs[a]
 		if s == nil {
@@ -544,7 +530,9 @@ func resolveUseSources(ctx context.Context, q string) map[string]*useSrc {
 
 	low := strings.ToLower(q)
 	if strings.Contains(low, "/") && isPkgPath(low) {
-		if _, ok := officialInfo(ctx, q); ok {
+		_, found, ok := info(ctx, q)
+		availability.official = ok
+		if found {
 			get(q).official = true
 		}
 		for _, o := range overlays {
@@ -553,9 +541,11 @@ func resolveUseSources(ctx context.Context, q string) map[string]*useSrc {
 				s.ovs = append(s.ovs, o.name)
 			}
 		}
-		return srcs
+		return srcs, availability
 	}
-	for _, a := range searchMainTree(ctx, q) {
+	atoms, ok := search(ctx, q)
+	availability.official = ok
+	for _, a := range atoms {
 		if strings.EqualFold(pn(a), q) {
 			get(a).official = true
 		}
@@ -568,10 +558,27 @@ func resolveUseSources(ctx context.Context, q string) map[string]*useSrc {
 			}
 		}
 	}
-	return srcs
+	return srcs, availability
 }
 
-// onUse handles /use <package> — show one package's USE flags + info (multi-source aware).
+func renderUseLookupMiss(q string, availability pkgLookupAvailability) string {
+	if availability.anyUnavailable() {
+		return fmt.Sprintf("部分来源暂时无法查询，目前无法确认是否有精确匹配「%s」的包，请稍后重试。", q)
+	}
+	return fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q)
+}
+
+func appendUseAvailabilityNote(plain, rich string, availability pkgLookupAvailability) (string, string) {
+	if !availability.anyUnavailable() {
+		return plain, rich
+	}
+	plain += "\n\n<i>部分来源暂时无法查询，以上结果可能不完整。</i>"
+	if rich != "" {
+		rich += "<footer><i>部分来源暂时无法查询，以上结果可能不完整。</i></footer>"
+	}
+	return plain, rich
+}
+
 func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.queryAllowed(ctx, msg) {
@@ -587,16 +594,16 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 	q = normalizeQuery(q)
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
-	pkgC.refresh(hc)
+	overlayOK := pkgC.refresh(hc)
 
-	srcs := resolveUseSources(hc, q)
+	srcs, availability := resolveUseSources(hc, q, overlayOK)
 
 	switch len(srcs) {
 	case 0:
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("没找到精确匹配「%s」的包。模糊搜索试试 /pkg %s", q, q))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderUseLookupMiss(q, availability))
 		return nil
 	case 1:
-		// fall through below
+		// A unique atom needs no disambiguation.
 	default:
 		atoms := make([]string, 0, len(srcs))
 		for a := range srcs {
@@ -607,6 +614,9 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		b.WriteString("匹配到多个包,请用完整名指定其一:")
 		for _, a := range atoms {
 			fmt.Fprintf(&b, "\n • /use %s", a)
+		}
+		if availability.anyUnavailable() {
+			b.WriteString("\n部分来源暂时无法查询，以上匹配结果可能不完整。")
 		}
 		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 		return nil
@@ -620,7 +630,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 
 	out, outRich := "", ""
 	if s.official {
-		if info, ok := officialInfo(hc, atom); ok {
+		if info, found, _ := officialInfo(hc, atom); found {
 			url := "https://packages.gentoo.org/packages/" + atom
 			out = renderUse(info, "", url, false, s.ovs)
 			if v.isRichEnabled() {
@@ -643,6 +653,7 @@ func (v *Verifier) onUse(ctx *th.Context, update telego.Update) error {
 		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("暂时无法获取 %s 的信息,请稍后重试。", atom))
 		return nil
 	}
+	out, outRich = appendUseAvailabilityNote(out, outRich, availability)
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, outRich, out)
 	return nil
 }

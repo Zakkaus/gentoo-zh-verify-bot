@@ -14,9 +14,7 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-// wikiSource is a MediaWiki site searchable by /wiki. classify maps a result title to
-// its base topic + language ("zh" = simplified Chinese, "en" = default, "other" = drop),
-// so /wiki prefers the zh-cn page and falls back to the default page when there's none.
+// classify groups translation titles by base topic and supported language.
 type wikiSource struct {
 	name      string
 	api       string
@@ -24,8 +22,7 @@ type wikiSource struct {
 	classify  func(title string) (base, lang string)
 }
 
-// Gentoo wiki translations are "/<langcode>" subpages (e.g. Btrfs/zh-cn, Btrfs/fr); a
-// real content subpage (Systemd/systemd-nspawn) is longer than a langcode so it stays "en".
+// Gentoo translation subpages use short language suffixes; longer subpages are content.
 var gentooLangRe = regexp.MustCompile(`/([a-z]{2}(?:-[a-z]{2,4})?)$`)
 
 func classifyGentoo(title string) (string, string) {
@@ -42,7 +39,7 @@ func classifyGentoo(title string) (string, string) {
 	}
 }
 
-// Arch wiki translations are "Title (Language)"; simplified Chinese is "(简体中文)".
+// Arch translation titles use a parenthesized language label.
 var archLangRe = regexp.MustCompile(` \(([^)]+)\)$`)
 
 func classifyArch(title string) (string, string) {
@@ -62,8 +59,7 @@ var wikiSources = []wikiSource{
 	{name: "Arch", api: "https://wiki.archlinux.org/api.php", titleBase: "https://wiki.archlinux.org/title/", classify: classifyArch},
 }
 
-// wikiTitlePath turns a page title into a URL path: spaces -> underscores, each
-// "/"-separated segment percent-encoded (so subpages and non-ASCII titles both work).
+// Escape each path segment separately so MediaWiki subpages retain their slashes.
 func wikiTitlePath(title string) string {
 	parts := strings.Split(strings.ReplaceAll(title, " ", "_"), "/")
 	for i := range parts {
@@ -74,8 +70,7 @@ func wikiTitlePath(title string) string {
 
 func (w wikiSource) pageURL(title string) string { return w.titleBase + wikiTitlePath(title) }
 
-// hasNonASCII reports whether s has any non-ASCII rune — used to drop foreign-language
-// pages that aren't tagged as a translation (e.g. Arch's "Kernel/Compilação").
+// Drop untagged foreign-language pages from the English fallback.
 func hasNonASCII(s string) bool {
 	for _, r := range s {
 		if r > 127 {
@@ -85,15 +80,11 @@ func hasNonASCII(s string) bool {
 	return false
 }
 
-// cleanDisplayTitle strips the HTML markup MediaWiki wraps around a displaytitle.
 func cleanDisplayTitle(s string) string {
 	return html.UnescapeString(strings.TrimSpace(tagRe.ReplaceAllString(s, "")))
 }
 
-// searchTitles queries one MediaWiki site and returns matching page titles in rank order.
-// searchTitles returns the matching page titles, and ok=false when the FETCH failed (a transient
-// error, distinct from a successful search that genuinely found nothing) — so the caller can tell a
-// "no entries" answer from a "couldn't reach the wiki" one.
+// ok distinguishes a failed wiki fetch from an authoritative empty search.
 func searchTitles(ctx context.Context, w wikiSource, query string, limit int) (titles []string, ok bool) {
 	u := fmt.Sprintf("%s?action=query&list=search&srsearch=%s&srlimit=%d&srprop=&format=json",
 		w.api, url.QueryEscape(query), limit)
@@ -114,8 +105,7 @@ func searchTitles(ctx context.Context, w wikiSource, query string, limit int) (t
 	return out, true
 }
 
-// displayTitles fetches the display title (the Chinese H1 for Gentoo /zh-cn pages) for the
-// given canonical titles, as a title -> displaytitle map.
+// Display titles supply localized headings for canonical page names.
 func displayTitles(ctx context.Context, w wikiSource, titles []string) map[string]string {
 	out := map[string]string{}
 	if len(titles) == 0 {
@@ -142,10 +132,7 @@ func displayTitles(ctx context.Context, w wikiSource, titles []string) map[strin
 	return out
 }
 
-// pickWikiTitles drops other/foreign-language pages, dedupes by base topic preferring the
-// zh-cn page, and returns titles with zh first then en (rank order preserved), capped at max.
-// Dedupe is case-insensitive on the base (so "NVIDIA" and "NVidia" collapse to one topic) while
-// the chosen page's original title is preserved for display.
+// Dedupe topics case-insensitively, preferring Simplified Chinese over English.
 func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
 	type entry struct{ title, lang string }
 	chosen := map[string]entry{}
@@ -179,10 +166,32 @@ func (w wikiSource) pickWikiTitles(titles []string, max int) []string {
 	}
 	return out
 }
+func wikiResultNotice(found bool, srcOK []bool) string {
+	var b strings.Builder
+	missing := 0
+	for i, ok := range srcOK {
+		if ok {
+			continue
+		}
+		if missing == 0 {
+			b.WriteString("\n\n以下来源暂时无法查询，结果可能不完整：")
+		} else {
+			b.WriteString("、")
+		}
+		b.WriteString(wikiSources[i].name)
+		b.WriteString(" Wiki")
+		missing++
+	}
+	if missing > 0 {
+		b.WriteString("。请稍后重试。")
+		return b.String()
+	}
+	if !found {
+		return "\n\n没找到相关条目，换个关键词试试？"
+	}
+	return ""
+}
 
-// onWiki handles /wiki <query> — searches the Gentoo and Arch wikis (MediaWiki) and posts
-// the top hits inline, preferring simplified-Chinese pages and showing each page's display
-// title (Chinese for zh-cn pages). Both wikis run concurrently.
 func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.queryAllowed(ctx, msg) {
@@ -216,11 +225,8 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "📚 <b>%s</b> 的 wiki 搜索", html.EscapeString(q))
-	found, anyOK := false, false
+	found := false
 	for i, w := range wikiSources {
-		if srcOK[i] {
-			anyOK = true
-		}
 		if len(titles[i]) == 0 {
 			continue
 		}
@@ -234,13 +240,7 @@ func (v *Verifier) onWiki(ctx *th.Context, update telego.Update) error {
 			fmt.Fprintf(&b, "\n • <a href=\"%s\">%s</a>", html.EscapeString(w.pageURL(t)), html.EscapeString(label))
 		}
 	}
-	if !found {
-		if anyOK { // at least one wiki answered (just no match) -> a definitive "not found"
-			b.WriteString("\n\n没找到相关条目,换个关键词试试?")
-		} else { // every source's fetch failed -> honest transient message, not a false negative
-			b.WriteString("\n\n暂时无法获取 wiki 搜索结果,请稍后重试。")
-		}
-	}
+	b.WriteString(wikiResultNotice(found, srcOK))
 	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
 	return nil
 }

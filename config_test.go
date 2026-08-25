@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -22,9 +25,6 @@ func writeConfig(t *testing.T, c map[string]any) string {
 
 var sampleQ = []map[string]any{{"q": "x", "options": []string{"a", "b"}, "answer": 0}}
 
-// TestLoadConfigLegacy verifies backward compatibility: a bare group_ids list plus global
-// settings is merged into the canonical Groups, and the per-group accessors fall back to
-// the globals — so an existing config keeps working unchanged.
 func TestLoadConfigLegacy(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{
 		"group_ids":           []int{-100, -200},
@@ -46,8 +46,6 @@ func TestLoadConfigLegacy(t *testing.T) {
 	}
 }
 
-// TestLoadConfigPerGroup verifies per-group overrides win over the globals, and that a
-// per-group required channel is protected from auto-leave.
 func TestLoadConfigPerGroup(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{
 		"groups": []map[string]any{
@@ -72,10 +70,6 @@ func TestLoadConfigPerGroup(t *testing.T) {
 	}
 }
 
-// TestLoadConfigValidation checks that a misconfiguration fails fast at load (instead of
-// half-breaking verification at runtime): a required channel with no reachable link, a QUIZ-mode
-// group with no questions anywhere, and an unknown verify_mode. A kernel-mode group needs no
-// question pool, so it must still load without one.
 func TestLoadConfigValidation(t *testing.T) {
 	if _, err := LoadConfig(writeConfig(t, map[string]any{
 		"groups":    []map[string]any{{"id": -100, "required_channel_id": -400}}, // no @handle / invite url
@@ -110,9 +104,6 @@ func TestLoadConfigValidation(t *testing.T) {
 	}
 }
 
-// TestTimeoutSecondsClamp verifies the verification timeout is clamped sane: a too-small value (a
-// typo) is raised to the 30s floor so the challenge stays winnable, an oversized one is capped, and
-// an omitted one takes the default.
 func TestTimeoutSecondsClamp(t *testing.T) {
 	load := func(ts any) *Config {
 		m := map[string]any{"group_ids": []int{-100}, "questions": sampleQ}
@@ -136,8 +127,6 @@ func TestTimeoutSecondsClamp(t *testing.T) {
 	}
 }
 
-// TestTrustedGroupsResolver: a per-group trusted_member_group_ids overrides the global default;
-// otherwise (and for unknown groups) the global default applies.
 func TestTrustedGroupsResolver(t *testing.T) {
 	c := &Config{
 		TrustedMemberGroupIDs: []int64{-100},
@@ -161,8 +150,6 @@ func TestTrustedGroupsResolver(t *testing.T) {
 	}
 }
 
-// TestIsKnownChatTrusted: trusted source groups (global + per-group) must count as known chats, so
-// the auto-leave logic never kicks the bot out of a group it needs to read membership from.
 func TestIsKnownChatTrusted(t *testing.T) {
 	c := &Config{
 		GroupIDs:              []int64{-1, -2},
@@ -179,8 +166,6 @@ func TestIsKnownChatTrusted(t *testing.T) {
 	}
 }
 
-// TestIsKnownChatExtra: known_chat_ids keeps the bot in a chat it only posts to (e.g. an announcement
-// channel) WITHOUT making it a trusted bypass source — the bot neither auto-leaves it nor skips its members.
 func TestIsKnownChatExtra(t *testing.T) {
 	c := &Config{
 		GroupIDs:     []int64{-1},
@@ -198,8 +183,6 @@ func TestIsKnownChatExtra(t *testing.T) {
 	}
 }
 
-// TestLoadConfigKnownChats proves known_chat_ids round-trips through LoadConfig and makes the chat
-// known (no auto-leave) without turning it into a trusted source.
 func TestLoadConfigKnownChats(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{
 		"known_chat_ids": []int64{-1001166068646},
@@ -217,8 +200,6 @@ func TestLoadConfigKnownChats(t *testing.T) {
 	}
 }
 
-// TestLoadConfigTrustedGroups proves the new field round-trips through LoadConfig (top-level + per-group)
-// and that the source group is then a known chat.
 func TestLoadConfigTrustedGroups(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{
 		"trusted_member_group_ids": []int64{-1001163306055},
@@ -241,8 +222,6 @@ func TestLoadConfigTrustedGroups(t *testing.T) {
 	}
 }
 
-// TestLoadConfigTrustedDisable proves the nil-vs-[] distinction survives JSON: an omitted field
-// inherits the global default, while an explicit empty array disables the bypass for that group.
 func TestLoadConfigTrustedDisable(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{
 		"trusted_member_group_ids": []int64{-1001163306055},
@@ -263,7 +242,6 @@ func TestLoadConfigTrustedDisable(t *testing.T) {
 	}
 }
 
-// TestWarnLimitDefault verifies the documented default is applied when omitted.
 func TestWarnLimitDefault(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
 	if err != nil {
@@ -274,8 +252,6 @@ func TestWarnLimitDefault(t *testing.T) {
 	}
 }
 
-// TestPrivateQueryRate verifies the per-minute DM lookup limit honours the config (default 3)
-// and is per-user; guarded groups are never limited.
 func TestPrivateQueryRate(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
 	if err != nil {
@@ -296,5 +272,92 @@ func TestPrivateQueryRate(t *testing.T) {
 	}
 	if !v.queryRateOK(8) { // a different user is independent
 		t.Errorf("user 8 should be allowed")
+	}
+}
+
+func captureLoadConfigLog(t *testing.T, config map[string]any) (*Config, string, error) {
+	t.Helper()
+	var output bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(old)
+	c, err := LoadConfig(writeConfig(t, config))
+	return c, output.String(), err
+}
+
+func TestLoadConfigWarnsUnknownKeys(t *testing.T) {
+	c, output, err := captureLoadConfigLog(t, map[string]any{
+		"control_group_id": -100,
+		"timeout_second":   240,
+		"questions":        sampleQ,
+		"groups": []map[string]any{{
+			"id":           -100,
+			"verify_modes": "quiz",
+		}},
+		"feeds": []map[string]any{{
+			"chat_id":         -300,
+			"interval_second": 300,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("unknown keys must not reject the config: %v", err)
+	}
+	if c.ControlGroupID != -100 {
+		t.Errorf("ControlGroupID = %d, want -100", c.ControlGroupID)
+	}
+	for _, want := range []string{
+		`WARNING: config: unknown key "timeout_second"`,
+		`WARNING: config groups[0]: unknown key "verify_modes"`,
+		`WARNING: config feeds[0]: unknown key "interval_second"`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("startup log missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestLoadConfigWarnsAboutSharedGlobalControl(t *testing.T) {
+	tests := []struct {
+		name      string
+		controlID int64
+		wantCount int
+	}{
+		{name: "unset", wantCount: 1},
+		{name: "configured", controlID: -100, wantCount: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := map[string]any{
+				"group_ids": []int64{-100, -200},
+				"questions": sampleQ,
+			}
+			if tt.controlID != 0 {
+				config["control_group_id"] = tt.controlID
+			}
+			_, output, err := captureLoadConfigLog(t, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(output, "WARNING: control_group_id is unset"); got != tt.wantCount {
+				t.Errorf("warning count = %d, want %d:\n%s", got, tt.wantCount, output)
+			}
+		})
+	}
+}
+
+func TestControlGroupIDMustBeGuarded(t *testing.T) {
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids":        []int{-100},
+		"control_group_id": -999, // not a guarded group
+		"questions":        sampleQ,
+	})); err == nil {
+		t.Error("expected an error for a control_group_id outside the guarded groups")
+	}
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"group_ids":        []int{-100, -200},
+		"control_group_id": -200,
+		"questions":        sampleQ,
+	})); err != nil {
+		t.Errorf("a control_group_id naming a guarded group should load: %v", err)
 	}
 }

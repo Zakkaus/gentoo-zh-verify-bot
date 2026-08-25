@@ -1,11 +1,21 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+)
 
-// TestFamilyChannels verifies the per-distro channel display: a rolling/dev channel plus
-// the current stable when they differ, with the stable labelled by the highest-numbered
-// release that actually ships that version (Debian → "13"/trixie, not the higher "14"/forky
-// that carries a different version); a package at one version everywhere stays one line.
+type pkgRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f pkgRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestFamilyChannels(t *testing.T) {
 	deb := []string{"debian_"}
 	// 14/forky is testing (excluded from stable); 13/trixie is the real stable.
@@ -44,9 +54,6 @@ func TestFamilyChannels(t *testing.T) {
 	}
 }
 
-// TestVerTier verifies the /distro per-distro version preference: a real release (tier 0)
-// beats a date/CalVer (tier 1) beats a Gentoo 9999 live ebuild (tier 2), so a family shows
-// its actual packaged version rather than a live-ebuild placeholder.
 func TestVerTier(t *testing.T) {
 	for _, c := range []struct {
 		v    string
@@ -66,9 +73,6 @@ func TestVerTier(t *testing.T) {
 	}
 }
 
-// TestBetterVer checks the tier-then-value ordering used to pick each distro's shown
-// version: a real release replaces a 9999, a date replaces a 9999, and within a tier the
-// higher version wins — while a date-only project keeps its newest date.
 func TestBetterVer(t *testing.T) {
 	for _, c := range []struct {
 		cur, cand string
@@ -89,8 +93,6 @@ func TestBetterVer(t *testing.T) {
 	}
 }
 
-// TestReleaseLabel checks the repo-id → release-name annotation shown next to each
-// distro's version (rolling repos with no per-release suffix yield no label).
 func TestReleaseLabel(t *testing.T) {
 	for _, c := range []struct {
 		repo, want string
@@ -113,8 +115,6 @@ func TestReleaseLabel(t *testing.T) {
 	}
 }
 
-// TestFamOf maps Repology repo ids to the displayed family, including the multi-prefix
-// families (RHEL/EPEL) and the split openSUSE variants.
 func TestFamOf(t *testing.T) {
 	for _, c := range []struct{ repo, want string }{
 		{"gentoo", "Gentoo"},
@@ -137,8 +137,6 @@ func TestFamOf(t *testing.T) {
 	}
 }
 
-// TestBareDateSnapshot verifies a bare YYYYMMDD snapshot (e.g. Debian gcc-snapshot) is
-// treated as a date and never beats / displaces the real release.
 func TestBareDateSnapshot(t *testing.T) {
 	for _, v := range []string{"20250315", "20260327", "20210106"} {
 		if !bareDate(v) {
@@ -165,10 +163,6 @@ func TestBareDateSnapshot(t *testing.T) {
 	}
 }
 
-// TestSnapVersionAndUbuntuChannels covers the Ubuntu Snap-transitional fix: a Snap version is a
-// pseudo-version (so a real deb wins) rendered as "snap"; and with EOL/unreleased series excluded,
-// an app shipped as a Snap in current Ubuntu shows "snap" at the newest supported release instead
-// of an ancient EOL LTS deb — while a real deb in the newest release still shows normally.
 func TestSnapVersionAndUbuntuChannels(t *testing.T) {
 	for _, v := range []string{"1snap1", "2snap3", "1SNAP1", "1:1snap1-0ubuntu10"} {
 		if !snapVersion(v) {
@@ -240,10 +234,6 @@ func TestSnapVersionAndUbuntuChannels(t *testing.T) {
 	}
 }
 
-// TestGentooDistroLines checks the Gentoo amd64/~amd64 labelling for /pkgs. The regression it
-// guards: when the newest version is itself amd64-stable (stable == latest, e.g. openssh
-// 10.3_p1) it must show one "Gentoo amd64" line WITHOUT the tilde — the old code mislabeled it
-// "~amd64" because it tested the latest/testing case before the stable case.
 func TestGentooDistroLines(t *testing.T) {
 	const u = "https://packages.gentoo.org/packages/net-misc/openssh"
 
@@ -272,10 +262,6 @@ func TestGentooDistroLines(t *testing.T) {
 	}
 }
 
-// TestOverlayPickVer guards the overlay version picker: an overlay package that ships both a
-// real release and a 9999 live ebuild (e.g. dev-util/opencode-bin: 1.17.13 + 9999) must show
-// the real version regardless of which ebuild the tree walk sees first — the bug was /pkg
-// showing "~9999" instead of "~1.17.13".
 func TestOverlayPickVer(t *testing.T) {
 	if v := overlayPickVer("9999", true, "1.17.13"); v != "1.17.13" {
 		t.Errorf("9999 then 1.17.13 -> %q, want 1.17.13", v)
@@ -291,8 +277,6 @@ func TestOverlayPickVer(t *testing.T) {
 	}
 }
 
-// TestPkgRelevanceMeta checks that a real package outranks a same-name meta package, so /pkgs
-// resolves "openssh" to net-misc/openssh — not virtual/openssh (which is version 0-rN).
 func TestPkgRelevanceMeta(t *testing.T) {
 	if real, virt := pkgRelevance("net-misc/openssh", "openssh"), pkgRelevance("virtual/openssh", "openssh"); real <= virt {
 		t.Errorf("net-misc/openssh (%d) should outrank virtual/openssh (%d)", real, virt)
@@ -306,8 +290,6 @@ func TestPkgRelevanceMeta(t *testing.T) {
 	}
 }
 
-// TestRepologyQuery checks that a "cat/pkg" atom is reduced to its bare name for Repology
-// (which has no categories), while other queries pass through unchanged.
 func TestRepologyQuery(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"net-misc/openssh", "openssh"},
@@ -318,5 +300,155 @@ func TestRepologyQuery(t *testing.T) {
 		if got := repologyQuery(c.in); got != c.want {
 			t.Errorf("repologyQuery(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestFetchRepologyAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		exactRows  []repologyPkg
+		exactErr   error
+		searchRows map[string][]repologyPkg
+		searchErr  error
+		available  bool
+		wantPkgs   int
+		wantText   string
+		notWant    string
+	}{
+		{
+			name:      "exact result",
+			exactRows: []repologyPkg{{Repo: "gentoo", Version: "9.1"}},
+			available: true,
+			wantPkgs:  1,
+		},
+		{
+			name:      "answered miss",
+			exactErr:  &httpStatusError{url: "u", code: 404},
+			available: true,
+			wantText:  "没找到",
+			notWant:   "暂时无法查询",
+		},
+		{
+			name:     "rate limited",
+			exactErr: &httpStatusError{url: "u", code: 429},
+			wantText: "暂时无法查询",
+			notWant:  "没找到",
+		},
+		{
+			name:     "server failure",
+			exactErr: &httpStatusError{url: "u", code: 503},
+			wantText: "暂时无法查询",
+			notWant:  "没找到",
+		},
+		{
+			name:     "network failure",
+			exactErr: errors.New("connection reset"),
+			wantText: "暂时无法查询",
+			notWant:  "没找到",
+		},
+		{
+			name:     "outbound busy",
+			exactErr: &httpBusyError{url: "u"},
+			wantText: "暂时无法查询",
+			notWant:  "没找到",
+		},
+		{
+			name:       "search failure",
+			exactErr:   &httpStatusError{url: "u", code: 404},
+			searchErr:  &httpStatusError{url: "u", code: 503},
+			wantText:   "暂时无法查询",
+			notWant:    "没找到",
+			searchRows: map[string][]repologyPkg{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, gotPkgs, _, _, available := fetchRepologyWith(
+				context.Background(),
+				"vim",
+				func(_ context.Context, url string, dst any) error {
+					if strings.Contains(url, "/project/") {
+						*dst.(*[]repologyPkg) = tc.exactRows
+						return tc.exactErr
+					}
+					*dst.(*map[string][]repologyPkg) = tc.searchRows
+					return tc.searchErr
+				},
+			)
+			if available != tc.available || len(gotPkgs) != tc.wantPkgs {
+				t.Errorf("fetchRepologyWith() returned len=%d available=%v, want len=%d available=%v",
+					len(gotPkgs), available, tc.wantPkgs, tc.available)
+			}
+			if tc.wantText != "" {
+				got := renderRepologyLookupMiss("vim", available)
+				if !strings.Contains(got, tc.wantText) {
+					t.Errorf("renderRepologyLookupMiss() = %q, want substring %q", got, tc.wantText)
+				}
+				if strings.Contains(got, tc.notWant) {
+					t.Errorf("renderRepologyLookupMiss() = %q, unwanted substring %q", got, tc.notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchOverlayRejectsTruncatedTree(t *testing.T) {
+	tests := []struct {
+		name      string
+		truncated bool
+		wantErr   bool
+	}{
+		{name: "complete tree", wantErr: false},
+		{name: "truncated tree", truncated: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := httpClient
+			httpClient = &http.Client{Transport: pkgRoundTripper(func(*http.Request) (*http.Response, error) {
+				body := fmt.Sprintf(`{"tree":[{"path":"app-editors/demo/demo-1.2.3.ebuild","type":"blob"}],"truncated":%t}`, tt.truncated)
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}
+			t.Cleanup(func() { httpClient = oldClient })
+
+			got, err := fetchOverlay(context.Background(), overlay{name: "test", repo: "owner/repo", branch: "main"})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("fetchOverlay() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if got != nil {
+					t.Errorf("truncated fetch returned partial map %v, want nil", got)
+				}
+				return
+			}
+			if got["app-editors/demo"] != "1.2.3" {
+				t.Errorf("complete fetch = %v, want demo 1.2.3", got)
+			}
+		})
+	}
+}
+
+func TestPkgCacheFailedRefreshKeepsPreviousOverlay(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "truncated tree error", err: errors.New("tree is truncated")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := overlay{name: "test", repo: "owner/repo", branch: "main"}
+			pc := &pkgCache{
+				pkgs:      map[string]map[string]string{"test": {"app-editors/demo": "1.0"}},
+				available: map[string]bool{"test": true},
+			}
+			status := pc.refreshWith(context.Background(), []overlay{source}, func(context.Context, overlay) (map[string]string, error) {
+				return map[string]string{"app-editors/demo": "2.0"}, tt.err
+			})
+			if got := pc.pkgs["test"]["app-editors/demo"]; got != "1.0" {
+				t.Errorf("cached version = %q, want previous 1.0", got)
+			}
+			if status["test"] {
+				t.Error("failed overlay refresh is reported available")
+			}
+		})
 	}
 }

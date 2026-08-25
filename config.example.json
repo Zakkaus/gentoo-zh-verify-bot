@@ -4,6 +4,7 @@
     {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"},
     {"id": -1005556667778, "trusted_member_group_ids": [-1001234567890], "verify_mode": "quiz"}
   ],
+  "control_group_id": -1001234567890,
   "required_channel_id": 0,
   "channel_display": "@YourChannel",
   "channel_invite_url": "",

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
 
 // writeJSONFile is the single atomic-write primitive behind every persisted state file
@@ -59,9 +60,6 @@ func TestWriteJSONFileMarshalFailureKeepsPrior(t *testing.T) {
 	}
 }
 
-// TestLoadJSONFileCorruptBackup: the shared loader treats a missing file as a clean first run, loads
-// a valid file, and — the fix — renames a CORRUPT file to .corrupt before returning the error, so the
-// next save can't silently overwrite it. Covers all five state loaders that now use it.
 func TestLoadJSONFileCorruptBackup(t *testing.T) {
 	dir := t.TempDir()
 
@@ -91,6 +89,97 @@ func TestLoadJSONFileCorruptBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(bad); !os.IsNotExist(err) {
 		t.Error("the corrupt file must be renamed away from the live path (so the next save can't clobber it)")
+	}
+}
+
+func TestLoadStateReadErrorDisablesWrites(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*Verifier, string)
+		load func(*Verifier)
+		path func(*Verifier) string
+	}{
+		{name: "pending", set: func(v *Verifier, p string) { v.statePath = p }, load: func(v *Verifier) { v.load(nil) }, path: func(v *Verifier) string { return v.statePath }},
+		{name: "warns", set: func(v *Verifier, p string) { v.warnPath = p }, load: func(v *Verifier) { v.loadWarns() }, path: func(v *Verifier) string { return v.warnPath }},
+		{name: "antispam", set: func(v *Verifier, p string) { v.acPath = p }, load: func(v *Verifier) { v.loadAntispam() }, path: func(v *Verifier) string { return v.acPath }},
+		{name: "settings", set: func(v *Verifier, p string) { v.settingsPath = p }, load: func(v *Verifier) { v.loadSettings() }, path: func(v *Verifier) string { return v.settingsPath }},
+		{name: "verify failures", set: func(v *Verifier, p string) { v.vfailPath = p }, load: func(v *Verifier) { v.loadVerifyFails() }, path: func(v *Verifier) string { return v.vfailPath }},
+		{name: "heartbeat", set: func(v *Verifier, p string) { v.hbPath = p }, load: func(v *Verifier) { v.loadHeartbeat() }, path: func(v *Verifier) string { return v.hbPath }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			unreadable := t.TempDir()
+			var dst any
+			if err := loadJSONFile(unreadable, &dst); !stateReadFailed(err) {
+				t.Fatalf("loadJSONFile(%q) error = %v, want stateReadError", unreadable, err)
+			}
+			v := NewVerifier(&Config{})
+			tt.set(v, unreadable)
+			tt.load(v)
+			if got := tt.path(v); got != "" {
+				t.Errorf("write path remains %q after read failure; want disabled", got)
+			}
+		})
+	}
+}
+
+func TestSaveJSONFileOrdersSnapshotAndCommit(t *testing.T) {
+	path := t.TempDir() + "/state.json"
+	current := wjState{A: 1, B: "old"}
+	oldEntered := make(chan struct{})
+	releaseOld := make(chan struct{})
+	oldDone := make(chan struct{})
+	go func() {
+		saveJSONFile(path, func() any {
+			snapshot := current
+			close(oldEntered)
+			<-releaseOld
+			return snapshot
+		})
+		close(oldDone)
+	}()
+	select {
+	case <-oldEntered:
+	case <-time.After(time.Second):
+		t.Fatal("old snapshot did not start")
+	}
+
+	current = wjState{A: 2, B: "new"}
+	newStarted := make(chan struct{})
+	newDone := make(chan struct{})
+	go func() {
+		close(newStarted)
+		saveJSONFile(path, func() any { return current })
+		close(newDone)
+	}()
+	<-newStarted
+	newRanEarly := false
+	select {
+	case <-newDone:
+		newRanEarly = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseOld)
+	for name, done := range map[string]<-chan struct{}{"old": oldDone, "new": newDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("%s save did not finish", name)
+		}
+	}
+	if newRanEarly {
+		t.Error("newer save completed while the older snapshot was still open")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got wjState
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != current {
+		t.Errorf("persisted state = %+v, want newest %+v", got, current)
 	}
 }
 

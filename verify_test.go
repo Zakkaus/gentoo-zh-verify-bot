@@ -10,10 +10,6 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// TestJoinerLabel covers the anti-advert name-spoiler: with the spoiler ON the name is a single,
-// always-valid <tg-spoiler> entity (no nested mention link, so it can never cause an HTML parse
-// error that would break the challenge post); with it OFF a clickable mention; and a name with HTML
-// metacharacters is escaped in both modes.
 func TestJoinerLabel(t *testing.T) {
 	const evil = `繁星帮<&>"` // an advert-style name with HTML metacharacters
 	on := joinerLabel(42, evil, true)
@@ -35,7 +31,6 @@ func TestJoinerLabel(t *testing.T) {
 	}
 }
 
-// TestNameSpoilerDefaultAndToggle: a fresh Verifier defaults the spoiler ON; toggling flips it.
 func TestNameSpoilerDefaultAndToggle(t *testing.T) {
 	v := NewVerifier(&Config{})
 	if !v.nameSpoilerOn() {
@@ -51,9 +46,10 @@ func TestNameSpoilerDefaultAndToggle(t *testing.T) {
 
 // fakeVerifyBot is a verifyBot stand-in so the approve / decline / ban handler branches can be
 // exercised without a real Telegram connection; it records call counts and returns configured
-// errors for the approve and ban calls.
+// errors for those network actions.
 type fakeVerifyBot struct {
 	approveErr    error
+	declineErr    error
 	banErr        error
 	getMeErr      error
 	sendErr       error // returned by the first sendFailN SendMessage calls (markup-rejection tests)
@@ -84,7 +80,7 @@ func (b *fakeVerifyBot) ApproveChatJoinRequest(context.Context, *telego.ApproveC
 }
 func (b *fakeVerifyBot) DeclineChatJoinRequest(context.Context, *telego.DeclineChatJoinRequestParams) error {
 	b.declines++
-	return nil
+	return b.declineErr
 }
 func (b *fakeVerifyBot) BanChatMember(context.Context, *telego.BanChatMemberParams) error {
 	b.bans++
@@ -105,12 +101,93 @@ func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessagePara
 	return &telego.Message{MessageID: 1}, nil
 }
 
+type blockingTerminalBot struct {
+	*fakeVerifyBot
+	approveStarted chan struct{}
+	declineStarted chan struct{}
+	release        chan struct{}
+}
+
+func newBlockingTerminalBot() *blockingTerminalBot {
+	return &blockingTerminalBot{
+		fakeVerifyBot:  &fakeVerifyBot{},
+		approveStarted: make(chan struct{}),
+		declineStarted: make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+}
+
+func (b *blockingTerminalBot) ApproveChatJoinRequest(context.Context, *telego.ApproveChatJoinRequestParams) error {
+	close(b.approveStarted)
+	<-b.release
+	return nil
+}
+
+func (b *blockingTerminalBot) DeclineChatJoinRequest(context.Context, *telego.DeclineChatJoinRequestParams) error {
+	close(b.declineStarted)
+	<-b.release
+	return nil
+}
+
 func livePending(msgID int) *pending {
 	return &pending{nonce: "n", deadline: time.Now().Add(time.Hour), groupMsgID: msgID}
 }
 
-// TestApproveSuccess: a successful approve consumes the pending, clears the user's strikes, deletes
-// the challenge, and never bans.
+func TestOnAnswer(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	tests := []struct {
+		name        string
+		from        int64
+		data        string
+		required    bool
+		wantApprove int
+		wantDecline int
+		wantSend    int
+		wantPending bool
+		wantAlert   bool
+	}{
+		{name: "another applicant", from: 6, data: "v:-100:5:current:1", wantPending: true, wantAlert: true},
+		{name: "stale nonce", from: uid, data: "v:-100:5:stale:1", wantPending: true, wantAlert: true},
+		{name: "wrong option", from: uid, data: "v:-100:5:current:0", wantDecline: 1, wantAlert: true},
+		{name: "correct option", from: uid, data: "v:-100:5:current:1", wantApprove: 1, wantSend: 1},
+		{name: "correct option before joining channel", from: uid, data: "v:-100:5:current:1", required: true, wantPending: true, wantAlert: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{VerifyMaxFails: 3}
+			if tt.required {
+				cfg.RequiredChannelID = -400
+			}
+			v := NewVerifier(cfg)
+			key := pkey{gid: gid, uid: uid}
+			v.pend[key] = &pending{nonce: "current", correctIdx: 1, groupMsgID: 42, deadline: time.Now().Add(time.Hour)}
+			bot := newFakeMod()
+			if tt.required {
+				bot.member = &telego.ChatMemberLeft{Status: telego.MemberStatusLeft}
+			}
+			update := telego.Update{CallbackQuery: &telego.CallbackQuery{
+				ID: "answer", From: telego.User{ID: tt.from}, Data: tt.data,
+			}}
+			runFakeHandler(t, newAPITestBot(t, bot), v.onAnswer, update)
+
+			if bot.approves != tt.wantApprove || bot.declines != tt.wantDecline || bot.sends != tt.wantSend {
+				t.Errorf("actions = approve %d, decline %d, send %d; want %d, %d, %d",
+					bot.approves, bot.declines, bot.sends, tt.wantApprove, tt.wantDecline, tt.wantSend)
+			}
+			_, pending := v.pend[key]
+			if pending != tt.wantPending {
+				t.Errorf("pending remains = %v, want %v", pending, tt.wantPending)
+			}
+			if len(bot.callbackAnswers) != 1 {
+				t.Fatalf("callback answers = %d, want 1", len(bot.callbackAnswers))
+			}
+			if got := bot.callbackAnswers[0].ShowAlert; got != tt.wantAlert {
+				t.Errorf("callback show_alert = %v, want %v", got, tt.wantAlert)
+			}
+		})
+	}
+}
+
 func TestApproveSuccess(t *testing.T) {
 	v := NewVerifier(&Config{})
 	key := pkey{-100, 5}
@@ -134,8 +211,6 @@ func TestApproveSuccess(t *testing.T) {
 	}
 }
 
-// TestApproveFailureReopens: a failed approve keeps the pending retryable, re-opens it (done=false),
-// and — the v3.6.1 race guarantee — never bans the user.
 func TestApproveFailureReopens(t *testing.T) {
 	v := NewVerifier(&Config{})
 	key := pkey{-100, 5}
@@ -159,8 +234,6 @@ func TestApproveFailureReopens(t *testing.T) {
 	}
 }
 
-// TestDeclineBelowThreshold: a wrong answer below the auto-ban threshold declines and records one
-// strike, without banning.
 func TestDeclineBelowThreshold(t *testing.T) {
 	v := NewVerifier(&Config{VerifyMaxFails: 3})
 	key := pkey{-100, 5}
@@ -181,8 +254,6 @@ func TestDeclineBelowThreshold(t *testing.T) {
 	}
 }
 
-// TestDeclineAutoBan: reaching the threshold auto-bans (BanChatMember) and clears strikes on a
-// successful ban.
 func TestDeclineAutoBan(t *testing.T) {
 	v := NewVerifier(&Config{VerifyMaxFails: 1}) // the first failure trips the auto-ban
 	key := pkey{-100, 5}
@@ -200,8 +271,6 @@ func TestDeclineAutoBan(t *testing.T) {
 	}
 }
 
-// TestBanApplicant: the admin report-and-ban path declines + bans, consumes the pending, and
-// reports banned=false honestly when the ban call fails.
 func TestBanApplicant(t *testing.T) {
 	v := NewVerifier(&Config{})
 	key := pkey{-100, 5}
@@ -225,10 +294,6 @@ func TestBanApplicant(t *testing.T) {
 	}
 }
 
-// TestClaimThenExecuteApprove mirrors the onAdminAction "pass" path: claimPending() FIRST (so the
-// callback can be acknowledged before the slow approve round-trip), then executeApprove(). claim
-// must KEEP the entry (marked done, not re-claimable) so a failed approve can reopen it; a
-// successful executeApprove removes it.
 func TestClaimThenExecuteApprove(t *testing.T) {
 	v := NewVerifier(&Config{})
 	key := pkey{-100, 5}
@@ -256,8 +321,66 @@ func TestClaimThenExecuteApprove(t *testing.T) {
 	}
 }
 
-// TestConsumeThenExecuteBan mirrors the onAdminAction "ban" path: consume() (which REMOVES the
-// pending, since there is no reopen for a ban) so the callback can be acked, then executeBan().
+func TestTerminalActionBlocksReapplication(t *testing.T) {
+	tests := []struct {
+		name    string
+		action  string
+		started func(*blockingTerminalBot) <-chan struct{}
+	}{
+		{name: "approval in flight", action: "approve", started: func(b *blockingTerminalBot) <-chan struct{} { return b.approveStarted }},
+		{name: "decline in flight", action: "decline", started: func(b *blockingTerminalBot) <-chan struct{} { return b.declineStarted }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const gid, uid = int64(-100), int64(5)
+			key := pkey{gid, uid}
+			v := NewVerifier(&Config{TimeoutSeconds: 3600, VerifyMaxFails: 3})
+			old := &pending{nonce: "old", deadline: time.Now().Add(time.Hour)}
+			v.pend[key] = old
+			bot := newBlockingTerminalBot()
+			result := make(chan bool, 1)
+			go func() {
+				if tt.action == "approve" {
+					p, ok := v.claimPendingNonce(gid, uid, old.nonce)
+					result <- ok && v.executeApprove(context.Background(), bot, gid, uid, p)
+					return
+				}
+				handled, _ := v.decline(context.Background(), bot, gid, uid, old.nonce, "wrong answer")
+				result <- handled
+			}()
+			select {
+			case <-tt.started(bot):
+			case <-time.After(time.Second):
+				t.Fatal("terminal Telegram call did not start")
+			}
+
+			replacement := &pending{nonce: "replacement"}
+			if _, status := v.startPending(bot, gid, uid, replacement); status != pendingBlockedTerminal {
+				t.Fatalf("startPending status = %v, want pendingBlockedTerminal", status)
+			}
+			if v.pend[key] == replacement {
+				t.Fatal("re-application replaced a pending while its terminal action was in flight")
+			}
+
+			close(bot.release)
+			select {
+			case ok := <-result:
+				if !ok {
+					t.Fatal("terminal action did not complete")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("terminal action did not return")
+			}
+
+			next := &pending{nonce: "next"}
+			if _, status := v.startPending(bot, gid, uid, next); status != pendingStarted {
+				t.Fatalf("startPending after terminal completion = %v, want pendingStarted", status)
+			}
+			next.timer.Stop()
+		})
+	}
+}
+
 func TestConsumeThenExecuteBan(t *testing.T) {
 	v := NewVerifier(&Config{})
 	key := pkey{-100, 5}
@@ -279,8 +402,6 @@ func TestConsumeThenExecuteBan(t *testing.T) {
 	}
 }
 
-// TestAdminCacheHit verifies a fresh cached admin entry short-circuits adminStatus WITHOUT a
-// GetChatMember call — proven by passing a nil bot: if the cache is honored, bot is never touched.
 func TestAdminCacheHit(t *testing.T) {
 	v := NewVerifier(&Config{})
 	v.adminCache[pkey{-100, 7}] = time.Now().Add(adminCacheTTL)
@@ -290,9 +411,6 @@ func TestAdminCacheHit(t *testing.T) {
 	}
 }
 
-// TestFailAlertFallsBackToGroup verifies the ack-first failure notice always reaches a chat: the
-// admin-log chat when configured, otherwise the group itself — so a rare ban/approve failure is
-// never invisible when admin_log_chat_id is unset (the live config has it = 0).
 func TestFailAlertFallsBackToGroup(t *testing.T) {
 	v := NewVerifier(&Config{}) // AdminLogChatID == 0
 	fb := &fakeVerifyBot{}
@@ -307,7 +425,6 @@ func TestFailAlertFallsBackToGroup(t *testing.T) {
 	}
 }
 
-// TestPruneAdminCache verifies expired entries are dropped (keeping the admin-status cache bounded).
 func TestPruneAdminCache(t *testing.T) {
 	v := NewVerifier(&Config{})
 	now := time.Now()
@@ -322,10 +439,6 @@ func TestPruneAdminCache(t *testing.T) {
 	}
 }
 
-// TestApproveClaimBlocksTimeoutDecline guards the approve/timeout race fix: once the approve path
-// has CLAIMED a pending (marked it done before issuing the network ApproveChatJoinRequest), the
-// timeout timer's decline path (consumeNonce) must refuse to act on it — otherwise a user who
-// answered correctly right at the deadline could be struck or auto-banned.
 func TestApproveClaimBlocksTimeoutDecline(t *testing.T) {
 	v := &Verifier{pend: map[pkey]*pending{}}
 	key := pkey{gid: -100, uid: 5}
@@ -342,9 +455,6 @@ func TestApproveClaimBlocksTimeoutDecline(t *testing.T) {
 	}
 }
 
-// TestStopForShutdownFreezesPending guards the shutdown-timer race: after stopForShutdown, a timeout
-// timer that fires must NOT decline/strike/ban — consumeNonce refuses while shutting down and the
-// pending stays intact so it persists across the restart (the README guarantee).
 func TestStopForShutdownFreezesPending(t *testing.T) {
 	v := &Verifier{pend: map[pkey]*pending{}}
 	key := pkey{gid: -100, uid: 42}
@@ -368,10 +478,6 @@ func TestStopForShutdownFreezesPending(t *testing.T) {
 	}
 }
 
-// TestTrustedBypass covers tryTrustedBypass's (handled, trusted) result: a member of a trusted group
-// is approved (handled+trusted, strikes cleared); a non-member / lookup error is (false,false)
-// fail-closed; a confirmed member whose approve fails is (false,true) — confirmed-trusted so the caller
-// skips the cooldown but runs normal verification.
 func TestTrustedBypass(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
@@ -419,9 +525,6 @@ func TestTrustedBypass(t *testing.T) {
 	}
 }
 
-// TestJoinGate covers the onJoinRequest-level ordering: a confirmed trusted member takes PRIORITY over
-// the failure cooldown (approved, never declined; if its approve fails it proceeds to normal
-// verification, still not declined), while a non-member is subject to the ordinary cooldown.
 func TestJoinGate(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
@@ -477,31 +580,32 @@ func TestJoinGate(t *testing.T) {
 	}
 }
 
-// TestStrikesUser: a genuine timeout / wrong answer counts a strike, but a decline caused by OUR OWN
-// failed approve ("approve-retry") or a deadline that lapsed while the bot was down ("restart-lapsed")
-// must NOT — those aren't the user's fault.
 func TestStrikesUser(t *testing.T) {
-	for _, r := range []string{"timeout", "wrong answer", "something-else"} {
-		if !strikesUser(r) {
-			t.Errorf("%q should count a strike", r)
-		}
+	tests := []struct {
+		reason string
+		want   bool
+	}{
+		{reason: "timeout", want: true},
+		{reason: "wrong answer", want: true},
+		{reason: "something-else", want: true},
+		{reason: "approve-retry"},
+		{reason: "restart-lapsed"},
+		{reason: "recovered"},
+		{reason: "challenge-post-failed"},
 	}
-	for _, r := range []string{"approve-retry", "restart-lapsed"} {
-		if strikesUser(r) {
-			t.Errorf("%q must NOT count a strike (not the user's fault)", r)
+	for _, tt := range tests {
+		if got := strikesUser(tt.reason); got != tt.want {
+			t.Errorf("strikesUser(%q) = %v, want %v", tt.reason, got, tt.want)
 		}
 	}
 }
 
-// TestDeclineNoStrike: decline still removes the pending + declines the join request for the no-fault
-// reasons, but records NO verification strike (so a transient approve failure or a restart can't push
-// a legitimate user toward the auto-ban); a genuine timeout still strikes.
 func TestDeclineNoStrike(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
 	mkV := func() *Verifier {
 		return &Verifier{loc: time.UTC, cfg: &Config{}, pend: map[pkey]*pending{}, vfail: map[pkey]*vfailRec{}}
 	}
-	for _, reason := range []string{"approve-retry", "restart-lapsed"} {
+	for _, reason := range []string{"approve-retry", "restart-lapsed", "challenge-post-failed"} {
 		v := mkV()
 		v.pend[pkey{gid, uid}] = &pending{nonce: "n", deadline: time.Now().Add(time.Hour)}
 		fb := &fakeVerifyBot{}
@@ -525,9 +629,6 @@ func TestDeclineNoStrike(t *testing.T) {
 	}
 }
 
-// TestReopenPendingRestoresRetryable covers the failed-approve restore: reopenPending re-opens a
-// claimed pending (done=false, timer re-armed) so the applicant stays retryable, but refuses to
-// touch one that a newer request has since replaced.
 func TestReopenPendingRestoresRetryable(t *testing.T) {
 	v := &Verifier{pend: map[pkey]*pending{}}
 	key := pkey{gid: -100, uid: 5}
@@ -549,5 +650,163 @@ func TestReopenPendingRestoresRetryable(t *testing.T) {
 	v.reopenPending(nil, -100, 5, stale)
 	if !stale.done {
 		t.Error("a replaced pending must not be re-opened")
+	}
+}
+
+func TestDeclineFailureAlertsAdmins(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	v := &Verifier{
+		cfg:   &Config{AdminLogChatID: -200},
+		loc:   time.UTC,
+		pend:  map[pkey]*pending{{gid, uid}: livePending(42)},
+		vfail: map[pkey]*vfailRec{},
+	}
+	fb := &fakeVerifyBot{declineErr: errors.New("Forbidden: missing can_invite_users")}
+	handled, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")
+	if !handled || fb.declines != 1 {
+		t.Fatalf("decline result = handled %v, calls %d; want true, 1", handled, fb.declines)
+	}
+	if fb.sends != 1 || fb.lastSendChat != -200 {
+		t.Fatalf("admin alert sends/chat = %d/%d, want 1/-200", fb.sends, fb.lastSendChat)
+	}
+	if !strings.Contains(fb.lastSendText, "missing can_invite_users") {
+		t.Errorf("admin alert must name the decline failure, got %q", fb.lastSendText)
+	}
+}
+
+func TestSendQuizzesMarksPromptedOnlyAfterDelivery(t *testing.T) {
+	tests := []struct {
+		name      string
+		bot       *fakeVerifyBot
+		want      bool
+		wantSends int
+	}{
+		{name: "rich delivered", bot: &fakeVerifyBot{}, want: true, wantSends: 1},
+		{name: "simpler delivered", bot: &fakeVerifyBot{sendErr: errors.New("Bad Request: can't parse entities"), sendFailN: 1}, want: true, wantSends: 2},
+		{name: "all renderings failed", bot: &fakeVerifyBot{sendErr: errors.New("Bad Request: can't parse entities"), sendFailN: 3}, want: false, wantSends: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const gid, uid = int64(-100), int64(5)
+			v := NewVerifier(&Config{})
+			p := &pending{mode: modeKernel, lang: langZH, qText: "kernel", nonce: "n", deadline: time.Now().Add(time.Hour)}
+			v.pend[pkey{gid, uid}] = p
+			v.sendQuizzes(context.Background(), tt.bot, uid)
+			if p.prompted != tt.want {
+				t.Errorf("prompted = %v, want %v", p.prompted, tt.want)
+			}
+			if tt.bot.sends != tt.wantSends {
+				t.Errorf("SendMessage calls = %d, want %d", tt.bot.sends, tt.wantSends)
+			}
+		})
+	}
+}
+
+func TestPendingCaps(t *testing.T) {
+	tests := []struct {
+		name       string
+		fill       func(*Verifier)
+		gid        int64
+		uid        int64
+		wantStatus pendingStartStatus
+	}{
+		{name: "below caps", fill: func(*Verifier) {}, gid: -100, uid: 1, wantStatus: pendingStarted},
+		{name: "per-group cap", fill: func(v *Verifier) {
+			for i := range pendingPerGroupCap {
+				v.pend[pkey{-100, int64(i + 1)}] = &pending{}
+			}
+		}, gid: -100, uid: pendingPerGroupCap + 1, wantStatus: pendingBlockedCapacity},
+		{name: "global cap", fill: func(v *Verifier) {
+			for i := range pendingGlobalCap {
+				gid := -int64(i/pendingPerGroupCap + 1)
+				v.pend[pkey{gid, int64(i + 1)}] = &pending{}
+			}
+		}, gid: -999, uid: 1, wantStatus: pendingBlockedCapacity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := NewVerifier(&Config{TimeoutSeconds: 3600})
+			tt.fill(v)
+			p := &pending{nonce: "new"}
+			_, status := v.startPending(&fakeVerifyBot{}, tt.gid, tt.uid, p)
+			if status != tt.wantStatus {
+				t.Fatalf("startPending status = %v, want %v", status, tt.wantStatus)
+			}
+			if status == pendingStarted {
+				if p.timer == nil {
+					t.Fatal("accepted pending must have an expiry timer")
+				}
+				p.timer.Stop()
+				return
+			}
+			if p.timer != nil {
+				t.Error("rejected pending must not arm an expiry timer")
+			}
+			if _, exists := v.pend[pkey{tt.gid, tt.uid}]; exists {
+				t.Error("rejected pending must not enter the queue")
+			}
+		})
+	}
+}
+
+func TestPendingCapAlertThrottled(t *testing.T) {
+	tests := []struct {
+		name       string
+		adminLogID int64
+		groupID    int64
+		wantChatID int64
+	}{
+		{name: "configured admin log", adminLogID: -200, groupID: -100, wantChatID: -200},
+		{name: "affected group fallback", groupID: -100, wantChatID: -100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := NewVerifier(&Config{AdminLogChatID: tt.adminLogID})
+			fb := &fakeVerifyBot{}
+			v.alertPendingCap(context.Background(), fb, tt.groupID)
+			v.alertPendingCap(context.Background(), fb, -300)
+			if fb.sends != 1 {
+				t.Fatalf("two over-cap joins inside the cooldown sent %d alerts, want 1", fb.sends)
+			}
+			if fb.lastSendChat != tt.wantChatID {
+				t.Errorf("alert chat = %d, want %d", fb.lastSendChat, tt.wantChatID)
+			}
+			v.mu.Lock()
+			v.pendingCapAlertAt = time.Now().Add(-pendingCapAlertCooldown)
+			v.mu.Unlock()
+			v.alertPendingCap(context.Background(), fb, tt.groupID)
+			if fb.sends != 2 {
+				t.Errorf("an alert after the cooldown brought sends to %d, want 2", fb.sends)
+			}
+		})
+	}
+}
+
+func TestWarnCounterBound(t *testing.T) {
+	tests := []struct {
+		name         string
+		evicted      pkey
+		evictedCount int
+	}{
+		{name: "lowest count is evicted", evicted: pkey{-200, 1}, evictedCount: 1},
+		{name: "key order breaks equal-count ties", evicted: pkey{-200, 1}, evictedCount: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := NewVerifier(&Config{})
+			v.mu.Lock()
+			for i := range warnCounterMax {
+				v.warns[pkey{-100, int64(i + 1)}] = 2
+			}
+			v.warns[tt.evicted] = tt.evictedCount
+			v.mu.Unlock()
+
+			if len(v.warns) != warnCounterMax {
+				t.Fatalf("warning counters = %d, want cap %d", len(v.warns), warnCounterMax)
+			}
+			if _, ok := v.warns[tt.evicted]; ok {
+				t.Errorf("eviction candidate %v remains in warning counters", tt.evicted)
+			}
+		})
 	}
 }

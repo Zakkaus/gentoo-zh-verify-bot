@@ -14,19 +14,13 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-// repologyPkg is one repo's row from the Repology project API.
 type repologyPkg struct {
 	Repo    string `json:"repo"`
 	Version string `json:"version"`
 }
 
-// A distro family shown by /pkgs. A repo belongs to it if its id equals a prefix or starts
-// with "<prefix>_". search is a printf template (%s = url-escaped project) to the family's
-// package page. relabel (optional) maps a raw release label to a friendlier one — used to
-// turn Debian/Ubuntu version numbers into their live role (stable/testing/LTS) so the labels
-// aren't hardcoded. The RHEL ecosystem is split: RHEL (the AlmaLinux/Rocky 1:1 rebuilds =
-// the actual RHEL versions), CentOS Stream (the rolling upstream), and EPEL — kept separate
-// because they are genuinely different products with different version numbers.
+// Repo prefixes define displayed families; relabel derives live release roles.
+// RHEL rebuilds, CentOS Stream, and EPEL remain separate version channels.
 var distroFamilies = []struct {
 	label    string
 	prefixes []string
@@ -51,8 +45,7 @@ var distroFamilies = []struct {
 func famOf(repo string) string {
 	for _, f := range distroFamilies {
 		for _, p := range f.prefixes {
-			// Match the repo exactly, or as "<prefix>_<release>" — but NOT a different distro
-			// that merely starts with the same letters (e.g. archpower_* is not "arch").
+			// Require an exact prefix boundary; "archpower_*" is not Arch.
 			if repo == p || strings.HasPrefix(repo, strings.TrimRight(p, "_")+"_") {
 				return f.label
 			}
@@ -61,11 +54,7 @@ func famOf(repo string) string {
 	return ""
 }
 
-// dateSnapshot reports whether v is a YYYY-MM-DD / YYYY.MM.DD or a bare YYYYMMDD date (a git/
-// snapshot package like Debian's gcc-snapshot "20250315" rather than a release), so it isn't
-// ranked above real versions by numeric compare. betterVer only deprioritizes it when a
-// non-date version exists in the same family, so genuine calendar-versioned projects (yt-dlp,
-// etc.) still compare correctly.
+// Date-like snapshots rank below real releases but still order correctly in CalVer-only families.
 func dateSnapshot(v string) bool {
 	if bareDate(v) { // bare 8-digit YYYYMMDD, e.g. gcc-snapshot
 		return true
@@ -88,10 +77,7 @@ func dateSnapshot(v string) bool {
 	return true
 }
 
-// bareDate reports whether v is a bare 8-digit YYYYMMDD with a plausible year/month/day. A
-// distro snapshot package (gcc-snapshot ships "20250315") would otherwise be a huge integer
-// that beats the real version under numeric compare; treating it as a date deprioritizes it
-// below a real release. The month/day bounds exclude non-date 8-digit versions (e.g. 99999999).
+// Plausibility bounds keep non-date eight-digit versions out of the snapshot tier.
 func bareDate(v string) bool {
 	if len(v) != 8 {
 		return false
@@ -107,8 +93,7 @@ func bareDate(v string) bool {
 	return y >= 1990 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31
 }
 
-// allNines reports whether v is a Gentoo live ebuild version (9999 / 9999.9999 …),
-// which tracks git HEAD rather than a real release.
+// Gentoo 9999 variants track live source rather than a release.
 func allNines(v string) bool {
 	nine := false
 	for i := 0; i < len(v); i++ {
@@ -123,20 +108,13 @@ func allNines(v string) bool {
 	return nine
 }
 
-// snapTransitionalRe matches the Ubuntu Snap-transitional deb version shape — Repology reports it
-// as "1snap1", madison as "1:1snap1-0ubuntu10" — i.e. "snap" bracketed by digits. Anchoring on the
-// digit-snap-digit token (rather than a bare "snap" substring) keeps genuine versions that merely
-// contain "snap" — e.g. gcc-snapshot's "17.0.0.snapshot20260614" — from being mistaken for a stub.
+// Require digits around "snap" to avoid classifying genuine snapshot versions as transition stubs.
 var snapTransitionalRe = regexp.MustCompile(`(?i)\d+snap\d+`)
 
-// snapVersion reports whether v is an Ubuntu "Snap transitional" deb version: a stub deb that just
-// installs the Snap and carries no real upstream version. Treated as a pseudo-version so it can't
-// be ranked above a real deb (otherwise an ancient LTS's lingering deb wins), and rendered as
-// "snap" so /pkgs honestly shows the distro now ships the app as a Snap.
+// Snap transitional debs rank below real packages and render as "snap".
 func snapVersion(v string) bool { return snapTransitionalRe.MatchString(v) }
 
-// displayVer maps an internal version to its user-facing form: a Snap transitional version shows
-// as "snap" (the real, useful fact) instead of the meaningless "1snap1".
+// Transitional package versions render as "snap".
 func displayVer(v string) string {
 	if snapVersion(v) {
 		return "snap"
@@ -144,10 +122,7 @@ func displayVer(v string) string {
 	return v
 }
 
-// verTier ranks a version so a family shows its real packaged version: 0 = real release,
-// 1 = a date / CalVer (could be a snapshot OR a genuine version like yt-dlp's), 2 = a pseudo
-// version (a Gentoo 9999 live ebuild, or an Ubuntu Snap transitional deb) that tracks no real
-// release. Lower is preferred.
+// Prefer real releases, then dates, then live or transitional pseudo-versions.
 func verTier(v string) int {
 	switch {
 	case allNines(v), snapVersion(v):
@@ -159,10 +134,7 @@ func verTier(v string) int {
 	}
 }
 
-// betterVer reports whether cand should replace cur as a family's shown version: a better
-// (lower) tier wins — real release > date > 9999 live ebuild — otherwise, within the same
-// tier, the higher version (verLess) wins. So a real release isn't masked by a live ebuild,
-// but a project that only has date versions still shows its newest date.
+// Better tiers win; equal tiers use Gentoo version ordering.
 func betterVer(cur, cand string) bool {
 	if ct, nt := verTier(cur), verTier(cand); ct != nt {
 		return nt < ct
@@ -174,7 +146,6 @@ func repologyVersionsURL(proj string) string {
 	return "https://repology.org/project/" + neturl.PathEscape(proj) + "/versions"
 }
 
-// newestRow returns the highest version among rows and the repo it came from.
 func newestRow(rows []repologyPkg) (ver, repo string) {
 	for _, p := range rows {
 		if ver == "" || betterVer(ver, p.Version) {
@@ -184,8 +155,7 @@ func newestRow(rows []repologyPkg) (ver, repo string) {
 	return ver, repo
 }
 
-// rollingRelease reports whether a release label names a rolling/development channel
-// (sid, rawhide, edge, a label-less rolling repo) rather than a numbered stable release.
+// Rolling/development channels are distinct from numbered stable releases.
 func rollingRelease(label string) bool {
 	switch label {
 	case "", "unstable", "testing", "rawhide", "edge", "sid", "devel", "cauldron", "current":
@@ -196,24 +166,16 @@ func rollingRelease(label string) bool {
 
 type channelLine struct{ ver, label string }
 
-// familyChannels returns the versions to show for one distro family: the NEWEST supported numbered
-// release as the stable line, plus the rolling/dev channel above it when that's ahead (so Debian
-// shows sid AND stable, Fedora rawhide AND 44). A package at one version everywhere stays one line.
-//
-// The stable line follows the newest release, NOT the highest version across releases — otherwise
-// an old real package lingering in an older still-supported release masks the newest release's
-// actual package (e.g. Ubuntu 22.04's chromium 85 deb vs 24.04+'s Snap, or an openSUSE Leap 15.6
-// build vs the newer 16.0). isTesting (optional) excludes a pre-release/EOL/unreleased numbered
-// series so it's neither the stable line nor mistaken for current — all derived live, not by
-// "highest number".
+// Show the newest supported numbered release and a newer rolling channel.
+// Choose by release recency, not package version: an old release's higher version must not win.
+// isTesting excludes development, unreleased, or EOL numbered series.
 func familyChannels(rows []repologyPkg, prefixes []string, isTesting func(string) bool) []channelLine {
 	if len(rows) == 0 {
 		return nil
 	}
 	excluded := func(lbl string) bool { return isTesting != nil && isTesting(lbl) }
 
-	// rolling line: the newest version from a rolling/dev channel (sid, rawhide, edge, unstable, or
-	// a label-less rolling repo) — the "ahead of stable" channel shown above the stable line.
+	// Select the newest rolling version.
 	rollingVer, rollingLabel := "", ""
 	for _, p := range rows {
 		lbl := releaseLabel(p.Repo, prefixes)
@@ -225,8 +187,7 @@ func familyChannels(rows []repologyPkg, prefixes []string, isTesting func(string
 		}
 	}
 
-	// stable line: the version shipped by the NEWEST supported numbered release (skipping
-	// excluded EOL/unreleased/testing series). Within one release the better version wins.
+	// Select the newest supported numbered release, then its best version.
 	stableVer, stableLabel := "", ""
 	for _, p := range rows {
 		lbl := releaseLabel(p.Repo, prefixes)
@@ -254,18 +215,14 @@ func familyChannels(rows []repologyPkg, prefixes []string, isTesting func(string
 	}
 }
 
-// debianTesting reports whether a Debian release label is the current "testing" series
-// (forky/14 today), per the live distro-info-data status — so it isn't mistaken for stable.
+// Live distro metadata prevents Debian testing from being mislabeled stable.
 func debianTesting(label string) bool {
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
 	return relInfo.debian[label] == "testing"
 }
 
-// releaseLabel turns the Repology repo id of a family's winning version into a short
-// release name shown in parentheses — so e.g. debian_unstable -> "unstable" (sid),
-// ubuntu_25_04 -> "25.04", fedora_rawhide -> "rawhide", alpine_3_21 -> "3.21". A rolling
-// repo with no per-release suffix (arch, aur, opensuse_tumbleweed) yields "" (no label).
+// releaseLabel removes the family prefix; exact rolling repos have no label.
 func releaseLabel(repo string, prefixes []string) string {
 	s := repo
 	for _, p := range prefixes {
@@ -282,24 +239,35 @@ func releaseLabel(repo string, prefixes []string) string {
 	return strings.ReplaceAll(s, "_", ".")
 }
 
-// fetchRepology resolves a package via Repology. On an exact project match it returns that
-// project (exact=true). Otherwise it picks the closest project that is actually packaged in
-// the distros we show — ranked by distro coverage — as the result, plus a few alternatives,
-// so a near-miss / vague query still yields a real cross-distro table instead of nothing.
-func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repologyPkg, alts []string, exact bool) {
+// A Repology 404 may fall back to search; other failures remain unavailable.
+func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repologyPkg, alts []string, exact, available bool) {
+	return fetchRepologyWith(ctx, name, func(ctx context.Context, url string, dst any) error {
+		return httpGetJSON(ctx, url, nil, dst)
+	})
+}
+
+func fetchRepologyWith(
+	ctx context.Context,
+	name string,
+	getJSON func(context.Context, string, any) error,
+) (proj string, pkgs []repologyPkg, alts []string, exact, available bool) {
 	q := strings.ToLower(strings.TrimSpace(name))
 	if q == "" {
-		return "", nil, nil, false
+		return "", nil, nil, false, true
 	}
-	if err := httpGetJSON(ctx, "https://repology.org/api/v1/project/"+neturl.PathEscape(q), nil, &pkgs); err == nil && len(pkgs) > 0 {
-		return q, pkgs, nil, true
+	err := getJSON(ctx, "https://repology.org/api/v1/project/"+neturl.PathEscape(q), &pkgs)
+	if err == nil && len(pkgs) > 0 {
+		return q, pkgs, nil, true, true
+	}
+	if err != nil && httpStatusCode(err) != 404 {
+		return "", nil, nil, false, false
 	}
 	var found map[string][]repologyPkg
-	if err := httpGetJSON(ctx, "https://repology.org/api/v1/projects/?search="+neturl.QueryEscape(q), nil, &found); err != nil {
-		return "", nil, nil, false
+	if err := getJSON(ctx, "https://repology.org/api/v1/projects/?search="+neturl.QueryEscape(q), &found); err != nil {
+		return "", nil, nil, false, false
 	}
 	if p, ok := found[q]; ok { // exact name surfaced by the search
-		return q, p, nil, true
+		return q, p, nil, true, true
 	}
 	type cand struct {
 		name string
@@ -321,7 +289,7 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 		}
 	}
 	if len(cands) == 0 {
-		return "", nil, nil, false
+		return "", nil, nil, false, true
 	}
 	sort.Slice(cands, func(i, j int) bool {
 		if cands[i].fams != cands[j].fams {
@@ -332,20 +300,13 @@ func fetchRepology(ctx context.Context, name string) (proj string, pkgs []repolo
 	for i := 1; i < len(cands) && i <= 5; i++ {
 		alts = append(alts, cands[i].name)
 	}
-	return cands[0].name, found[cands[0].name], alts, false
+	return cands[0].name, found[cands[0].name], alts, false, true
 }
 
-// distroLine is one rendered row of /pkgs: a distro label, the version, an optional release
-// annotation (rel), and the link the label points to.
 type distroLine struct{ label, ver, rel, url string }
 
-// gentooDistroLines picks the Gentoo row(s) for /pkgs from packages.gentoo.org data: stable is
-// the newest amd64-stable version, latest the newest non-live version (latest >= stable, since
-// versions come newest-first). When a ~amd64 testing version sits ABOVE the newest stable
-// (latest != stable), both are shown. When the newest version is ITSELF amd64-stable
-// (stable == latest), only the stable line is shown, WITHOUT the tilde — this is the fix for
-// e.g. openssh 10.3_p1, which is stable amd64 but was mislabeled "~amd64". When there's no
-// amd64-stable at all, only the testing-only ~amd64 line is shown.
+// Show stable and newer ~amd64 separately; equal versions remain one stable line.
+// Without a stable keyword, show only ~amd64.
 func gentooDistroLines(stable, latest, url string) []distroLine {
 	switch {
 	case stable != "" && latest != "" && stable != latest:
@@ -358,7 +319,13 @@ func gentooDistroLines(stable, latest, url string) []distroLine {
 	return nil
 }
 
-// onPkgs handles /pkgs (and its alias /distro) — cross-distro package versions via Repology.
+func renderRepologyLookupMiss(name string, available bool) string {
+	if !available {
+		return fmt.Sprintf("暂时无法查询 Repology 中「%s」的跨发行版信息，请稍后重试。", name)
+	}
+	return fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name)
+}
+
 func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.queryAllowed(ctx, msg) {
@@ -374,15 +341,14 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 	hc, cancel := context.WithTimeout(c, 25*time.Second)
 	defer cancel()
 	ensureReleaseInfo(hc, time.Now()) // refresh Debian/Ubuntu stable/testing labels (cached, non-hardcoded)
-	proj, pkgs, alts, exact := fetchRepology(hc, repologyQuery(name))
+	proj, pkgs, alts, exact, repologyOK := fetchRepology(hc, repologyQuery(name))
 	esc := html.EscapeString
 	if len(pkgs) == 0 {
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, fmt.Sprintf("❓ 在 Repology 没找到和「%s」相关的跨发行版包,试试更精确的包名。", name))
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderRepologyLookupMiss(name, repologyOK))
 		return nil
 	}
 
-	// group every repo row by family, so each family can show its rolling/dev channel AND
-	// its newest stable release when their versions differ (e.g. Debian unstable vs stable).
+	// Group rows before selecting stable and rolling channels.
 	famRows := map[string][]repologyPkg{}
 	for _, p := range pkgs {
 		if fam := famOf(p.Repo); fam != "" && p.Version != "" {
@@ -390,16 +356,13 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		}
 	}
 
-	// Build the displayed lines. Gentoo is special: use the bot's own packages.gentoo.org
-	// data so amd64-stable and ~amd64 testing show on SEPARATE lines (Repology can't express
-	// Gentoo keyword status). All other families come from Repology, one line each, annotated
-	// with the release the version is from (so e.g. Debian shows it's from unstable/sid).
+	// Gentoo uses authoritative keyword data; Repology cannot distinguish stable from ~amd64.
 	var lines []distroLine
-	if atoms := searchMainTree(hc, proj); len(atoms) > 0 {
+	if atoms, _ := searchMainTree(hc, proj); len(atoms) > 0 {
 		atom := atoms[0]
 		if pkgName := atom[strings.LastIndexByte(atom, '/')+1:]; strings.EqualFold(pkgName, proj) {
 			gURL := "https://packages.gentoo.org/packages/" + atom
-			stable, latest := pkgVersion(hc, atom)
+			stable, latest, _ := pkgVersion(hc, atom)
 			lines = append(lines, gentooDistroLines(stable, latest, gURL)...)
 		}
 	}
@@ -416,9 +379,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 		if len(rows) == 0 {
 			continue
 		}
-		// Show the current stable, plus the rolling/dev channel above it when ahead (e.g.
-		// Debian sid + stable), one line each. The relabel hook turns a raw release number
-		// into its live role (Debian "13" -> "13 stable", Ubuntu "24.04" -> "24.04 LTS").
+		// Relabel raw release numbers from live distro metadata.
 		var isTesting func(string) bool
 		switch f.label {
 		case "Debian": // Debian numbers a testing series (forky/14) above stable
@@ -466,7 +427,7 @@ func (v *Verifier) onPkgs(ctx *th.Context, update telego.Update) error {
 			fmt.Fprintf(&al, "<a href=\"%s\">%s</a>", esc(repologyVersionsURL(a)), esc(a))
 		}
 		fmt.Fprintf(&plain, "\n其它匹配:%s", al.String())
-		// collapsible in rich messages so the main table stays compact
+		// Collapse alternatives so the main table stays compact.
 		fmt.Fprintf(&rich, "<details><summary>其它匹配 (%d)</summary>%s</details>", len(alts), al.String())
 	}
 	v.sendRichOrHTML(c, bot, msg.Chat.ID, msg.MessageID, rich.String(), plain.String())

@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestSettingsRoundTrip verifies a persisted /stop (verification disabled) survives a reload — the
-// point of settings.json (a maintenance pause shouldn't be undone by a restart) — that a later
-// /start round-trips back, and that with no path save/load are no-ops while the in-memory flag
-// still sets.
 func TestSettingsRoundTrip(t *testing.T) {
 	path := t.TempDir() + "/settings.json"
 
@@ -45,8 +41,6 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSettingsPersistSpoiler verifies the /spoiler toggle persists alongside enabled, and that a
-// settings.json missing the name_spoiler field keeps the seeded default (spoiler ON).
 func TestSettingsPersistSpoiler(t *testing.T) {
 	path := t.TempDir() + "/settings.json"
 
@@ -76,9 +70,6 @@ func TestSettingsPersistSpoiler(t *testing.T) {
 	}
 }
 
-// TestSettingsPersistVerifyMode verifies a /vmode switch survives a restart (an admin who moved the
-// group to kernel verification must not silently get the old quiz back after a deploy), that
-// clearing the override round-trips as "follow the config", and that a garbage value is ignored.
 func TestSettingsPersistVerifyMode(t *testing.T) {
 	path := t.TempDir() + "/settings.json"
 

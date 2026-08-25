@@ -39,8 +39,6 @@ func TestBanDurationText(t *testing.T) {
 	}
 }
 
-// TestMuteDuration verifies the /mute default (1h, from config) and that an inline duration
-// parses; mute is always timed, so 0/permanent is rejected by /mute (parseBanDuration -> 0).
 func TestMuteDuration(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{"group_ids": []int{-100}, "questions": sampleQ}))
 	if err != nil {

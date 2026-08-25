@@ -2,149 +2,140 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A lightweight Telegram **join-request verification bot** written in Go — a single static binary whose only dependency is [telego](https://github.com/mymmrac/telego).
+`gentoo-zh-verify-bot` is a Telegram join-request verification bot for Gentoo Chinese community groups that need to screen bulk spam applicants.
 
-Built for open-source community groups that get flooded with spam-bot join requests. When someone requests to join, the bot posts a verification link in the (public) group; the applicant opens the bot, answers the challenge (and optionally must have joined a channel), and only then is approved. Admins can also approve or report-and-ban an applicant with one tap. Includes light moderation commands and a Gentoo package search.
+A four-option button quiz gives a spam account a one-in-four chance when it taps at random. The default challenge therefore asks the applicant to **type the version of the Linux kernel they are running**. A hidden, applicant-specific tripwire also catches delegated LLM agents that follow its instruction instead of leaving the verification to a human.
 
-## Features
+The bot is one static Go binary, uses long polling, opens no inbound port, and has one direct dependency: [telego](https://github.com/mymmrac/telego), the Telegram Bot API binding.
 
-**Join verification** — a join request is **not** auto-approved. The bot posts an in-group message @-mentioning the applicant with a `✅ 完成验证` deep-link; the applicant answers the challenge in DM — optionally after joining a **required channel** (two-step DM prompt; private channels via `channel_invite_url`) — and only then is approved. Wrong answer / timeout declines. Each request also gets admin **👮 直接通过** / **🚫 举报并封禁** buttons.
+## Verification
 
-- **Challenge modes** (`verify_mode`, switchable live with `/vmode`):
+1. Telegram sends a join request. The bot leaves it pending and posts a `✅ 完成验证` deep link in the public group.
+2. The applicant opens the bot in DM. A trusted-group membership may bypass the challenge; an optional required-channel gate may be applied before approval. If the same applicant is pending in groups with different required channels, the DM uses the first pending group's channel.
+3. The applicant completes the configured challenge. Only then does the bot approve the request. A wrong answer or timeout declines it; admins can instead use `👮 直接通过` or `🚫 拒绝并封禁` on the group message.
 
-  | mode | the applicant must… | why |
-  | --- | --- | --- |
-  | `kernel` **(default)** | **type the version of the Linux kernel they run** (`uname -r`) | there is no button to click: a spam bot that taps at random can't produce a plausible kernel version. Any distribution's kernel is accepted — historic (`2.6.32`), current (`6.18.45`), a future major (`8.0`), and every vendor string shape: `5.14.0-570.12.1.el9_6.x86_64`, `5.15.167.4-microsoft-standard-WSL2`, and **ARM** — `6.6.51+rpt-rpi-v8` (Raspberry Pi), `5.10.110-tegra` (Jetson), `6.1.75-android14-11-g1c2d3e4f` (Android/Termux), `6.11.0-asahi-…` (Apple Silicon), `…el9.aarch64` — bare, suffixed, or inside a pasted `uname -a`. Three attempts, so a typo isn't an instant rejection. An applicant with **no Linux device** can say so — the prompt asks them to reply "我现在没有Linux设备" **plus the current minute** ("46" at 14:46; ±1 for a skewed clock, and the half-hour timezones are accepted at their own shift). A canned reply carries no clock and most LLM agents have none either, so the escape costs a script something while a person just reads their watch. It switches them to a **short-answer question** from a small pool (`fallback_questions`; "Gentoo 中文社区的官网网址是什么?" → `gentoozh.org`) — typed, no options, answerable without ever having used Linux, and the answer is printed nowhere, so offering it hands a spam operator nothing. Getting the format wrong earns one free reminder rather than a strike, and sending our own format example back verbatim is bounced once instead of accepted |
-  | `quiz` | tap the right option of a randomized (crypto-shuffled) multiple-choice question from `questions` | the original mode; keep it for a group whose members aren't all Linux users |
-  | `mixed` | one of the two, chosen at random per applicant | |
+| Mode | Applicant action | Notes |
+| --- | --- | --- |
+| `kernel` (default) | Run `uname -r` and type the result | Three attempts. An applicant without Linux can provide the current minute and receive an answer-hidden short question from `fallback_questions`. |
+| `quiz` | Tap the correct shuffled option from `questions` | Retained for groups whose applicants are not expected to have Linux. |
+| `mixed` | Complete one of the two modes, selected at random | Selected independently for each pending request. |
 
-- **Automated-agent tripwire — and a tally of which models tried.** The DM carries a canary instruction addressed to LLM agents: any assistant answering on a user's behalf is told not to answer and to reply with a per-applicant token **plus its own model name** (`AGENT-… model=gpt-5-mini`). An agent that obeys identifies itself, is declined on the spot, and its claimed model is counted in `agents.json` and shown by `/stats` (`🤖 拦截 AI 代答:12 次(gpt-5 5、claude-opus-4.5 4、unknown 3)`), with a line per catch in the admin log. The model is self-reported, so it's a usage tally, never evidence. Best-effort deterrence, **not** a security control — the typed answer, the timeout, the cooldown and the strike counter remain the real gate. The notice is sent inside a collapsed `<blockquote expandable>` (Bot API 7.4); an old client simply shows it unfolded, and if a self-hosted Bot API server rejects the entity the DM is re-sent without it, then as plain text — an applicant is never left without a question.
-- **Three locales, chosen per applicant.** Everything a joiner sees — the in-group challenge, the DM question, the follow-the-channel prompts, the result — is rendered from their Telegram interface language (`language_code`): Simplified Chinese, Traditional Chinese (`zh-TW`/`zh-HK`/`zh-Hant`), or **English** for every other language. Admin output and the admin log stay Simplified Chinese. `questions` (quiz mode) comes from your config and is **not** translated — another reason kernel mode is the default for a mixed-language group.
-- **Anti-spam:** a failed verification declines with a cooldown (`verify_retry_seconds`, 180 s); after `verify_max_fails` (3) failures within a few hours the applicant is auto-banned. Strikes persist, reset on success, and age out.
+Applicant-facing verification text follows Telegram `language_code`: Simplified Chinese, Traditional Chinese, or English. Admin output remains Simplified Chinese, and configured `questions` are used verbatim rather than translated.
 
-**Moderation** (admins, reply to a message):
+Failed verification starts the `verify_retry_seconds` cooldown. Reaching `verify_max_fails` within the strike window triggers an automatic ban; success clears the applicant's strikes. Pending state is bounded at 2,000 requests process-wide and 500 per group. At either cap, new requests remain for manual review and the admin alert is limited to once per 10 minutes.
+
+## What this repository implements
+
+The Bot API transport and types come from telego. The challenge, recovery, persistence, moderation, and Gentoo-specific interpretation below are repository code built on the standard library; external data still comes from the named upstream services. The linked files are the starting points for audit or patches.
+
+- **Kernel challenge** — [`kernel.go`](kernel.go) parses a bare release, known English lead-ins, Chinese lead-ins, WSL output, and pasted `uname -a` or `/proc/version`-style output. Its narrow ASCII context whitelist rejects unrelated dotted identifiers such as `model=GPT-5.2`. Historical bounds accept 1.0–1.3 and 2.0–2.6; the forward range accepts 3.x through 30.x, so it is not pinned to today's kernel major.
+- **AI tripwire** — [`kernel.go`](kernel.go), [`verify.go`](verify.go), and [`agents.go`](agents.go) derive the required `AGENT-… model=…` reply token from the pending request's nonce. There is no fixed token for an operator to hard-code. An exact match is declined; its self-declared model is persisted in `agents.json` and included in `/stats`. The declaration is a usage tally, not evidence, and the tripwire is deterrence rather than a security boundary.
+- **Outage recovery** — [`verify.go`](verify.go) runs a Telegram heartbeat and probes again when a timer expires. An unreachable expiry receives a new full window without a decline or strike. After a sustained outage, every live request gets a fresh deadline; recovery also re-sends the DM notice and group challenge for up to 30 applicants, with duplicate notices suppressed during flapping.
+- **State writes** — [`verify.go`](verify.go) serializes snapshot creation and commit, writes a same-directory temporary file, calls `fsync`, renames atomically, then syncs the directory. Malformed JSON is moved to `<name>.corrupt` before fresh state is created. For `pending.json`, `warns.json`, `antispam.json`, `verifyfail.json`, `settings.json`, and `heartbeat.json`, an unreadable file disables writes to that path instead of overwriting recoverable data.
+- **Gentoo semantics** — [`pkg.go`](pkg.go) compares numeric revisions and Gentoo suffixes (`-r10` sorts above `-r2`; `_alpha < _beta < _pre < _rc < release < _p`). [`use.go`](use.go) separates local/global USE flags and USE_EXPAND groups, and parses overlay `IUSE` plus `metadata.xml`. [`arm.go`](arm.go) distinguishes stable `arm64`, testing `~arm64`, no keyword, and an unavailable source. [`pkgs.go`](pkgs.go) keeps RHEL rebuilds, CentOS Stream, and EPEL separate, while [`releaseinfo.go`](releaseinfo.go) resolves Debian and Ubuntu release roles from live distro metadata rather than hard-coded release numbers.
+## Moderation
+Run these as a non-anonymous group administrator, replying to the target message.
 
 | Command | Action |
 | --- | --- |
-| `/mute [时长]` · `/unmute` | 禁言 — stays in group but can't post; timed (default 1 h, e.g. `/mute 30m`); `/unmute` lifts early |
-| `/ban` | 封禁 — remove from group; duration from `/bantime` (default permanent, or timed = rejoin after) |
-| `/sb` | 举报并封禁 — like `/ban` + delete **all** the user's messages |
-| `/warn` · `/clearwarn` | strike (auto-kick at `warn_limit`, default 3) · clear strikes |
-| `/bantime` | set the ban duration: `0`=permanent, or `7d`/`12h`/`30m` |
-| `/bc` | block channel sock-puppets + whitelist (needs privacy mode OFF; persists) |
+| `/mute [duration]` · `/unmute` | Mute for a finite duration (default 1 h, for example `/mute 30m`) or lift the mute early. |
+| `/ban` | Remove and ban; duration follows `/bantime`. Deletes only the replied-to message. |
+| `/sb` | Ban, then purge all messages from the user. |
+| `/warn` · `/clearwarn` | Add or clear a warning; `warn_limit` warnings auto-kick. |
+| `/bantime` | Set `0` for permanent or a duration such as `7d`, `12h`, or `30m`; 1–29 s becomes 30 s and more than 366 days becomes permanent. |
+| `/bc` | Block channel-identity posts and manage the whitelist. Requires BotFather privacy mode off; state persists. |
 
-**Gentoo / Linux lookups** (also work in DM, rate-limited to `private_query_per_min`/min):
+`/start`, `/stop`, `/vmode`, `/rich`, `/spoiler`, `/autodel`, `/bantime`, and `/bc` change process-global state. Set `control_group_id` to restrict them to one guarded group. `/ping`, `/stats`, and `/help` report runtime state; `/stats` includes the lifetime AI-tripwire tally alongside daily approvals and declines.
 
-| Command | Looks up |
+## Gentoo and Linux lookups
+Lookup commands also work in DM, limited by `private_query_per_min`.
+
+| Command | Result |
 | --- | --- |
-| `/pkg <name>` | Gentoo package + version (official tree + `gentoo-zh`/`guru` overlays) |
-| `/use <pkg>` | a package's USE flags + info |
-| `/bug <id>` | a Gentoo Bugzilla bug |
-| `/news [kw]` | Gentoo news items |
-| `/wiki <kw>` | Gentoo / Arch wiki (Simplified-Chinese pages first) |
-| `/bbs <kw>` | Linux forums (Arch Linux CN inline + EN forum buttons) |
-| `/pkgs <pkg>` | cross-distro versions via [Repology](https://repology.org), labelled by release; RHEL ≠ CentOS Stream ≠ EPEL |
-| `/arm <pkg>` | a Gentoo package's arm64 keyword status |
-| `/armpkgs <pkg>` | cross-distro arm64 support (Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR) |
+| `/pkg <name>` | Gentoo package and version from the official tree plus configured overlays. |
+| `/use <pkg>` | USE, USE_EXPAND, package information, and versions. |
+| `/bug <id>` | Gentoo Bugzilla issue. |
+| `/news [keyword]` | Gentoo news items. |
+| `/wiki <keyword>` | Gentoo and Arch wiki results, preferring Simplified Chinese pages. |
+| `/bbs <keyword>` | Arch Linux CN results and English forum search links. |
+| `/pkgs <pkg>` · `/distro <pkg>` | Cross-distribution versions from [Repology](https://repology.org), labelled by release role. |
+| `/arm <pkg>` | Gentoo `arm64` keyword status. |
+| `/armpkgs <pkg>` | Cross-distribution arm64 support for Gentoo, Debian, Ubuntu, Fedora, Arch ARM, and AUR. |
 
-**Auto-feed (optional)** — polls Gentoo Bugzilla + news and posts each **new** item to one or more channels (`feed` / `feeds`), each with its own language + filters; deduped, restart-safe, and **edits a bug's message in place when its state changes** — an UNCONFIRMED bug becoming CONFIRMED (plus a one-off 🔔 notification, since the original UNCONFIRMED post is silent), and on resolution 🐞→✅.
-
-**Also:** guards multiple groups; auto-leaves unauthorized chats; persists in-progress verifications across restarts; **rides out Telegram/network outages** — a heartbeat pauses verification timeouts while the bot can't reach Telegram (so nobody is declined or struck for the bot's downtime) and, on recovery, gives everyone mid-verification a fresh full window plus a re-notify (a DM and a fresh in-group challenge); bot messages auto-delete after a TTL; **hides each new member's display name behind a spoiler by default** so spam accounts can't broadcast an advert via their name (`/spoiler`, persisted); optional rich output for `/pkg` `/use` (`rich_messages` / `/rich`, off by default); `/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/vmode` `/help`.
-
-## Telegram setup
-
-1. Create a bot via [@BotFather](https://t.me/BotFather) and get its token.
-2. Add the bot to each group as an **administrator** with these rights: **Approve new members**, **Ban users**, **Delete messages**.
-3. Each group must be **public** (so pending applicants can see the verification link) and set to **"Approve new members"** (join-by-request).
-4. *(Optional channel requirement)* Add the bot to the required channel as an **administrator** (required — Telegram's `getChatMember` only reports other users' membership reliably when the bot is a channel admin), then set `required_channel_id` + `channel_display` in the config.
-
-Tip: get a chat's numeric id (the `-100…` form) by forwarding a message to [@userinfobot](https://t.me/userinfobot) / [@JsonDumpBot](https://t.me/JsonDumpBot), or read this bot's logs.
+The optional feed polls Gentoo Bugzilla and news for each `feed` or `feeds` destination. Cursors survive restarts. Bug status changes edit the original post; confirmation can emit one `🔔` notice, and resolution changes `🐞` to `✅` or `❌`.
 
 ## Configuration
 
-Token comes from the environment (never commit it):
+`BOT_TOKEN` is required and has no default. Optional `GITHUB_TOKEN` needs no scopes and raises the GitHub API allowance for overlay requests from 60/h to about 5,000/h. Optional `TELEGRAM_API_URL` selects a self-hosted Bot API server instead of Telegram's hosted API.
 
-```sh
-# /etc/gentoo-zh-verify-bot/bot.env   (chmod 600)
-BOT_TOKEN=123456:ABC-DEF...
-# optional: a GitHub token (NO scopes needed) lifts the /pkg overlay API rate
-# limit from 60/h to ~5000/h, so you can configure more overlays safely.
-GITHUB_TOKEN=ghp_xxx
-```
+All other settings are JSON. Copy [`config.example.json`](config.example.json) to `/etc/gentoo-zh-verify-bot/config.json`; changing that file currently requires a restart unless a command override is named below.
 
-Everything else lives in `config.json` (copy `config.example.json`):
+### Groups and verification
+| Key | Purpose | Default and normalization |
+| --- | --- | --- |
+| `groups` | Guarded groups and per-group overrides: `id`, `required_channel_id`, `channel_display`, `channel_invite_url`, `trusted_member_group_ids`, `questions`, `verify_mode`. | `[]`, but at least one group is required after legacy merging. IDs must be nonzero and unique. Empty fields inherit globals; explicit channel ID `0` or trusted list `[]` disables that gate for the group. |
+| `group_ids` / `group_id` | Legacy group-list and singular inputs merged into `groups`. | `[]` / `0`; duplicate legacy IDs merge with an existing group. |
+| `control_group_id` | Group allowed to run process-global commands. | `0`: admins in any guarded group may run them; multiple groups produce a startup warning. A nonzero ID outside `groups` is invalid. |
+| `required_channel_id` | Global required-channel gate. | `0`: off. |
+| `channel_display` | Global channel label or public `@handle`. | Empty. |
+| `channel_invite_url` | Global join link, required for a private channel without an `@handle`. | Empty. |
+| `trusted_member_group_ids` | Groups whose confirmed members bypass verification. An unreadable membership falls back to normal verification. | `[]`: no bypass. |
+| `known_chat_ids` | Other chats the bot may remain in; they gain no guarded, channel, or trust semantics. | `[]`. |
+| `verify_mode` | Global `kernel`, `quiz`, or `mixed` mode; per-group values and `/vmode ...|auto` may override it. | Empty becomes `kernel`; any other value is a load error. |
+| `timeout_seconds` | Verification window. | `<=0` becomes 240; 1–29 becomes 30; maximum 1,800. |
+| `required_channel_fail_open` | Result when required-channel membership cannot be read after the challenge passes. Admins are alerted in either mode. | `true`: approve; `false`: decline for retry. |
+| `verify_retry_seconds` | Cooldown after a failed verification. | `0` becomes 180; negative disables; positive unchanged. |
+| `verify_max_fails` | Failures before automatic ban. | `0` becomes 3; negative disables; positive unchanged. |
+| `fallback_questions` | Short-answer pool for applicants without Linux: `[{q,answers:[…]}]`. | `[]` selects the built-in localized pool. Each item needs a nonempty `q` and at least one nonempty whole-answer value. |
+| `questions` | Global quiz pool: `[{q,options:[…],answer}]`. | `[]` is valid only when every configured group is kernel-only. At least two options; `answer` defaults to index 0 and must be in range; `q` is used verbatim. |
 
-```json
-{
-  "groups": [
-    {"id": -1001234567890},
-    {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"}
-  ],
-  "required_channel_id": 0,
-  "channel_display": "@YourChannel",
-  "verify_mode": "kernel",
-  "timeout_seconds": 240,
-  "notify_ttl_seconds": 60,
-  "admin_log_chat_id": 0,
-  "questions": [
-    {"q": "Gentoo 官方的包管理器是?", "options": ["Portage", "apt", "pacman", "dnf"], "answer": 0}
-  ]
-}
-```
+### Moderation, messages, and runtime defaults
+| Key | Purpose | Default and normalization |
+| --- | --- | --- |
+| `notify_ttl_seconds` | Delete bot group messages after this many seconds. | `0` becomes 60; negative keeps messages; positive unchanged. |
+| `lookup_ttl_seconds` | Delete lookup commands and replies together. `/autodel` overrides until restart. | Unset becomes 180; `0` or negative disables; positive unchanged. |
+| `warn_limit` | `/warn` count before auto-kick. | `<=0` becomes 3; no maximum. |
+| `private_query_per_min` | Per-user DM lookup limit; guarded groups are unlimited. | `<=0` becomes 3; no maximum. |
+| `ban_seconds` | Default duration for `/ban`, `/sb`, and verification auto-ban. `/bantime` overrides until restart. | `<=0`: permanent; 1–29 becomes 30; more than 366 days becomes permanent. |
+| `mute_seconds` | Default `/mute` duration; mute is always timed. | `<=0` becomes 3,600; 1–29 becomes 30; more than 366 days becomes 366 days. |
+| `admin_log_chat_id` | Dedicated moderation and failed-action log. | `0`: off; no normalization. |
+| `stats_timezone` | IANA timezone for daily `/stats` reset. | Empty or invalid becomes fixed UTC+8. |
+| `rich_messages` | Initial rich output for `/pkg` and `/use`; `/rich` overrides until restart. | `false`. |
+| `private_reply` | Reply to ordinary non-command DMs outside verification. | Empty selects built-in help text. |
+| `block_channel_senders` | Initial `/bc` filter state; requires privacy mode off. | `false`; persisted `antispam.json` takes precedence. |
+| `channel_whitelist` | Initial channel-sender whitelist. | `[]`; persisted `antispam.json` takes precedence. |
 
-| key | meaning |
-| --- | --- |
-| `groups` | per-group config: `[{id, required_channel_id?, channel_display?, channel_invite_url?, trusted_member_group_ids?, questions?, verify_mode?}]`. Each optional field **falls back to the global default** below, so groups can share settings or be configured independently. A bare `group_ids` list (or singular `group_id`) is also accepted and treated as groups with no overrides |
-| `required_channel_id` | **global default** channel applicants must join; `0` disables it (override per-group in `groups`) |
-| `channel_display` | **global default** channel shown to users, e.g. `@YourChannel` |
-| `channel_invite_url` | **global default** explicit join link; required for a **private** channel (no `@handle`) |
-| `timeout_seconds` | time to finish verification (default 240, max 1800) |
-| `notify_ttl_seconds` | auto-delete the bot's group messages after N s (`0`→60, negative→never) |
-| `lookup_ttl_seconds` | auto-delete a lookup command (`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`) and its answer after N s (unset→180 = 3 min, on; `0`/negative→off). Admins toggle/adjust at runtime with `/autodel` |
-| `warn_limit` | `/warn` strikes before a user is auto-kicked (default 3) |
-| `private_query_per_min` | lookup queries a user may run per minute in a **private chat** (default 3; guarded groups are unlimited) |
-| `ban_seconds` | default ban duration for `/ban`, `/sb` and the verification auto-ban; `0` = permanent (default). Runtime-adjustable with `/bantime` |
-| `mute_seconds` | default `/mute` (禁言) duration; the user stays but can't post until it expires (default 3600 = 1h; always timed). Override per-use inline, e.g. `/mute 30m`; `/unmute` lifts early |
-| `verify_retry_seconds` | a declined applicant must wait this long before re-applying (default 180; negative = no cooldown) |
-| `verify_max_fails` | failed verifications before an applicant is auto-banned (default 3; negative = never auto-ban) |
-| `required_channel_fail_open` | when the bot can't read the required channel's membership, let verified applicants through (`true`, default) or hold them back (`false`). Admins are alerted either way |
-| `trusted_member_group_ids` | **trusted-member bypass**: an applicant who is **already a member of any of these chats** is auto-approved without a quiz (e.g. a sub-group trusting the main group's members). **Global default; per-group**: omit to inherit the global, `[]` to **disable** for that group, or list ids to override. Use real chat ids (groups are `-100…`); the bot must be in each listed chat to read membership (treated as known chats, never auto-left). A trusted member takes **priority over the failure cooldown** (they're approved + their strikes cleared even after a prior failed verify). Unlike a required channel this **fails closed** — if membership can't be confirmed the applicant just does the normal verification |
-| `admin_log_chat_id` | optional chat that receives a line per moderation / failed-approve event |
-| `overlays` | `/pkg` GitHub overlays `[{name,repo,branch}]` (default: gentoo-zh + guru) |
-| `news_url` | `/news` source index URL (default: gentoo.org news-items) |
-| `stats_timezone` | IANA tz for the daily /stats reset boundary (default: UTC+8) |
-| `rich_messages` | render `/pkg` & `/use` as Bot API 10.1 rich messages (default `false`; also toggleable in-chat via `/rich`) |
-| `user_agent` | override the outbound HTTP User-Agent (optional; default `gentoo-zh-verify-bot`) |
-| `private_reply` | the unified auto-reply for DMs outside the verify flow (empty → built-in default) |
-| `block_channel_senders` | **initial** state of the channel sock-puppet filter (runtime toggle is `/bc`, persisted; default `false`; needs privacy mode OFF). Once `antispam.json` exists it is authoritative — editing this key afterward has no effect until that file is deleted |
-| `channel_whitelist` | **initial** channel whitelist (runtime is `/bc allow` / `deny`, persisted to `antispam.json`, which then takes precedence over this key) |
-| `feed` / `feeds` | optional auto-feed — poll Gentoo Bugzilla + news and post new items to a chat. `feed` is one destination; `feeds` is an array of them (each with its own chat, language and filters). See below; omit to disable |
-| `verify_mode` | the join challenge: `kernel` (default — type your `uname -r` version), `quiz` (tap an option) or `mixed` (random per applicant). **Global default; override per-group** in `groups`. Admins switch it live with `/vmode kernel\|quiz\|mixed\|auto` (persisted; `auto` returns to this config) |
-| `fallback_questions` | override the built-in short-answer pool used when an applicant says they have no Linux installed: `[{q, answers:[…]}]`, answers matched as whole words, case-insensitively. Keep the answer **out of the question text**. Empty → the built-in localized pool |
-| `questions` | **global default** quiz pool; one is picked at random, options shuffled (override per-group in `groups`). Only needed when a group can serve a quiz — a `kernel`-only config may omit it |
+### Lookup and feed sources
+| Key | Purpose | Default and normalization |
+| --- | --- | --- |
+| `overlays` | GitHub overlays for `/pkg`: `[{name,repo,branch}]`. | `[]` selects gentoo-zh and guru. Empty `name` becomes `repo`; empty `branch` becomes `master`; `repo` must be `owner/name`; effective names must be unique. |
+| `news_url` | Gentoo news index. | Empty becomes `https://www.gentoo.org/support/news-items/`. |
+| `user_agent` | Outbound HTTP User-Agent. | Empty becomes `gentoo-zh-verify-bot`. |
+| `feed` / `feeds` | One destination or an array of destinations. | Absent or `[]`: off. Duplicate nonzero `chat_id` entries after the first are ignored. |
 
-The optional **`feed`** object — or **`feeds`**, an array of these objects for several destinations (all served by one shared fetch per cycle). Omit both to disable:
+| Feed key | Purpose | Default and normalization |
+| --- | --- | --- |
+| `chat_id` | Destination channel or group; the bot needs permission to post. | `0`: disabled. |
+| `lang` | Bug field labels. | `en` selects English; empty or any other value selects Chinese. |
+| `interval_seconds` | Poll interval. | `<=0` becomes 300; 1–59 becomes 60; no maximum. |
+| `bugs` / `news` | Enable new Bugzilla issues and news items independently. | Unset becomes `true`. |
+| `bug_product` / `bug_component` | Optional Bugzilla filters. | Empty matches all. |
+| `silent_bugs` | Silence notifications for bug posts. | `true` silences all; unset or `false` silences only UNCONFIRMED bugs and permits the one-time confirmation notice. |
 
-| `feed` key | meaning |
-| --- | --- |
-| `chat_id` | channel/group to post to (`0`/absent disables; the bot must be an admin there with post rights) |
-| `lang` | bug field labels: `zh` (default) or `en` |
-| `interval_seconds` | poll interval (default 300, min 60) |
-| `bugs` | post new Bugzilla bugs (default `true`) |
-| `news` | post new news items (default `true`) |
-| `bug_product` | only post bugs in this Bugzilla product, e.g. `"Gentoo Security"` (empty = all) |
-| `bug_component` | only post bugs in this component, e.g. `"Vulnerabilities"` (empty = all) |
-| `silent_bugs` | `true` forces every bug silent. When unset, **UNCONFIRMED bugs post silently** (a fresh report may be a false alarm) and confirmed bugs post with a notification; when a silent UNCONFIRMED bug later becomes CONFIRMED, a one-off 🔔 notice is sent (suppressed when `silent_bugs` is `true`) |
+Unknown JSON keys are ignored but logged as `WARNING: config: unknown key ...`. Treat that warning as a spelling error and correct the file.
 
-## Build & run
+## Operations
 
-Requires **Go 1.26.6+** (matches `go.mod`; the 1.26.6 toolchain carries security fixes).
+### Telegram prerequisites
+1. Create the bot with [@BotFather](https://t.me/BotFather).
+2. Add it as an administrator to every guarded **public** group. Enable **Approve new members**, **Ban users**, and **Delete messages**, and enable join requests for the group.
+3. For a required channel, add the bot there as an administrator so `getChatMember` can reliably read other users' membership. Configure an `@handle` or `channel_invite_url` that applicants can open.
+4. BotFather privacy mode may remain on unless `/bc` must inspect channel-identity posts.
 
-> **Install:** grab a prebuilt static `linux-amd64`/`arm64` binary (with `SHA256SUMS`) from the
-> [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) page, or build from source
-> below. Note that `go install …@v3.x` does **not** work (the module path has no `/vN` major-version
-> suffix, by design — this is a binary, not an imported library); clone + `go build`, or use a
-> release binary.
+A numeric chat ID uses the `-100…` form. Forward a message to [@userinfobot](https://t.me/userinfobot) or [@JsonDumpBot](https://t.me/JsonDumpBot), or read the startup log.
+
+### Build and install
+Requires **Go 1.26.7+**, matching `go.mod`. Prebuilt static `linux-amd64` and `arm64` binaries plus `SHA256SUMS` are available from [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases). `go install …@v3.x` is not supported because the module path intentionally has no `/vN` suffix; use a release binary or clone and build.
 
 ```sh
 CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .
@@ -154,29 +145,34 @@ sudo systemctl enable --now gentoo-zh-verify-bot
 journalctl -fu gentoo-zh-verify-bot
 ```
 
-Uses long polling — no inbound port or reverse proxy needed.
+The supplied unit reads `/etc/gentoo-zh-verify-bot/bot.env` and `config.json`, runs with `DynamicUser=`, and creates `/var/lib/gentoo-zh-verify-bot` through `StateDirectory=`. Long polling needs outbound HTTPS only; no listener or reverse proxy is required.
 
-## Notes / limitations
+### State and restarts
+When `$STATE_DIRECTORY` is unset, all state is memory-only and the bot logs a warning. The supplied unit sets it. Keep the directory private to the service user.
 
-- **State persistence.** Run under systemd (`StateDirectory=` sets `$STATE_DIRECTORY`), the bot persists the state below and reloads it on restart; with `STATE_DIRECTORY` unset, **nothing** is persisted — everything is in-memory only and lost on restart (a warning is logged). The state directory must be **private to the bot's service user** and not writable by untrusted users (the unit's `StateDirectory=` + `DynamicUser=` ensure this).
+| File in `$STATE_DIRECTORY` | Survives restart |
+| --- | --- |
+| `pending.json` | In-progress verification, attempts, nonce, question, and deadline. Timers are re-armed. |
+| `warns.json` | Per-user `/warn` counts. |
+| `antispam.json` | `/bc` state and channel whitelist. |
+| `verifyfail.json` | Verification strikes and cooldowns. |
+| `settings.json` | `/start`/`stop`, `/spoiler`, and `/vmode` state. |
+| `heartbeat.json` | Last successful Telegram contact for restart recovery. |
+| `agents.json` | Lifetime tripwire total and self-declared model counts. |
+| `feed-<chat_id>.json` | Feed cursors and tracked bug message IDs. |
 
-  | Persisted (`$STATE_DIRECTORY/…`) | What |
-  | --- | --- |
-  | `pending.json` | in-progress verifications (timers re-armed on restart) |
-  | `warns.json` | per-user `/warn` strike counters |
-  | `antispam.json` | `/bc` channel sock-puppet state + whitelist |
-  | `verifyfail.json` | verification failure strikes / cooldowns |
-  | `feed-<chat_id>.json` | feed dedup cursors + tracked bug message IDs |
-  | `settings.json` | verification enabled/paused (`/start` · `/stop`), the name-spoiler toggle (`/spoiler`) and the challenge mode (`/vmode`) — all survive a restart |
-  | `heartbeat.json` | last time the bot reached Telegram, so a restart can tell a long outage from a quick redeploy |
-  | `agents.json` | how many LLM agents tripped the verification tripwire, per claimed model (shown by `/stats`) |
+Daily `/stats`, `/rich`, `/autodel`, and `/bantime` overrides, rate-limit windows, and lookup/news/package caches reset on restart.
 
-  **Not** persisted (reset on restart): daily `/stats`; the `/rich`, `/autodel` and `/bantime` runtime overrides; and the lookup / news / package caches.
-- The verification link relies on each group being **public**.
-- Admin commands must be sent **non-anonymously** — an anonymous-admin post appears as the group, not a user, so it won't pass the admin check.
-- Multi-group with **different** required channels: the DM follow-prompt covers the first pending group's channel — sharing one channel across groups is smoothest.
-- The **join-verification** path speaks Simplified Chinese, Traditional Chinese and English, picked from the applicant's Telegram `language_code` (`i18n.go`). Everything else — moderation replies, `/help`, the admin log, the lookup commands — is **Simplified Chinese** (this bot targets the Gentoo zh community); to localize those, edit the string literals in the `.go` sources (mainly `verify.go`, `admin.go`, `commands.go`). Quiz `questions` are used verbatim from your config, in whatever language you wrote them.
+### Failure behavior
+| Failure | Bot behavior | Operator action |
+| --- | --- | --- |
+| Missing or invalid config, missing `BOT_TOKEN`, or Telegram unreachable during mandatory startup calls | Startup exits nonzero; systemd retries under `Restart=on-failure`. | Read the first fatal journal line, fix the file/token/network, then restart. |
+| Telegram becomes unreachable while running | Long polling retries. Verification expiries are deferred without declines or strikes; recovery grants fresh windows and bounded re-notification. | No applicant cleanup is required. Investigate the network if heartbeat warnings continue. |
+| `ERROR state load <path>: ...; writes disabled until restart` | Core state using that path remains in memory and does not persist. The file is left for recovery. | Stop the service immediately, inspect or restore the file, fix ownership and permissions, then restart. Waiting does not re-enable writes. |
+| A package or distribution source does not answer | `/pkg`, `/use`, `/arm`, `/pkgs`, and `/armpkgs` distinguish “not found” from unavailable data and label partial results. Feed fetch failures leave cursors unchanged for the next poll. | Check the named source; do not interpret unavailable or partial output as absence. |
+| Required-channel membership cannot be read | The bot alerts admins. After a passed challenge, default `required_channel_fail_open: true` approves; `false` declines for retry. | Restore the bot as channel administrator; choose fail-open or fail-closed explicitly if the default is unsuitable. |
+| Startup reports `bot is NOT admin`, `CANNOT read membership`, or a later action reports missing permission | The named verification, moderation, or channel check did not run as intended. Failed approval is kept retryable; failed decline remains for manual review; failed ban requires manual action. | Restore the permission named in the log and manually resolve any request identified there. |
+| Feed target is unreachable or lacks post rights | Startup warns; transient send failures do not advance past an undelivered item. | Correct `chat_id`, add the bot, and grant channel post rights. |
 
 ## License
-
 MIT — see [LICENSE](LICENSE).

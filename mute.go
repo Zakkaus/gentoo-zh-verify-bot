@@ -12,9 +12,7 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// applyMute restricts uid in gid from sending anything until now+secs; Telegram automatically
-// lifts the restriction when it expires (so there's no separate unmute to schedule). An empty
-// ChatPermissions{} means every "can send …" flag is false — a full mute. secs must be > 0.
+// Empty permissions fully mute; Telegram lifts the restriction at UntilDate.
 func (v *Verifier) applyMute(c context.Context, bot modBot, gid, uid int64, secs int) error {
 	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{
 		ChatID:      tu.ID(gid),
@@ -24,29 +22,42 @@ func (v *Verifier) applyMute(c context.Context, bot modBot, gid, uid int64, secs
 	})
 }
 
-// applyUnmute lifts a mute early by restoring the member to the GROUP's own default permissions
-// (so a restrictive group isn't over-granted) — fetched via GetChat. restoredDefault reports
-// whether those defaults were actually read; if GetChat fails it falls back to a permissive set
-// (the common case where members post freely) and returns restoredDefault=false so the caller can
-// say so honestly rather than silently over-granting in a restrictive group.
-func (v *Verifier) applyUnmute(c context.Context, bot modBot, gid, uid int64) (restoredDefault bool, err error) {
-	perms := telego.ChatPermissions{
-		CanSendMessages: telego.ToPtr(true), CanSendAudios: telego.ToPtr(true), CanSendDocuments: telego.ToPtr(true),
-		CanSendPhotos: telego.ToPtr(true), CanSendVideos: telego.ToPtr(true), CanSendVideoNotes: telego.ToPtr(true),
-		CanSendVoiceNotes: telego.ToPtr(true), CanSendPolls: telego.ToPtr(true), CanSendOtherMessages: telego.ToPtr(true),
-		CanAddWebPagePreviews: telego.ToPtr(true), CanInviteUsers: telego.ToPtr(true),
+func unrestrictedChatPermissions() telego.ChatPermissions {
+	allowed := true
+	return telego.ChatPermissions{
+		CanSendMessages:       &allowed,
+		CanSendAudios:         &allowed,
+		CanSendDocuments:      &allowed,
+		CanSendPhotos:         &allowed,
+		CanSendVideos:         &allowed,
+		CanSendVideoNotes:     &allowed,
+		CanSendVoiceNotes:     &allowed,
+		CanSendPolls:          &allowed,
+		CanSendOtherMessages:  &allowed,
+		CanAddWebPagePreviews: &allowed,
+		CanReactToMessages:    &allowed,
+		CanEditTag:            &allowed,
+		CanChangeInfo:         &allowed,
+		CanInviteUsers:        &allowed,
+		CanPinMessages:        &allowed,
+		CanManageTopics:       &allowed,
 	}
-	if chat, gerr := bot.GetChat(c, &telego.GetChatParams{ChatID: tu.ID(gid)}); gerr == nil && chat != nil && chat.Permissions != nil {
-		perms = *chat.Permissions // restore the group's default policy, not a blanket allow
-		restoredDefault = true
-	}
-	return restoredDefault, bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{ChatID: tu.ID(gid), UserID: uid, Permissions: perms})
 }
 
-// onMute handles /mute [时长] — reply to a message; mute the sender (禁言: stays in the group
-// but can't post), delete that message. No arg => the configured default (mute_seconds, 1h);
-// an inline duration (e.g. /mute 30m, /mute 2h) overrides it. Always timed (no permanent mute);
-// Telegram auto-lifts it on expiry, and /unmute lifts it early.
+// Group defaults preserve local policy; the explicit full set keeps unmute independent of GetChat.
+func (v *Verifier) applyUnmute(c context.Context, bot modBot, gid, uid int64) error {
+	permissions := unrestrictedChatPermissions()
+	if chat, err := bot.GetChat(c, &telego.GetChatParams{ChatID: tu.ID(gid)}); err == nil && chat != nil && chat.Permissions != nil {
+		permissions = *chat.Permissions
+	}
+	return bot.RestrictChatMember(c, &telego.RestrictChatMemberParams{
+		ChatID:      tu.ID(gid),
+		UserID:      uid,
+		Permissions: permissions,
+	})
+}
+
+// /mute is always timed; an inline duration overrides the configured default.
 func (v *Verifier) onMute(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -72,9 +83,7 @@ func (v *Verifier) onMute(ctx *th.Context, update telego.Update) error {
 		}
 		secs = s
 	}
-	// Apply the restriction FIRST; only delete the offending message if it succeeded — so a
-	// permission failure leaves both the message and the un-muted user intact (the "禁言失败"
-	// notice then matches reality) rather than deleting a message while the user stays unmuted.
+	// Delete the offending message only after the restriction succeeds.
 	if err := v.applyMute(c, bot, gid, target.ID, secs); err != nil {
 		log.Printf("/mute user=%d in %d: %v", target.ID, gid, err)
 		v.notify(c, bot, gid, "❌ 禁言失败:bot 可能缺少「封禁/限制成员」权限。")
@@ -91,7 +100,6 @@ func (v *Verifier) onMute(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-// onUnmute handles /unmute — reply to a member; lift their mute early (restore posting).
 func (v *Verifier) onUnmute(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -108,18 +116,12 @@ func (v *Verifier) onUnmute(ctx *th.Context, update telego.Update) error {
 	if target == nil {
 		return nil
 	}
-	restoredDefault, err := v.applyUnmute(c, bot, gid, target.ID)
-	if err != nil {
+	if err := v.applyUnmute(c, bot, gid, target.ID); err != nil {
 		log.Printf("/unmute user=%d in %d: %v", target.ID, gid, err)
 		v.notify(c, bot, gid, "❌ 解除禁言失败:bot 可能缺少「封禁/限制成员」权限。")
 		return nil
 	}
-	notice := fmt.Sprintf("🔊 已解除 %s(id %d)的禁言。操作人 %s。", displayName(target), target.ID, displayName(msg.From))
-	if !restoredDefault { // GetChat failed — we applied a generic allow, which may exceed a restrictive group's default
-		notice += "\n⚠️ 暂时无法读取本群默认权限,已按通用发言权限解除禁言;若本群有特殊发言限制,请手动核对该成员权限。"
-		log.Printf("/unmute group=%d: GetChat default perms unavailable; applied permissive fallback", gid)
-	}
-	v.notify(c, bot, gid, notice)
+	v.notify(c, bot, gid, fmt.Sprintf("🔊 已解除 %s(id %d)的禁言。操作人 %s。", displayName(target), target.ID, displayName(msg.From)))
 	log.Printf("/unmute by admin=%d target=%d group=%d", msg.From.ID, target.ID, gid)
 	return nil
 }

@@ -12,26 +12,35 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// adminCacheTTL is how long a confirmed admin status is reused before re-checking with Telegram.
-// Only ADMINS are cached, so a freshly-promoted admin works immediately (a non-admin always
-// re-checks); the only staleness window is a just-demoted admin still acting for up to this long.
+// Only positive admin status is cached; destructive paths always recheck Telegram.
 const (
-	adminCacheTTL = 60 * time.Second
-	adminCacheMax = 4096 // safety cap on adminCache size (admins are few; bounds the map like the other per-user maps)
+	adminCacheTTL   = 30 * time.Second
+	adminCacheMax   = 4096
+	cleanupTimerMax = 256
 )
 
-// pruneAdminCacheLocked drops expired entries from adminCache. Caller holds adminMu.
+// Caller holds adminMu. Expired entries go first; the oldest live lookup is evicted at capacity.
 func (v *Verifier) pruneAdminCacheLocked(now time.Time) {
 	for k, exp := range v.adminCache {
-		if now.After(exp) {
+		if !now.Before(exp) {
 			delete(v.adminCache, k)
 		}
 	}
+	for len(v.adminCache) > adminCacheMax {
+		var victim pkey
+		var victimExpiry time.Time
+		found := false
+		for key, expiry := range v.adminCache {
+			if !found || expiry.Before(victimExpiry) ||
+				expiry.Equal(victimExpiry) && (key.gid < victim.gid || key.gid == victim.gid && key.uid < victim.uid) {
+				victim, victimExpiry, found = key, expiry, true
+			}
+		}
+		delete(v.adminCache, victim)
+	}
 }
 
-// adminStatus returns whether userID is an admin/creator of chatID, surfacing any API error so
-// callers can fail-closed where it matters. A confirmed admin is cached for adminCacheTTL so the
-// hot path (admin buttons, moderation commands) skips a ~0.5s GetChatMember round-trip on repeat use.
+// Never cache non-admin status, so promotions take effect immediately.
 func (v *Verifier) adminStatus(c context.Context, bot modBot, chatID, userID int64) (bool, error) {
 	key := pkey{chatID, userID}
 	v.adminMu.Lock()
@@ -40,28 +49,38 @@ func (v *Verifier) adminStatus(c context.Context, bot modBot, chatID, userID int
 	if cached && time.Now().Before(exp) {
 		return true, nil
 	}
-	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(chatID), UserID: userID})
+	return v.fetchAdminStatus(c, bot, key)
+}
+
+// Destructive actions ignore cached positives and fail closed on lookup errors.
+func (v *Verifier) adminStatusFresh(c context.Context, bot modBot, chatID, userID int64) (bool, error) {
+	return v.fetchAdminStatus(c, bot, pkey{chatID, userID})
+}
+
+func (v *Verifier) fetchAdminStatus(c context.Context, bot modBot, key pkey) (bool, error) {
+	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(key.gid), UserID: key.uid})
 	if err != nil {
 		return false, err
 	}
 	s := cm.MemberStatus()
 	isAdmin := s == "creator" || s == "administrator"
+	v.adminMu.Lock()
 	if isAdmin {
-		v.adminMu.Lock()
 		now := time.Now()
 		v.adminCache[key] = now.Add(adminCacheTTL)
-		if len(v.adminCache) > adminCacheMax { // bound the map (only admins are cached, so rarely hit)
+		if len(v.adminCache) > adminCacheMax {
 			v.pruneAdminCacheLocked(now)
 		}
-		v.adminMu.Unlock()
+	} else {
+		delete(v.adminCache, key)
 	}
+	v.adminMu.Unlock()
 	return isAdmin, nil
 }
 
-// isGroupAdmin is the fail-safe form (error => not admin), suitable for checking
-// whether the COMMAND INVOKER is allowed (denying on error is safe).
+// Moderation and approval require a fresh, successful admin lookup.
 func (v *Verifier) isGroupAdmin(c context.Context, bot modBot, chatID, userID int64) bool {
-	ok, err := v.adminStatus(c, bot, chatID, userID)
+	ok, err := v.adminStatusFresh(c, bot, chatID, userID)
 	if err != nil {
 		log.Printf("isGroupAdmin getChatMember chat=%d user=%d: %v", chatID, userID, err)
 		return false
@@ -69,9 +88,16 @@ func (v *Verifier) isGroupAdmin(c context.Context, bot modBot, chatID, userID in
 	return ok
 }
 
-// missingModRights returns the moderation rights the bot still lacks as a group admin: approving
-// join requests needs can_invite_users, banning needs can_restrict_members, deleting needs
-// can_delete_messages. The owner (ChatMemberOwner) implicitly has every right, so nothing is missing.
+func (v *Verifier) isGroupAdminCached(c context.Context, bot modBot, chatID, userID int64) bool {
+	ok, err := v.adminStatus(c, bot, chatID, userID)
+	if err != nil {
+		log.Printf("isGroupAdminCached getChatMember chat=%d user=%d: %v", chatID, userID, err)
+		return false
+	}
+	return ok
+}
+
+// Owners implicitly have all rights; administrators are checked per capability.
 func missingModRights(cm telego.ChatMember) []string {
 	adm, ok := cm.(*telego.ChatMemberAdministrator)
 	if !ok {
@@ -90,10 +116,7 @@ func missingModRights(cm telego.ChatMember) []string {
 	return miss
 }
 
-// logGroupAdmin logs (non-fatally) whether the bot is an admin in each guarded group, so
-// a group it hasn't been granted admin in yet is visible in the logs rather than silently
-// inert. Telegram only delivers join requests to admins, so a non-admin group is harmless
-// — the bot just can't verify there until granted admin. Safe to run in the background.
+// Startup preflight exposes missing group permissions without making startup fatal.
 func (v *Verifier) logGroupAdmin(c context.Context, bot modBot, selfID int64) {
 	for i := range v.cfg.Groups {
 		gid := v.cfg.Groups[i].ID
@@ -113,8 +136,7 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot modBot, selfID int64) {
 			log.Printf("group %d: bot is NOT admin — join verification inactive until it's granted admin (approve members / ban / delete)", gid)
 		}
 	}
-	// Probe each distinct required channel: if the bot can't read its own membership there,
-	// the follow-gate can't be enforced (applicants would be wrongly blocked) — surface it now.
+	// An unreadable required channel makes its membership gate unenforceable.
 	seen := map[int64]bool{}
 	for i := range v.cfg.Groups {
 		rc := v.cfg.requiredChannel(v.cfg.Groups[i].ID)
@@ -128,8 +150,7 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot modBot, selfID int64) {
 			log.Printf("required channel %d: bot can read membership ✓", rc)
 		}
 	}
-	// Probe each distinct trusted-member source group: if the bot can't read its membership there,
-	// the bypass can't be applied (applicants just fall back to verifying) — surface it now.
+	// An unreadable trusted group disables only its bypass.
 	trusted := append([]int64{}, v.cfg.TrustedMemberGroupIDs...)
 	for i := range v.cfg.Groups {
 		trusted = append(trusted, v.cfg.Groups[i].TrustedMemberGroupIDs...)
@@ -147,7 +168,18 @@ func (v *Verifier) logGroupAdmin(c context.Context, bot modBot, selfID int64) {
 	}
 }
 
-// notify sends a transient message to chatID and auto-deletes it after NotifyTTLSeconds.
+func (v *Verifier) reserveCleanupTimer() bool {
+	for {
+		n := v.cleanupTimers.Load()
+		if n >= cleanupTimerMax {
+			return false
+		}
+		if v.cleanupTimers.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
 func (v *Verifier) notify(c context.Context, bot modBot, chatID int64, text string) {
 	m, err := bot.SendMessage(c, tu.Message(tu.ID(chatID), text))
 	if err != nil || m == nil {
@@ -157,8 +189,12 @@ func (v *Verifier) notify(c context.Context, bot modBot, chatID int64, text stri
 	if ttl < 0 {
 		return
 	}
+	if !v.reserveCleanupTimer() {
+		return
+	}
 	msgID := m.MessageID
 	time.AfterFunc(time.Duration(ttl)*time.Second, func() {
+		defer v.cleanupTimers.Add(-1)
 		_ = bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: msgID})
 	})
 }
@@ -170,13 +206,8 @@ func (v *Verifier) onBan(ctx *th.Context, update telego.Update) error {
 	return v.moderate(ctx, update, "/ban")
 }
 
-// moderate implements the two reply-to-a-message moderation commands; both ban the user for
-// the configured duration (banDuration / /bantime; 0 = permanent) and log to the admin chat:
-//   - /sb  = 封禁并清空 (ban + purge): deletes ALL of the user's messages in the group
-//     (revoke_messages) — for spam cleanup — then bans.
-//   - /ban = 封禁 (ban): deletes only the replied-to message, then bans.
-//
-// Admin-only; any guarded group.
+// /sb bans and purges all messages; /ban deletes only the replied message.
+// Both require a fresh admin check and use the configured ban duration.
 func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -194,9 +225,7 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 	if target == nil {
 		return nil
 	}
-	// Ban FIRST; only delete the replied message once the ban succeeded — so a permission
-	// failure doesn't delete the offending message while leaving the user un-banned. (/sb's
-	// RevokeMessages=true already purges all the user's messages as part of the ban.)
+	// Ban before deleting, so a permission failure leaves evidence and the user unchanged.
 	secs := v.banDuration()
 	revoke := cmd == "/sb"
 	if err := v.applyBan(c, bot, gid, target.ID, secs, revoke); err != nil {
@@ -208,7 +237,7 @@ func (v *Verifier) moderate(ctx *th.Context, update telego.Update, cmd string) e
 	_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.ReplyToMessage.MessageID})
 	verb := "封禁"
 	if cmd == "/sb" {
-		verb = "封禁并清空(已清除其全部消息)" // /sb is the ban-and-purge variant + message purge
+		verb = "封禁并清空(已清除其全部消息)"
 	}
 	action := fmt.Sprintf("已%s(%s)", verb, banDurationText(secs))
 

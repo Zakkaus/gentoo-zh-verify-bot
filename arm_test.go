@@ -1,10 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
-// TestArm64Keywords verifies the arm64 keyword scan picks the newest arm64-stable and the
-// newest ~arm64 (testing) version, skips 9999 live ebuilds, and reports empty for both
-// when the package isn't keyworded on arm64 at all.
 func TestArm64Keywords(t *testing.T) {
 	// firefox-like: a newer testing version above an older stable one.
 	stable, testing := arm64Keywords([]pkgVersionJSON{
@@ -28,5 +29,53 @@ func TestArm64Keywords(t *testing.T) {
 		{Version: "2.0", Keywords: []string{"~arm64"}},
 	}); s != "" || tt != "2.0" {
 		t.Errorf("testing-only: got (stable=%q testing=%q), want (\"\", 2.0)", s, tt)
+	}
+}
+
+func TestLookupArmAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		atoms     []string
+		available bool
+		want      string
+		notWant   string
+		wantHTML  bool
+	}{
+		{
+			name:    "search unavailable",
+			want:    "暂时无法查询 Gentoo 官方树",
+			notWant: "没找到",
+		},
+		{
+			name:      "answered miss",
+			available: true,
+			want:      "官方树里没找到",
+			notWant:   "暂时无法查询",
+		},
+		{
+			name:      "package found",
+			atoms:     []string{"www-client/firefox"},
+			available: true,
+			want:      "稳定(arm64):140.12.0",
+			wantHTML:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, useHTML := lookupArm(
+				context.Background(),
+				"firefox",
+				func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available },
+				func(context.Context, string) (string, string, bool) { return "140.12.0", "", true },
+			)
+			if useHTML != tc.wantHTML {
+				t.Errorf("lookupArm() useHTML = %v, want %v", useHTML, tc.wantHTML)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("lookupArm() = %q, want substring %q", got, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("lookupArm() = %q, unwanted substring %q", got, tc.notWant)
+			}
+		})
 	}
 }

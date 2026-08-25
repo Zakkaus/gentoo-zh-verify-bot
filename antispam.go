@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -11,35 +12,77 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-// antispamState is the persisted form of the channel-sock-puppet filter's runtime state:
-// the on/off toggle (/bc) and the channel whitelist (/bc allow|deny). It is seeded from
-// config (block_channel_senders + channel_whitelist) and persisted to antispam.json so
-// runtime changes survive restarts. The live state is Verifier.{acOn,acWhite}, guarded by acMu.
+// antispamState persists the /bc toggle and whitelist.
 type antispamState struct {
 	Enabled   bool    `json:"enabled"`
 	Whitelist []int64 `json:"whitelist"`
 }
 
-// loadAntispam overrides the config-seeded state with antispam.json when it exists.
-//
-// PRECEDENCE: config's block_channel_senders / channel_whitelist are only the INITIAL
-// seed (applied in NewVerifier). Once antispam.json exists (after the first /bc command),
-// it is authoritative and fully replaces that seed — so editing those config keys later
-// has NO effect until antispam.json is deleted. This keeps runtime /bc changes from being
-// silently reverted on restart. Documented in the README config table.
+// Oldest-added entries are evicted first; repeated allows retain their original position.
+const channelWhitelistMax = 4096
+
+// Caller holds acMu, or initialization has not published the verifier yet.
+func (v *Verifier) addChannelWhiteLocked(id int64) {
+	if v.acWhite == nil {
+		v.acWhite = make(map[int64]bool)
+	}
+	if v.acWhite[id] {
+		return
+	}
+	for len(v.acWhite) >= channelWhitelistMax {
+		if len(v.acWhiteOrder) == 0 {
+			var victim int64
+			first := true
+			for candidate := range v.acWhite {
+				if first || candidate < victim {
+					victim, first = candidate, false
+				}
+			}
+			delete(v.acWhite, victim)
+			break
+		}
+		victim := v.acWhiteOrder[0]
+		v.acWhiteOrder = v.acWhiteOrder[1:]
+		if v.acWhite[victim] {
+			delete(v.acWhite, victim)
+			break
+		}
+	}
+	v.acWhite[id] = true
+	v.acWhiteOrder = append(v.acWhiteOrder, id)
+}
+
+// Caller holds acMu.
+func (v *Verifier) removeChannelWhiteLocked(id int64) {
+	delete(v.acWhite, id)
+	for i, existing := range v.acWhiteOrder {
+		if existing == id {
+			copy(v.acWhiteOrder[i:], v.acWhiteOrder[i+1:])
+			v.acWhiteOrder = v.acWhiteOrder[:len(v.acWhiteOrder)-1]
+			return
+		}
+	}
+}
+
+// Persisted /bc state replaces the config seed after the first runtime change.
+// Delete antispam.json before expecting later config edits to take effect.
 func (v *Verifier) loadAntispam() {
 	if v.acPath == "" {
 		return
 	}
 	var st antispamState
 	if err := loadJSONFile(v.acPath, &st); err != nil {
-		return // corrupt file backed up to .corrupt; start empty
+		if stateReadFailed(err) {
+			v.acPath = ""
+		}
+		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
 	}
 	v.acMu.Lock()
 	v.acOn = st.Enabled
 	v.acWhite = map[int64]bool{}
+	v.acWhiteOrder = nil
 	for _, id := range st.Whitelist {
-		v.acWhite[id] = true
+		v.addChannelWhiteLocked(id)
 	}
 	v.acMu.Unlock()
 }
@@ -48,13 +91,16 @@ func (v *Verifier) saveAntispam() {
 	if v.acPath == "" {
 		return
 	}
-	v.acMu.RLock()
-	st := antispamState{Enabled: v.acOn, Whitelist: make([]int64, 0, len(v.acWhite))}
-	for id := range v.acWhite {
-		st.Whitelist = append(st.Whitelist, id)
-	}
-	v.acMu.RUnlock()
-	writeJSONFile(v.acPath, st)
+	saveJSONFile(v.acPath, func() any {
+		v.acMu.RLock()
+		defer v.acMu.RUnlock()
+		st := antispamState{Enabled: v.acOn, Whitelist: make([]int64, 0, len(v.acWhite))}
+		for id := range v.acWhite {
+			st.Whitelist = append(st.Whitelist, id)
+		}
+		sort.Slice(st.Whitelist, func(i, j int) bool { return st.Whitelist[i] < st.Whitelist[j] })
+		return st
+	})
 }
 
 func (v *Verifier) antispamEnabled() bool {
@@ -81,21 +127,16 @@ func (v *Verifier) toggleAntispam() bool {
 func (v *Verifier) setChannelWhite(id int64, allow bool) {
 	v.acMu.Lock()
 	if allow {
-		v.acWhite[id] = true
+		v.addChannelWhiteLocked(id)
 	} else {
-		delete(v.acWhite, id)
+		v.removeChannelWhiteLocked(id)
 	}
 	v.acMu.Unlock()
 	v.saveAntispam()
 }
 
-// antispam is middleware that drops "channel sock-puppet" posts — a message sent in a
-// guarded group on behalf of a channel that is NOT the group itself (anonymous group
-// admins), the linked discussion channel (automatic forwards), a configured chat, or a
-// whitelisted channel. Such a post is deleted and the channel is banned from posting.
-//
-// Toggle with /bc; off until then. Requires the bot's privacy mode OFF (BotFather) so it
-// actually receives these messages — otherwise it never sees them.
+// antispam drops posts sent on behalf of an untrusted channel.
+// BotFather privacy mode must be off or Telegram will not deliver these messages.
 func (v *Verifier) antispam(ctx *th.Context, update telego.Update) error {
 	if msg := update.Message; v.antispamEnabled() && msg != nil && v.cfg.IsGroup(msg.Chat.ID) {
 		if sc := msg.SenderChat; sc != nil &&
@@ -113,21 +154,17 @@ func (v *Verifier) antispam(ctx *th.Context, update telego.Update) error {
 			}
 			if banned {
 				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除消息并封禁以频道身份发言的「%s」(id %d,群 %d)。如属误封,用 /bc allow %d 解除封禁并加入白名单。", sc.Title, sc.ID, msg.Chat.ID, sc.ID))
-			} else { // honest feedback: don't claim a ban the API rejected
+			} else {
 				v.adminAlert(c, bot, fmt.Sprintf("🛡 已删除「%s」以频道身份发送的消息,但封禁失败(bot 可能缺权限),请手动封禁。(id %d,群 %d)", sc.Title, sc.ID, msg.Chat.ID))
 			}
 			log.Printf("antispam: channel sender %d (%q) in group %d deleted, banned=%v", sc.ID, sc.Title, msg.Chat.ID, banned)
-			return nil // blocked — don't run the normal handlers
+			return nil // Do not run normal handlers for blocked posts.
 		}
 	}
 	return ctx.Next(update)
 }
 
-// parseChannelID accepts a channel id in either the Bot API form (-1001234567890) or the bare
-// internal form (1234567890 — e.g. copied from a t.me/c/<id>/… link without the -100 prefix) and
-// returns the canonical SenderChat.ID (-100…) form Telegram actually reports for a channel, so
-// /bc allow|deny works with whichever form the admin pastes. A value already in -100… form is used
-// as-is. Returns false for non-numeric / overflowing input.
+// parseChannelID canonicalizes both Bot API -100 IDs and bare t.me/c IDs.
 func parseChannelID(s string) (int64, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -140,8 +177,7 @@ func parseChannelID(s string) (int64, bool) {
 	if id < 0 {
 		return id, true // already a chat id (-100… Bot API form)
 	}
-	// A bare positive internal id -> prepend the supergroup/channel "-100" prefix; Telegram's
-	// SenderChat.ID for a channel is always the decimal "-100" concatenated with the internal id.
+	// SenderChat.ID prefixes a channel's bare internal ID with "-100".
 	full, err := strconv.ParseInt("-100"+s, 10, 64)
 	if err != nil { // an absurdly long input overflows int64
 		return 0, false
@@ -149,11 +185,6 @@ func parseChannelID(s string) (int64, bool) {
 	return full, true
 }
 
-// onBc handles /bc — toggle the channel-sock-puppet filter, or manage its whitelist.
-//
-//	/bc              toggle on/off
-//	/bc allow <id>   whitelist a channel + un-ban it in this group
-//	/bc deny  <id>   remove a channel from the whitelist
 func (v *Verifier) onBc(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -165,11 +196,18 @@ func (v *Verifier) onBc(ctx *th.Context, update telego.Update) error {
 	defer func() {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
-	if !v.isGroupAdmin(c, bot, gid, msg.From.ID) {
+	fields := strings.Fields(commandArg(msg.Text))
+	isAllow := len(fields) >= 2 && fields[0] == "allow"
+	if !isAllow {
+		if allowed, refusal := v.controlGroupGate(gid); !allowed {
+			v.notify(c, bot, gid, refusal)
+			return nil
+		}
+	}
+	if !v.isGroupAdminCached(c, bot, gid, msg.From.ID) {
 		v.notify(c, bot, gid, "⛔ /bc 只能由群管理员使用。")
 		return nil
 	}
-	fields := strings.Fields(commandArg(msg.Text))
 	switch {
 	case len(fields) == 0:
 		if v.toggleAntispam() {
@@ -185,11 +223,17 @@ func (v *Verifier) onBc(ctx *th.Context, update telego.Update) error {
 		}
 		if fields[0] == "allow" {
 			v.setChannelWhite(id, true)
-			if err := bot.UnbanChatSenderChat(c, &telego.UnbanChatSenderChatParams{ChatID: tu.ID(gid), SenderChatID: id}); err != nil {
-				log.Printf("/bc allow: unban sender_chat %d in %d: %v", id, gid, err)
-				v.notify(c, bot, gid, fmt.Sprintf("✅ 频道 %d 已加入白名单,但本群解封失败(bot 可能缺权限);若它仍被封请手动解封。", id))
+			failed := make([]string, 0)
+			for _, groupID := range v.cfg.GroupIDs {
+				if err := bot.UnbanChatSenderChat(c, &telego.UnbanChatSenderChatParams{ChatID: tu.ID(groupID), SenderChatID: id}); err != nil {
+					log.Printf("/bc allow: unban sender_chat %d in %d: %v", id, groupID, err)
+					failed = append(failed, strconv.FormatInt(groupID, 10))
+				}
+			}
+			if len(failed) > 0 {
+				v.notify(c, bot, gid, fmt.Sprintf("✅ 频道 %d 已加入白名单,但以下群解封失败:%s。请确认机器人具有「封禁用户」权限后手动解封。", id, strings.Join(failed, ",")))
 			} else {
-				v.notify(c, bot, gid, fmt.Sprintf("✅ 频道 %d 已加入白名单,并在本群解封。", id))
+				v.notify(c, bot, gid, fmt.Sprintf("✅ 频道 %d 已加入白名单,并在所有受保护群中解封。", id))
 			}
 		} else {
 			v.setChannelWhite(id, false)

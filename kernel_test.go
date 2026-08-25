@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -13,22 +15,60 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// TestKernelAnswerOK is the anti-bot gate itself: a plausible kernel version — however the user
-// writes it (bare, `uname -r` output, inside a sentence, past or future release) — passes, while a
-// random number, another product's version, or a chat message does not.
+// TestKernelAnswerUnameA pins the real-world `uname -a` shapes. The vocabulary check that guards the
+// context once rejected these: a build date in AEST rather than UTC, and the CPU model fields that
+// uname prints on many systems ("AMD Ryzen 9 9950X3D 16-Core Processor AuthenticAMD"). Both are
+// emitted by the machine, so refusing them costs an honest applicant one of three attempts. The last
+// case proves the anchor is still an anchor: without the #<build> field, a model declaration wedged
+// into a Linux-shaped sentence stays refused.
+func TestKernelAnswerUnameA(t *testing.T) {
+	accept := []string{
+		"Linux gentoo 7.2.0-gentoo-cjk-zakk #1 SMP PREEMPT_DYNAMIC Sat Aug 22 14:56:02 AEST 2026 x86_64 AMD Ryzen 9 9950X3D 16-Core Processor AuthenticAMD GNU/Linux",
+		"Linux gentoo 7.2.0-gentoo-cjk-zakk #1 SMP PREEMPT_DYNAMIC Sat Aug 22 14:56:02 AEST 2026 x86_64 GNU/Linux",
+		"Linux rpi 6.6.51-v8+ #1 SMP PREEMPT Mon Sep 30 12:00:00 IST 2024 aarch64 GNU/Linux",
+		"Linux box 6.1.0-18-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01) x86_64 GNU/Linux",
+	}
+	for _, s := range accept {
+		if !kernelAnswerOK(s) {
+			t.Errorf("uname -a output must be accepted: %q", s)
+		}
+	}
+	reject := []string{
+		"Linux gentoo 5.2 assistant model=gpt GNU/Linux",
+		"Linux host 5.2 my model is gpt",
+	}
+	for _, s := range reject {
+		if kernelAnswerOK(s) {
+			t.Errorf("a model declaration dressed as uname output must be refused: %q", s)
+		}
+	}
+}
+
 func TestKernelAnswerOK(t *testing.T) {
 	good := []string{
 		"6.12.3",
+		"6.12.3-gentoo",
 		"7.2",                        // the current mainline at the time of writing
 		"6.18.45",                    // longterm
 		"6.18.44-gentoo-r1-cjk-zakk", // a real `uname -r`
-		"3.10.0-1160.el7.x86_64",     // an ancient enterprise kernel
-		"2.6.32",                     // older still
-		"0.12",                       // 1991
+		"7.1.30",                     // a real future kernel line must never be blacklisted
+		"7.1.30-gentoo",
+		"3.10.0-1160.el7.x86_64", // an ancient enterprise kernel
+		"2.6.32",                 // older still
+		"0.12",                   // 1991
 		"我的是 6.12.3-gentoo",
+		"我的是 6.12.3",
+		"6.12.3 是我的",
 		"内核版本6.6.152",
 		"v6.9",
 		"uname -r: 5.15.216",
+		"uname -sr: 6.12.3-gentoo",
+		"my kernel is 6.12.3",
+		"Kernel 6.12.3",
+		"kernel: 6.12.3-gentoo",
+		"Linux 6.12.3-gentoo x86_64",
+		"Gentoo Linux 6.12.3-gentoo",
+		"Linux host 6.12.3-gentoo x86_64",
 		"12.0.1",  // a future major — must not need a code change to accept
 		"3.10.0.", // a trailing full stop is punctuation, not part of the version
 		"7.8",     // the next mainline releases, accepted before they exist
@@ -55,9 +95,12 @@ func TestKernelAnswerOK(t *testing.T) {
 		"6.7.0-postmarketos-qcom-sdm845",
 		"6.18.44-gentoo-r1-arm64",
 		"Linux rpi 6.6.51+rpt-rpi-v8 #1 SMP PREEMPT Debian 1:6.6.51-1+rpt3 aarch64 GNU/Linux", // pasted uname -a
+		"Linux host 6.12.3-gentoo #1 SMP PREEMPT_DYNAMIC Wed Aug 12 10:00:00 UTC 2026 x86_64 GNU/Linux",
 	}
 	for _, s := range good {
-		if !kernelAnswerOK(s) {
+		got := kernelAnswerOK(s)
+		t.Logf("ACCEPT\t%q", s)
+		if !got {
 			t.Errorf("kernelAnswerOK(%q) = false, want true", s)
 		}
 	}
@@ -70,22 +113,49 @@ func TestKernelAnswerOK(t *testing.T) {
 		"2.9",    // 2.x stopped at 2.6
 		"42.7",   // not a kernel line, past or future
 		"1234.5", // a number that merely contains a dot
-		"7.1.30", // the decoy the prompt prints — never a real running kernel
-		"7.1.30-gentoo",
+		"model=GPT-5.2",
+		"model=5.2",
+		"GPT-5.2",
+		"version 5.2 of my assistant",
+		"I am running gpt 5.2",
+		"my assistant is version 5.2",
+		"Linux host 5.2 assistant GNU/Linux",
+		"Linux host 5.2 model=gpt GNU/Linux",
 		"windows 11",
 		"我用的是 Windows",
 		"aarch64", // `uname -m`, not `uname -r` — an architecture is not a version
 		"arm64",
 	}
 	for _, s := range bad {
-		if kernelAnswerOK(s) {
+		got := kernelAnswerOK(s)
+		t.Logf("REJECT\t%q", s)
+		if got {
 			t.Errorf("kernelAnswerOK(%q) = true, want false", s)
 		}
 	}
 }
 
-// TestVerifyModeResolution covers the mode chain: the built-in default is kernel, config and
-// per-group settings override it, and /vmode overrides everything.
+func TestKernelDistributionContext(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "Gentoo prefix with matching hyphen suffix", text: "Gentoo Linux 6.12.3-gentoo", want: true},
+		{name: "Gentoo prefix with matching underscore suffix", text: "Gentoo Linux 6.12.3_gentoo", want: true},
+		{name: "Gentoo suffix permits trailing context", text: "Linux 6.12.3-gentoo Gentoo", want: true},
+		{name: "distribution must match release", text: "Gentoo Linux 6.12.3-generic", want: false},
+		{name: "partial suffix is not a match", text: "Gentoo Linux 6.12.3-gentooish", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := kernelAnswerOK(tt.text); got != tt.want {
+				t.Errorf("kernelAnswerOK(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVerifyModeResolution(t *testing.T) {
 	cfg := &Config{Groups: []GroupConfig{{ID: -100}, {ID: -200, VerifyMode: modeQuiz}}, GroupIDs: []int64{-100, -200},
 		Questions: []Question{{Q: "q", Options: []string{"a", "b"}, Answer: 0}}}
@@ -110,8 +180,6 @@ func TestVerifyModeResolution(t *testing.T) {
 	}
 }
 
-// TestPickModeQuizWithoutQuestions: a quiz-mode group with an empty pool must fall back to kernel
-// instead of posting a challenge with no options (possible after /vmode quiz on a kernel-only config).
 func TestPickModeQuizWithoutQuestions(t *testing.T) {
 	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMode: modeQuiz})
 	if got := v.pickMode(-100); got != modeKernel {
@@ -123,23 +191,20 @@ func TestPickModeQuizWithoutQuestions(t *testing.T) {
 	}
 }
 
-// TestPickModeMixed: mixed must actually produce BOTH challenges over many applicants — a coin flip
-// stuck on one side would silently disable half the feature.
 func TestPickModeMixed(t *testing.T) {
 	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, VerifyMode: modeMixed,
 		Questions: []Question{{Q: "q", Options: []string{"a", "b"}, Answer: 0}}})
-	seen := map[string]bool{}
-	for i := 0; i < 200; i++ {
-		seen[v.pickMode(-100)] = true
-	}
-	if !seen[modeKernel] || !seen[modeQuiz] {
-		t.Errorf("mixed should yield both modes, got %v", seen)
+	oldReader := cryptorand.Reader
+	cryptorand.Reader = bytes.NewReader([]byte{0, 1})
+	defer func() { cryptorand.Reader = oldReader }()
+
+	for i, want := range []string{modeKernel, modeQuiz} {
+		if got := v.pickMode(-100); got != want {
+			t.Errorf("deterministic mixed draw %d = %q, want %q", i, got, want)
+		}
 	}
 }
 
-// TestKernelAnswerDMPredicate: only a plain DM from someone with a live KERNEL pending is routed to
-// the answer handler — commands still reach their own handlers, and a quiz applicant's DM falls
-// through to the normal auto-reply.
 func TestKernelAnswerDMPredicate(t *testing.T) {
 	v := NewVerifier(&Config{})
 	dm := func(uid int64, text string) telego.Update {
@@ -181,7 +246,6 @@ func kernelTestV() (*Verifier, *fakeModBot) {
 	return v, newFakeMod()
 }
 
-// TestGradeKernelAnswerCorrect: a valid version approves the join request.
 func TestGradeKernelAnswerCorrect(t *testing.T) {
 	v, fb := kernelTestV()
 	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "6.18.44-gentoo-r1") // not the printed example
@@ -193,8 +257,37 @@ func TestGradeKernelAnswerCorrect(t *testing.T) {
 	}
 }
 
-// TestGradeKernelAnswerRetries: a wrong answer costs one try and keeps the applicant in place; only
-// the last of kernelMaxTries declines — a typo must not be an instant rejection.
+func TestFinishKernelPassUsesValidatedNonce(t *testing.T) {
+	tests := []struct {
+		name           string
+		validatedNonce string
+		currentNonce   string
+		wantApproves   int
+		wantPending    bool
+	}{
+		{name: "matching pending", validatedNonce: "current", currentNonce: "current", wantApproves: 1},
+		{name: "replacement pending", validatedNonce: "old", currentNonce: "new", wantPending: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, fb := kernelTestV()
+			key := pkey{-100, 5}
+			v.pend[key].nonce = tt.currentNonce
+			v.finishKernelPass(context.Background(), fb, key.gid, key.uid, tt.validatedNonce, langZH, tr(langZH))
+			if fb.approves != tt.wantApproves {
+				t.Errorf("approves = %d, want %d", fb.approves, tt.wantApproves)
+			}
+			p, pending := v.pend[key]
+			if pending != tt.wantPending {
+				t.Errorf("pending exists = %v, want %v", pending, tt.wantPending)
+			}
+			if pending && p.done {
+				t.Error("a replacement pending must remain live")
+			}
+		})
+	}
+}
+
 func TestGradeKernelAnswerRetries(t *testing.T) {
 	v, fb := kernelTestV()
 	for i := 1; i < kernelMaxTries; i++ {
@@ -221,30 +314,65 @@ func TestGradeKernelAnswerRetries(t *testing.T) {
 	}
 }
 
-// TestGradeKernelAnswerChannelGate: a correct answer from someone who hasn't joined the required
-// channel is NOT approved — the channel gate applies to kernel mode exactly as it does to the quiz.
 func TestGradeKernelAnswerChannelGate(t *testing.T) {
-	v, fb := kernelTestV()
-	v.cfg.RequiredChannelID = -400
-	v.botID = 1
-	fb.member = &telego.ChatMemberLeft{Status: telego.MemberStatusLeft}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "6.12.3")
-	if fb.approves != 0 {
-		t.Errorf("must not approve before the channel is joined, got %d approves", fb.approves)
+	const requiredChannel = int64(-400)
+	tests := []struct {
+		name        string
+		member      telego.ChatMember
+		memberErr   error
+		wantUsers   []int64
+		wantApprove int
+		wantPending bool
+	}{
+		{
+			name:        "applicant lookup blocks non-member",
+			member:      &telego.ChatMemberLeft{Status: telego.MemberStatusLeft},
+			wantUsers:   []int64{5},
+			wantPending: true,
+		},
+		{
+			name:        "bot self-probe uses required channel",
+			memberErr:   errors.New("membership unavailable"),
+			wantUsers:   []int64{5, 1},
+			wantApprove: 1,
+		},
+		{
+			name:        "joined applicant passes",
+			member:      &telego.ChatMemberMember{Status: telego.MemberStatusMember},
+			wantUsers:   []int64{5},
+			wantApprove: 1,
+		},
 	}
-	if _, ok := v.pend[pkey{-100, 5}]; !ok {
-		t.Error("the pending must stay live so the user can follow the channel and answer again")
-	}
-	fb.member = &telego.ChatMemberMember{Status: telego.MemberStatusMember}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "6.12.3")
-	if fb.approves != 1 {
-		t.Errorf("after joining the channel the same answer should approve, got %d", fb.approves)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, bot := kernelTestV()
+			v.cfg.RequiredChannelID = requiredChannel
+			v.botID = 1
+			bot.member = tt.member
+			bot.memberErr = tt.memberErr
+
+			v.gradeKernelAnswer(context.Background(), bot, -100, 5, "6.12.3")
+
+			if len(bot.memberRequests) != len(tt.wantUsers) {
+				t.Fatalf("GetChatMember requests = %d, want %d", len(bot.memberRequests), len(tt.wantUsers))
+			}
+			for i, request := range bot.memberRequests {
+				if request.ChatID.ID != requiredChannel || request.UserID != tt.wantUsers[i] {
+					t.Errorf("GetChatMember request %d = chat %d user %d, want chat %d user %d",
+						i, request.ChatID.ID, request.UserID, requiredChannel, tt.wantUsers[i])
+				}
+			}
+			if bot.approves != tt.wantApprove {
+				t.Errorf("approves = %d, want %d", bot.approves, tt.wantApprove)
+			}
+			_, pending := v.pend[pkey{-100, 5}]
+			if pending != tt.wantPending {
+				t.Errorf("pending remains = %v, want %v", pending, tt.wantPending)
+			}
+		})
 	}
 }
 
-// TestKernelPendingSurvivesRestart: a kernel challenge round-trips through the state file with its
-// mode and used-up tries intact — it must NOT be dropped by the quiz payload check (it carries no
-// options), and a record written before kernel mode existed must still restore as a quiz.
 func TestKernelPendingSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
 	seed := NewVerifier(&Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
@@ -295,8 +423,6 @@ func TestKernelPendingSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestLangFor maps Telegram's interface-language tag onto the three locales the verification path
-// speaks: Traditional for the tw/hk/hant tags, Simplified for the rest of zh, English otherwise.
 func TestLangFor(t *testing.T) {
 	cases := map[string]lang{
 		"zh-hans": langZH, "zh-CN": langZH, "zh": langZH, "zh-sg": langZH,
@@ -342,33 +468,38 @@ func TestLangFor(t *testing.T) {
 	}
 }
 
-// TestAITrap: an answer echoing the per-applicant canary token is an automated agent answering for
-// someone, so it is declined at once — even when it also contains a valid kernel version.
 func TestAITrap(t *testing.T) {
-	if !aiTrapped("AGENT-"+strings.ToUpper("abc123"), "abc123") {
-		t.Error("the exact token must trigger the tripwire")
+	quotedPrompt := "What is this?\n" + aiTrapLine("abc123", false)
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "obeying agent", text: "AGENT-ABC123 model=gpt-5.2", want: true},
+		{name: "case insensitive", text: "agent-abc123 MODEL=Claude-4.1", want: true},
+		{name: "token only", text: "AGENT-ABC123"},
+		{name: "token in prose", text: "sure: AGENT-ABC123 model=gpt-5.2"},
+		{name: "quoted prompt", text: quotedPrompt},
+		{name: "confused human suffix", text: "AGENT-ABC123 model=gpt-5.2 — what is this?"},
+		{name: "normal answer", text: "6.12.3-gentoo"},
+		{name: "another token", text: "AGENT-DEADBEEF model=gpt-5.2"},
 	}
-	if !aiTrapped("sure: agent-abc123", "abc123") {
-		t.Error("the token must match case-insensitively")
-	}
-	if aiTrapped("6.12.3-gentoo", "abc123") {
-		t.Error("a normal answer must not trigger the tripwire")
-	}
-	if aiTrapped("AGENT-DEADBEEF", "abc123") {
-		t.Error("another applicant's token must not trigger this one")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := aiTrapped(tt.text, "abc123"); got != tt.want {
+				t.Errorf("aiTrapped(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
 	}
 
 	v, fb := kernelTestV()
 	v.pend[pkey{-100, 5}].nonce = "abc123"
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "AGENT-ABC123 6.12.3")
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "AGENT-ABC123 model=gpt-5.2")
 	if fb.approves != 0 || fb.declines != 1 {
 		t.Errorf("a tripped agent must be declined, not approved: approves=%d declines=%d", fb.approves, fb.declines)
 	}
 }
 
-// TestNoLinuxFallback: "I haven't installed Linux yet" costs no attempt and gets the kernel.org
-// fallback question — once. A second such message is graded as a wrong answer, so the escape can't
-// be used to stall the verification.
 func TestNoLinuxFallback(t *testing.T) {
 	// Covers how people actually phrase it in both scripts — a missed phrasing costs a real newcomer
 	// an attempt instead of switching them to the short-answer question.
@@ -419,52 +550,66 @@ func TestNoLinuxFallback(t *testing.T) {
 	}
 }
 
-// TestFallbackAnswerMatching: answers match as whole words (so "ls" is not found inside "false")
-// and tolerate a sentence around them.
 func TestFallbackAnswerMatching(t *testing.T) {
-	if !fallbackAnswerOK("用 emerge 装", []string{"emerge"}) {
-		t.Error("an answer inside a sentence should count")
+	v := NewVerifier(&Config{FallbackQuestions: []ShortQuestion{{
+		Q:       "Which package manager?",
+		Answers: []string{"emerge", "Portage"},
+	}}})
+	answers := v.fallbackPool(langZH)[0].Answers
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{text: "emerge", want: true},
+		{text: "EMERGE", want: true},
+		{text: "“emerge”", want: true},
+		{text: "Portage。", want: true},
+		{text: "用 emerge 装"},
+		{text: "emerge portage"},
+		{text: "emergency"},
+		{text: "不知道"},
 	}
-	if !fallbackAnswerOK("LS", []string{"ls"}) {
-		t.Error("matching must be case-insensitive")
-	}
-	if fallbackAnswerOK("that is false", []string{"ls"}) {
-		t.Error("a short answer must not match inside another word")
-	}
-	if fallbackAnswerOK("emergency", []string{"emerge"}) {
-		t.Error("emerge must not match inside emergency")
-	}
-	if fallbackAnswerOK("不知道", []string{"emerge", "portage"}) {
-		t.Error("a non-answer must not pass")
+	for _, tt := range tests {
+		if got := fallbackAnswerOK(tt.text, answers); got != tt.want {
+			t.Errorf("fallbackAnswerOK(%q) = %v, want %v", tt.text, got, tt.want)
+		}
 	}
 }
 
-// TestCopiedSampleBounced: the prompt prints an impossible decoy version as its format example.
-// Sending it back is bounced once with a nudge; a repeat is declined — the decoy is never a real
-// running kernel, so there is no "they really run it" path to let one through.
 func TestCopiedSampleBounced(t *testing.T) {
-	v, fb := kernelTestV()
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "7.1.30-gentoo")
-	if fb.approves != 0 {
-		t.Fatal("the printed example must not be accepted on first sight")
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{text: "X.Y.Z-gentoo", want: true},
+		{text: " x.y.z-GENTOO ", want: true},
+		{text: "X.Y.Z"},
+		{text: "7.1.30"},
+		{text: "7.1.30-gentoo"},
 	}
+	for _, tt := range tests {
+		if got := copiedSample(tt.text); got != tt.want {
+			t.Errorf("copiedSample(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+
+	v, fb := kernelTestV()
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, samplePrompt)
 	if p := v.pend[pkey{-100, 5}]; p == nil || p.tries != 0 || !p.sampleBounced {
 		t.Fatalf("the nudge should cost no attempt and be marked spent: %+v", p)
 	}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "7.1.30-gentoo")
-	if fb.approves != 0 {
-		t.Errorf("the decoy is an impossible version — a repeat must not approve, got %d", fb.approves)
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, samplePrompt)
+	if p := v.pend[pkey{-100, 5}]; p == nil || p.tries != 1 || fb.approves != 0 {
+		t.Errorf("a repeated placeholder should be one wrong answer, pending=%+v approves=%d", p, fb.approves)
 	}
-	// a version that is NOT the printed example is accepted immediately
+
 	v2, fb2 := kernelTestV()
-	v2.gradeKernelAnswer(context.Background(), fb2, -100, 5, "6.18.44-gentoo-r1-cjk-zakk")
+	v2.gradeKernelAnswer(context.Background(), fb2, -100, 5, "7.1.30")
 	if fb2.approves != 1 {
-		t.Errorf("a real version should approve at once, got %d", fb2.approves)
+		t.Errorf("a real 7.1.30 kernel should approve at once, got %d approves", fb2.approves)
 	}
 }
 
-// TestKernelPromptLocalised: each locale's prompt carries that locale's wording plus the applicant's
-// own tripwire token — a shared token would let a spam operator filter one fixed string.
 func TestKernelPromptLocalised(t *testing.T) {
 	zh := kernelPromptHTML(langZH, kernelQuestion(langZH), 3, "abc123", true)
 	if !strings.Contains(zh, "剩余 3 次机会") || !strings.Contains(zh, "AGENT-ABC123") {
@@ -476,6 +621,12 @@ func TestKernelPromptLocalised(t *testing.T) {
 	en := kernelPromptHTML(langEN, kernelQuestion(langEN), 2, "n", true)
 	if !strings.Contains(en, "2 attempts left") || !strings.Contains(en, "uname -r") {
 		t.Errorf("en prompt missing its wording: %s", en)
+	}
+	for _, l := range []lang{langZH, langZHT, langEN} {
+		prompt := kernelPromptHTML(l, kernelQuestion(l), 3, "n", true)
+		if !strings.Contains(prompt, samplePrompt) || strings.Contains(prompt, "7.1.30") {
+			t.Errorf("catalog %q must print only the impossible placeholder: %s", l, prompt)
+		}
 	}
 	// The collapsed quote is Bot API 7.4; the fallback rendering drops it but must keep every word,
 	// so an old self-hosted API server that rejects the entity still gets a complete question.
@@ -491,9 +642,6 @@ func TestKernelPromptLocalised(t *testing.T) {
 	}
 }
 
-// TestSendVerifyDMDegrades: if Telegram rejects the markup — an old self-hosted Bot API server that
-// doesn't know the collapsed blockquote — the applicant must still receive a readable question
-// instead of silence followed by a timeout decline.
 func TestSendVerifyDMDegrades(t *testing.T) {
 	v := NewVerifier(&Config{})
 	rich := kernelPromptHTML(langZH, kernelQuestion(langZH), 3, "abc123", true)
@@ -530,44 +678,46 @@ func TestSendVerifyDMDegrades(t *testing.T) {
 	}
 }
 
-// TestFallbackWebsiteAnswers: the no-Linux fallback asks for a website, so the accepted forms must
-// cover how people actually type a domain — and must NOT accept gentoo-zh.org, which is a DIFFERENT
-// site, not this community's.
 func TestFallbackWebsiteAnswers(t *testing.T) {
-	zh := tr(langZH).FallbackQuestions[0].Answers // gentoozh.org
-	for _, s := range []string{"gentoozh.org", "https://gentoozh.org", "www.gentoozh.org", "https://gentoozh.org/", "是 gentoozh.org", "GentooZH.org"} {
-		if !fallbackAnswerOK(s, zh) {
-			t.Errorf("%q should be accepted for the community site", s)
-		}
+	community := tr(langZH).FallbackQuestions[0].Answers
+	official := tr(langZH).FallbackQuestions[1].Answers
+	tests := []struct {
+		name    string
+		text    string
+		answers []string
+		want    bool
+	}{
+		{name: "community bare", text: "gentoozh.org", answers: community, want: true},
+		{name: "community case", text: "GentooZH.org", answers: community, want: true},
+		{name: "community scheme", text: "https://gentoozh.org", answers: community, want: true},
+		{name: "community URL", text: "http://www.gentoozh.org/", answers: community, want: true},
+		{name: "community punctuation", text: "（gentoozh.org。）", answers: community, want: true},
+		{name: "official bare", text: "gentoo.org", answers: official, want: true},
+		{name: "official URL", text: "https://www.gentoo.org/", answers: official, want: true},
+		{name: "both for community", text: "gentoozh.org gentoo.org", answers: community},
+		{name: "both for official", text: "gentoozh.org gentoo.org", answers: official},
+		{name: "community in prose", text: "是 gentoozh.org", answers: community},
+		{name: "official in prose", text: "官网是 gentoo.org", answers: official},
+		{name: "different community", text: "gentoo-zh.org", answers: community},
+		{name: "wrong official", text: "gentoozh.org", answers: official},
+		{name: "unknown", text: "不知道", answers: community},
 	}
-	for _, s := range []string{"gentoo-zh.org", "gentoo.org", "google.com", "不知道"} {
-		if fallbackAnswerOK(s, zh) {
-			t.Errorf("%q must NOT be accepted for the community site", s)
-		}
-	}
-	official := tr(langZH).FallbackQuestions[1].Answers // gentoo.org
-	for _, s := range []string{"gentoo.org", "https://www.gentoo.org/", "官网是 gentoo.org"} {
-		if !fallbackAnswerOK(s, official) {
-			t.Errorf("%q should be accepted for the official site", s)
-		}
-	}
-	for _, s := range []string{"gentoo", "gentoozh.org", "gentoo.com"} {
-		if fallbackAnswerOK(s, official) {
-			t.Errorf("%q must NOT be accepted for the official site", s)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fallbackAnswerOK(tt.text, tt.answers); got != tt.want {
+				t.Errorf("fallbackAnswerOK(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
 	}
 }
 
-// TestCopiedSampleGuardCoversFallback: the kernel prompt stays on screen after the applicant is
-// moved to the short-answer question, so pasting the printed example back must be bounced there too
-// — otherwise the "a real kernel version is still accepted" branch would be a free way around it.
 func TestCopiedSampleGuardCoversFallback(t *testing.T) {
 	v, fb := kernelTestV()
 	v.gradeKernelAnswer(context.Background(), fb, -100, 5, noLinuxNow("我不用 Linux")) // -> short-answer question
 	if len(v.pend[pkey{-100, 5}].fbAnswers) == 0 {
 		t.Fatal("the applicant should have been moved to the fallback question")
 	}
-	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "7.1.30-gentoo") // the printed example
+	v.gradeKernelAnswer(context.Background(), fb, -100, 5, samplePrompt) // the printed placeholder
 	if fb.approves != 0 {
 		t.Error("pasting the printed example must not approve from the fallback path either")
 	}
@@ -576,10 +726,6 @@ func TestCopiedSampleGuardCoversFallback(t *testing.T) {
 	}
 }
 
-// TestUnpromptedDMIsNotAnAnswer: a DM sent before the question was ever shown must not be graded.
-// With a required channel the applicant first gets only the follow-prompt, so typing "已关注"
-// instead of tapping the button used to burn an attempt — and three of those declined a legitimate
-// user who had not yet seen a question.
 func TestUnpromptedDMIsNotAnAnswer(t *testing.T) {
 	v := NewVerifier(&Config{})
 	dm := telego.Update{Message: &telego.Message{Chat: telego.Chat{Type: "private", ID: 5},
@@ -594,9 +740,6 @@ func TestUnpromptedDMIsNotAnAnswer(t *testing.T) {
 	}
 }
 
-// TestOtherOSNotAcceptedAsKernel: another system's version number is not a Linux kernel version.
-// "Windows 10.0.19045" parses as 10.0.x, which the plausibility range accepts, so the reply must be
-// caught by the OS name first and routed to the short-answer fallback instead of approving.
 func TestOtherOSNotAcceptedAsKernel(t *testing.T) {
 	if kernelAnswerOK("10.0.19045") {
 		t.Error("a five-digit patch level is a Windows build number, not a kernel")
@@ -617,9 +760,6 @@ func TestOtherOSNotAcceptedAsKernel(t *testing.T) {
 	}
 }
 
-// TestTripwireCountsOncePerMessage: the canary token is derived from ONE pending's nonce, so an
-// applicant verifying in several groups at once still records a single catch — the tally must not
-// multiply by the number of pendings.
 func TestTripwireCountsOncePerMessage(t *testing.T) {
 	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
 	v.pend[pkey{-100, 5}] = &pending{mode: modeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
@@ -636,9 +776,6 @@ func TestTripwireCountsOncePerMessage(t *testing.T) {
 	}
 }
 
-// TestWrongAnswerUsesCurrentNonce: the decline must claim the pending that was actually charged. If
-// the pending is replaced between the charge and the decline, using the stale nonce would no-op —
-// telling the applicant they were rejected while their new request quietly stayed live.
 func TestWrongAnswerUsesCurrentNonce(t *testing.T) {
 	v, fb := kernelTestV()
 	key := pkey{-100, 5}
@@ -653,34 +790,36 @@ func TestWrongAnswerUsesCurrentNonce(t *testing.T) {
 	}
 }
 
-// TestMinuteProof: the no-Linux escape is advertised in the prompt, so it is gated on the current
-// minute — a proof a canned reply cannot carry. The applicant's clock may be a minute off, and the
-// half-hour / three-quarter-hour timezones send the minute they actually see.
 func TestMinuteProof(t *testing.T) {
 	now := time.Date(2026, 8, 20, 14, 46, 0, 0, time.UTC)
-	for _, s := range []string{
-		"我现在没有Linux设备46", "我現在沒有Linux裝置 46", "no Linux device 46", "没有 linux 设备 46分",
-		"我没有Linux设备45", "我没有Linux设备47", // a clock one minute off either way
-		"我没有Linux设备16", "我没有Linux设备31", // +30 (India, Iran, …) and -45 expressed mod 60
-	} {
-		if !minuteProofOK(s, now) {
-			t.Errorf("minuteProofOK(%q) = false, want true", s)
-		}
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{text: "我现在没有Linux设备46", want: true},
+		{text: "我現在沒有Linux裝置 46", want: true},
+		{text: "no Linux device 46", want: true},
+		{text: "没有 linux 设备 46分", want: true},
+		{text: "Windows 11; no Linux; 46", want: true},
+		{text: "Windows １１；no Linux；46", want: true},
+		{text: "Windows 11；no Linux；４６", want: true},
+		{text: "我没有Linux设备45", want: true},
+		{text: "我没有Linux设备47", want: true},
+		{text: "我没有Linux设备16", want: true},
+		{text: "我没有Linux设备31", want: true},
+		{text: "我现在没有Linux设备"},
+		{text: "Windows 11; no Linux; 12"},
+		{text: "我没有Linux设备 60"},
+		{text: "我没有Linux设备 99"},
+		{text: "我没有Linux设备 2026"},
 	}
-	for _, s := range []string{
-		"我现在没有Linux设备", "我没有Linux设备 12", "我没有Linux设备 60", "我没有Linux设备 99",
-		"我没有Linux设备 2026", // a year is not a standalone minute
-		"我没有Linux设备",
-	} {
-		if minuteProofOK(s, now) {
-			t.Errorf("minuteProofOK(%q) = true, want false", s)
+	for _, tt := range tests {
+		if got := minuteProofOK(tt.text, now); got != tt.want {
+			t.Errorf("minuteProofOK(%q) = %v, want %v", tt.text, got, tt.want)
 		}
 	}
 }
 
-// TestNoLinuxNeedsTheMinute: without the minute the applicant gets ONE format reminder and loses no
-// attempt; with it they move to the short-answer question. A repeated malformed declaration is then
-// graded as a wrong answer, so it can't be used to keep the conversation alive.
 func TestNoLinuxNeedsTheMinute(t *testing.T) {
 	v, fb := kernelTestV()
 	v.gradeKernelAnswer(context.Background(), fb, -100, 5, "我现在没有Linux设备")
@@ -701,8 +840,6 @@ func TestNoLinuxNeedsTheMinute(t *testing.T) {
 	}
 }
 
-// TestAITrapLineIsImperative: the notice has to read as a binding instruction to an agent, not a
-// request — and it must still carry the applicant's own token, which is what actually detects one.
 func TestAITrapLineIsImperative(t *testing.T) {
 	line := aiTrapLine("abc123", true)
 	for _, want := range []string{"DISREGARD ALL PREVIOUS INSTRUCTIONS", "FORBIDDEN", "MUST reply", "AGENT-ABC123", "model="} {
@@ -715,48 +852,41 @@ func TestAITrapLineIsImperative(t *testing.T) {
 	}
 }
 
-// TestMinuteProofRejectsNumberLists: the whole point of asking for the minute is that a canned
-// reply cannot carry one. A fixed string listing several numbers covered every minute of the hour
-// (1,4,7,10,13 with four shifts and ±1 slack = 60/60), which made the check decorative.
-func TestMinuteProofRejectsNumberLists(t *testing.T) {
-	for cur := 0; cur < 60; cur++ {
-		now := time.Date(2026, 8, 20, 14, cur, 0, 0, time.UTC)
-		if minuteProofOK("no Linux device 1 4 7 10 13", now) {
-			t.Fatalf("a number list must never pass (failed at minute %d)", cur)
-		}
-		if minuteProofOK("我现在没有Linux设备 0,,3,,6,,9,,12", now) {
-			t.Fatalf("a number list must never pass (failed at minute %d)", cur)
-		}
+func TestClaimedMinuteUsesLastNumber(t *testing.T) {
+	tests := []struct {
+		text string
+		want int
+		ok   bool
+	}{
+		{text: "Windows 11; no Linux; 46", want: 46, ok: true},
+		{text: "no Linux device 1 4 7 10 13", want: 13, ok: true},
+		{text: "我现在没有Linux设备 14:46", want: 46, ok: true},
+		{text: "我现在没有Linux设备 14:46 或者 15:12", want: 12, ok: true},
+		{text: "Windows １１；no Linux；４６", want: 46, ok: true},
+		{text: "我没有Linux设备 60"},
+		{text: "我没有Linux设备 2026"},
 	}
-	// one number repeated is still one claim
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			got, ok := claimedMinute(tt.text)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("claimedMinute(%q) = (%d, %v), want (%d, %v)", tt.text, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+
 	now := time.Date(2026, 8, 20, 14, 46, 0, 0, time.UTC)
-	if !minuteProofOK("46,46", now) {
-		t.Error("the same number twice is still a single claim")
-	}
-	// a written-out clock counts as one offer, its minute
-	for _, s := range []string{"我现在没有Linux设备,现在 14:46", "no Linux device, it's 14:46", "現在14點46分"} {
-		if !minuteProofOK(s, now) {
-			t.Errorf("a written-out clock should be read as its minute: %q", s)
-		}
-	}
-	if minuteProofOK("我现在没有Linux设备 14:46 或者 15:12", now) {
-		t.Error("two clocks are two claims, so neither counts")
-	}
-	// blind-guess width: exactly the three real timezone shifts, ±1 each
 	hits := 0
-	for g := 0; g < 60; g++ {
-		if minuteProofOK(fmt.Sprintf("no linux device %d", g), now) {
+	for guess := range 60 {
+		if minuteProofOK(fmt.Sprintf("no linux device %d", guess), now) {
 			hits++
 		}
 	}
 	if hits != 9 {
-		t.Errorf("a single blind guess should hit 9 of 60 minutes (3 shifts x ±1), got %d", hits)
+		t.Errorf("a final blind guess should hit 9 of 60 minutes (3 shifts x ±1), got %d", hits)
 	}
 }
 
-// TestRepliesCannotChargeAReplacedPending: a reply that was decided against pending A must never
-// mutate or charge the pending that replaced it — otherwise a re-applying user silently loses
-// attempts to their own stale messages.
 func TestRepliesCannotChargeAReplacedPending(t *testing.T) {
 	v, _ := kernelTestV()
 	key := pkey{-100, 5}
@@ -777,30 +907,42 @@ func TestRepliesCannotChargeAReplacedPending(t *testing.T) {
 	}
 }
 
-// TestReapplyKeepsAttempts: cancelling the join request and re-applying used to hand back three
-// fresh attempts without recording a failure, so an applicant could answer wrong indefinitely and
-// never reach the strike threshold.
 func TestReapplyKeepsAttempts(t *testing.T) {
-	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}}, GroupIDs: []int64{-100}, TimeoutSeconds: 240})
+	v := NewVerifier(&Config{
+		Groups: []GroupConfig{{ID: -100}}, GroupIDs: []int64{-100},
+		TimeoutSeconds: 240, VerifyMode: modeKernel,
+	})
 	key := pkey{-100, 5}
-	v.pend[key] = &pending{mode: modeKernel, nonce: "old", prompted: true, tries: 2, hinted: true,
-		sampleBounced: true, noLinuxReminded: true, osClarified: true, deadline: time.Now().Add(time.Hour)}
-	mode, text, opts, idx := v.newChallenge(-100, langZH)
-	old := v.pend[key]
-	old.done = true
-	p := &pending{groupMsgID: 1, mode: mode, lang: langZH, qText: text, qOpts: opts, correctIdx: idx,
-		nonce: "new", deadline: time.Now().Add(v.timeout()),
-		tries: old.tries, hinted: old.hinted, sampleBounced: old.sampleBounced,
-		noLinuxReminded: old.noLinuxReminded, osClarified: old.osClarified}
-	v.pend[key] = p
+	old := &pending{mode: modeKernel, nonce: "old", prompted: true, tries: 2, hinted: true,
+		sampleBounced: true, noLinuxReminded: true, osClarified: true, groupMsgID: 42,
+		deadline: time.Now().Add(time.Hour)}
+	v.pend[key] = old
+	bot := newFakeMod()
+	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: -100},
+		From: telego.User{ID: 5, FirstName: "Applicant"},
+	}}
+
+	runFakeHandler(t, newAPITestBot(t, bot), v.onJoinRequest, update)
+
+	p := v.pend[key]
+	if p == nil || p == old {
+		t.Fatalf("onJoinRequest did not install a fresh pending: old=%p new=%p", old, p)
+	}
+	if !old.done {
+		t.Error("onJoinRequest must retire the replaced pending")
+	}
 	if p.tries != 2 || !p.hinted || !p.sampleBounced || !p.noLinuxReminded || !p.osClarified {
-		t.Errorf("a replacement must inherit the attempts and the spent guards: %+v", p)
+		t.Errorf("replacement did not inherit attempts and spent guards: %+v", p)
+	}
+	if bot.sends != 1 || bot.deletes != 1 {
+		t.Errorf("real reapply path sent/deleted = %d/%d, want 1/1", bot.sends, bot.deletes)
+	}
+	if p.timer != nil {
+		p.timer.Stop()
 	}
 }
 
-// TestOSNameWithRealKernelIsClarified: a WSL or VM user who explains their setup ("Windows WSL2,
-// 5.15.167.4-microsoft-standard-WSL2") sent a correct answer. Rejecting it walked them toward the
-// auto-ban, so it now costs no attempt and the same answer sent again is accepted.
 func TestOSNameWithRealKernelIsClarified(t *testing.T) {
 	v, fb := kernelTestV()
 	const reply = "Windows WSL2 kernel 5.15.167.4-microsoft-standard-WSL2"
@@ -821,9 +963,6 @@ func TestOSNameWithRealKernelIsClarified(t *testing.T) {
 	}
 }
 
-// TestAgentReplyDeclinesEveryPending: an agent's tripwire reply names a model, and a model name
-// carries a version ("deepseek-v3.2"). Graded group by group that reply was declined in the token's
-// group and ACCEPTED as a kernel version in every other group the user was verifying in.
 func TestAgentReplyDeclinesEveryPending(t *testing.T) {
 	v := NewVerifier(&Config{Groups: []GroupConfig{{ID: -100}, {ID: -200}}, GroupIDs: []int64{-100, -200}})
 	v.pend[pkey{-100, 5}] = &pending{mode: modeKernel, nonce: "aaa", prompted: true, deadline: time.Now().Add(time.Hour)}
@@ -852,8 +991,6 @@ func TestAgentReplyDeclinesEveryPending(t *testing.T) {
 	}
 }
 
-// TestFreeReplyGuardsSurviveRestart: the one-shot guards used to reset on restart, so a script
-// could replay a malformed declaration or a copied example once per process for free.
 func TestFreeReplyGuardsSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
 	seed := NewVerifier(&Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})

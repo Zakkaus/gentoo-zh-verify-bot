@@ -14,21 +14,28 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-// /armpkgs checks arm64 (aarch64) support for a package across distros that expose a clean
-// per-architecture API: Gentoo (keywords), Debian + Ubuntu (madison, arch-filtered),
-// Fedora (mdapi; aarch64 is a primary arch), Arch Linux ARM (package presence) and AUR
-// (PKGBUILD arch=()). This complements /arm (Gentoo only), since Gentoo's arm64 keywording is sometimes incomplete
-// while a package may well be available on other ARM distros.
+// /armpkgs compares arm64 support across distro-specific architecture APIs.
 
-// gentooArmStatus resolves a Gentoo atom and reports its arm64 keyword status plus a link
-// to the package's packages.gentoo.org page (a search link if the atom doesn't resolve).
 func (v *Verifier) gentooArmStatus(ctx context.Context, name string) (status, url string) {
-	atoms := searchMainTree(ctx, name)
-	if len(atoms) == 0 {
-		return "❌ 不在官方树", "https://packages.gentoo.org/packages/search?q=" + neturl.QueryEscape(name)
+	return gentooArmStatusWith(ctx, name, searchMainTree, armStatus)
+}
+
+func gentooArmStatusWith(
+	ctx context.Context,
+	name string,
+	search func(context.Context, string) ([]string, bool),
+	status func(context.Context, string) (string, string, bool),
+) (string, string) {
+	searchURL := "https://packages.gentoo.org/packages/search?q=" + neturl.QueryEscape(name)
+	atoms, available := search(ctx, name)
+	if !available {
+		return "⚠️ 查询失败", searchURL
 	}
-	url = "https://packages.gentoo.org/packages/" + atoms[0]
-	stable, testing, ok := armStatus(ctx, atoms[0])
+	if len(atoms) == 0 {
+		return "❌ 不在官方树", searchURL
+	}
+	url := "https://packages.gentoo.org/packages/" + atoms[0]
+	stable, testing, ok := status(ctx, atoms[0])
 	switch {
 	case !ok:
 		return "⚠️ 查询失败", url
@@ -43,12 +50,9 @@ func (v *Verifier) gentooArmStatus(ctx context.Context, name string) (status, ur
 	}
 }
 
-// madEntry is one "suite: version" row parsed from a madison listing.
 type madEntry struct{ suite, ver string }
 
-// parseMadison parses Debian/Ubuntu madison text ("pkg | version | suite | arch" per line)
-// into base-release suites (pocket variants like -updates/-security are skipped), newest
-// first, deduped. madison lists oldest-first, so the last distinct suites are the newest.
+// Madison output is oldest-first; pocket variants are excluded and suites deduplicated.
 func parseMadison(body string) []madEntry {
 	var ordered []madEntry
 	idx := map[string]int{}
@@ -72,10 +76,7 @@ func parseMadison(body string) []madEntry {
 	return ordered
 }
 
-// pickMadison chooses the suite/version to display from madison entries (oldest-first): the
-// newest RELEASED suite, falling back to the newest overall (dev=true, for the caller to flag)
-// when only an unreleased development series carries the package. devSuite (optional) reports
-// whether a suite is an unreleased dev series; nil means never (keep the newest, e.g. Debian sid).
+// pickMadison prefers the newest released suite, flagging a development-only fallback.
 func pickMadison(entries []madEntry, devSuite func(string) bool) (suite, ver string, dev bool) {
 	pick := entries[len(entries)-1] // madison lists oldest-first, so the last is the newest suite
 	dev = devSuite != nil && devSuite(pick.suite)
@@ -89,9 +90,7 @@ func pickMadison(entries []madEntry, devSuite func(string) bool) (suite, ver str
 	return pick.suite, pick.ver, dev
 }
 
-// madisonArmStatus queries a madison endpoint (arch-filtered to arm64) and reports the newest
-// suite that ships the package on arm64. devSuite (optional) flags an unreleased dev series so an
-// unshipped future release isn't presented as current; a Snap transitional version shows as "snap".
+// Development suites are never presented as current releases.
 func madisonArmStatus(ctx context.Context, madisonURL, pkg string, devSuite func(string) bool) string {
 	body, err := httpGetBody(ctx, madisonURL+neturl.QueryEscape(pkg)+"&text=on&a=arm64", 1<<20)
 	if err != nil {
@@ -108,23 +107,38 @@ func madisonArmStatus(ctx context.Context, madisonURL, pkg string, devSuite func
 	return fmt.Sprintf("✅ %s %s", suite, displayVer(ver))
 }
 
-// fedoraArmStatus checks Fedora rawhide via mdapi. aarch64 is a Fedora primary arch, so a
-// package present in Fedora is built for aarch64 (barring an explicit ExcludeArch).
+// Only an authoritative 404 proves absence; all other failures remain unknown.
 func fedoraArmStatus(ctx context.Context, pkg string) string {
-	var r struct {
-		Version string `json:"version"`
+	return fedoraArmStatusWith(ctx, pkg, func(ctx context.Context, url string) (string, error) {
+		var r struct {
+			Version string `json:"version"`
+		}
+		err := httpGetJSON(ctx, url, nil, &r)
+		return r.Version, err
+	})
+}
+
+func fedoraArmStatusWith(
+	ctx context.Context,
+	pkg string,
+	fetch func(context.Context, string) (string, error),
+) string {
+	version, err := fetch(ctx, "https://mdapi.fedoraproject.org/rawhide/pkg/"+neturl.PathEscape(pkg))
+	if err != nil {
+		if httpStatusCode(err) == 404 {
+			return "❌ 不在 Fedora"
+		}
+		return "⚠️ Fedora 查询失败"
 	}
-	if err := httpGetJSON(ctx, "https://mdapi.fedoraproject.org/rawhide/pkg/"+neturl.PathEscape(pkg), nil, &r); err != nil || r.Version == "" {
-		return "❌ 不在 Fedora"
+	if version == "" {
+		return "⚠️ Fedora 查询失败"
 	}
-	return "✅ rawhide " + r.Version
+	return "✅ rawhide " + version
 }
 
 var aurArchRe = regexp.MustCompile(`(?i)arch=\(([^)]*)\)`)
 
-// aurArchLabel reads a PKGBUILD's arch=() declaration. "any" is architecture-independent;
-// "aarch64" is declared arm64; "arm/armv6h/armv7h" are 32-bit ARM only; otherwise x86-only
-// (the package may still build on arm64, the maintainer just didn't declare it).
+// AUR support follows the PKGBUILD arch declaration, not buildability in practice.
 func aurArchLabel(pkgbuild string) string {
 	m := aurArchRe.FindStringSubmatch(pkgbuild)
 	if m == nil {
@@ -143,9 +157,7 @@ func aurArchLabel(pkgbuild string) string {
 	}
 }
 
-// aurArmStatus fetches an AUR package's PKGBUILD and reports its declared arch support. A 404 means
-// the package really isn't in the AUR; any other failure (timeout/5xx/network) is reported as a
-// query failure rather than a false "not in AUR".
+// Only an AUR 404 proves absence; other failures remain unknown.
 func (v *Verifier) aurArmStatus(ctx context.Context, pkg string) string {
 	body, err := httpGetBody(ctx, "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h="+neturl.QueryEscape(pkg), 64<<10)
 	if err != nil {
@@ -157,8 +169,7 @@ func (v *Verifier) aurArmStatus(ctx context.Context, pkg string) string {
 	return aurArchLabel(string(body))
 }
 
-// alarmArmStatus checks whether Arch Linux ARM packages the name for aarch64 (200 vs 404). A non-404
-// failure is reported as a query failure, not a false "not packaged".
+// Only an Arch Linux ARM 404 proves absence.
 func alarmArmStatus(ctx context.Context, pkg string) string {
 	if _, err := httpGetBody(ctx, "https://archlinuxarm.org/packages/aarch64/"+neturl.PathEscape(pkg), 1<<10); err != nil {
 		if httpStatusCode(err) == 404 {
@@ -169,7 +180,6 @@ func alarmArmStatus(ctx context.Context, pkg string) string {
 	return "✅ 已打包"
 }
 
-// onArmpkgs handles /armpkgs <pkg> — cross-distro arm64 (aarch64) support.
 func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.queryAllowed(ctx, msg) {
@@ -187,7 +197,6 @@ func (v *Verifier) onArmpkgs(ctx *th.Context, update telego.Update) error {
 	ensureReleaseInfo(hc, time.Now()) // load Ubuntu series status so an unreleased dev suite is flagged
 	pe := neturl.PathEscape(name)
 
-	// Each source is independent — query them concurrently. fn returns (status, link).
 	sources := []struct {
 		label string
 		fn    func() (string, string)

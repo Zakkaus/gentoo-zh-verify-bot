@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
-// TestHTTPStatusCode: a non-200 httpGet error carries its status (so a real 404 can be told apart
-// from a transient timeout/5xx), while a non-HTTP failure reports 0. This drives the armpkgs
-// "not found" vs "query failed" distinction.
 func TestHTTPStatusCode(t *testing.T) {
 	if got := httpStatusCode(&httpStatusError{url: "u", code: 404}); got != 404 {
 		t.Errorf("httpStatusCode(404) = %d, want 404", got)
@@ -20,5 +21,63 @@ func TestHTTPStatusCode(t *testing.T) {
 	}
 	if got := httpStatusCode(nil); got != 0 {
 		t.Errorf("a nil error must report 0, got %d", got)
+	}
+}
+
+func TestHTTPGetBodyLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		limit    int64
+		tooLarge bool
+	}{
+		{name: "below limit", body: "ab", limit: 3},
+		{name: "exact limit", body: "abc", limit: 3},
+		{name: "one byte over", body: "abcd", limit: 3, tooLarge: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			got, err := httpGetBody(context.Background(), srv.URL, tc.limit)
+			var tooLarge *httpBodyTooLargeError
+			if errors.As(err, &tooLarge) != tc.tooLarge {
+				t.Fatalf("httpGetBody() error = %v, want body-too-large=%v", err, tc.tooLarge)
+			}
+			if !tc.tooLarge && string(got) != tc.body {
+				t.Errorf("httpGetBody() = %q, want %q", got, tc.body)
+			}
+			if tc.tooLarge && got != nil {
+				t.Errorf("oversized response returned a parser-visible prefix %q", got)
+			}
+		})
+	}
+}
+
+func TestHTTPGetStatusFromServer(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			_, err := httpGet(context.Background(), srv.URL, nil)
+			if got := httpStatusCode(err); got != code {
+				t.Errorf("httpStatusCode(httpGet()) = %d, want %d (error %v)", got, code, err)
+			}
+		})
+	}
+}
+
+func TestAcquireHTTPSlotBusy(t *testing.T) {
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	err := acquireHTTPSlot(context.Background(), "https://example.invalid", sem, time.Millisecond)
+	var busy *httpBusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("acquireHTTPSlot() error = %v, want *httpBusyError", err)
 	}
 }

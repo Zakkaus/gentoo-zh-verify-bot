@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// TestClaimedModel: the tripwire asks for "model=<id>", but agents answer in prose too. Both are
-// reduced to one tally key, and untrusted input is sanitised before it reaches a log or state file.
 func TestClaimedModel(t *testing.T) {
 	cases := map[string]string{
 		"AGENT-AB12 model=gpt-5-mini":       "gpt-5-mini",
@@ -27,8 +25,6 @@ func TestClaimedModel(t *testing.T) {
 	}
 }
 
-// TestRecordAgentTally: counts accumulate per model, the total tracks every trip, and /stats renders
-// the busiest models first. The key cap keeps a spammer from growing the state file without limit.
 func TestRecordAgentTally(t *testing.T) {
 	v := NewVerifier(&Config{}) // no agentPath: in-memory only, no state file written
 	v.agents = agentTally{}
@@ -64,8 +60,6 @@ func TestRecordAgentTally(t *testing.T) {
 	}
 }
 
-// TestAgentTallyPersists: the tally survives a restart — a per-restart counter would be useless for
-// spotting which models keep showing up.
 func TestAgentTallyPersists(t *testing.T) {
 	path := t.TempDir() + "/agents.json"
 	v := NewVerifier(&Config{})
@@ -81,7 +75,25 @@ func TestAgentTallyPersists(t *testing.T) {
 	}
 }
 
-// TestAITrapRecordsModel: a tripped agent is declined AND tallied under the model it named.
+func TestLoadAgentsReadFailureDisablesWrites(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(*testing.T) string
+	}{
+		{name: "state path is a directory", path: func(t *testing.T) string { return t.TempDir() }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := NewVerifier(&Config{})
+			v.agentPath = tt.path(t)
+			v.loadAgents()
+			if v.agentPath != "" {
+				t.Errorf("agent state write path remains %q after a read failure", v.agentPath)
+			}
+		})
+	}
+}
+
 func TestAITrapRecordsModel(t *testing.T) {
 	v, fb := kernelTestV()
 	v.pend[pkey{-100, 5}].nonce = "abc123"

@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
-// TestSearchTransientNotDefinitive: a FETCH failure (forced with an already-cancelled context, so no
-// network is touched) must yield ok=false from the search helpers — so the caller renders "暂时无法获取
-// …稍后再试" rather than a false definitive "no results". Mirrors /news /use /armpkgs.
 func TestSearchTransientNotDefinitive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -20,13 +18,9 @@ func TestSearchTransientNotDefinitive(t *testing.T) {
 	}
 }
 
-// TestPickWikiTitlesDedup verifies case-insensitive dedupe by base topic (so "NVIDIA" vs "NVidia"
-// collapse to one entry) with the simplified-Chinese page preferred, other-language pages dropped,
-// rank order preserved (zh first, then en), and the cap honoured.
 func TestPickWikiTitlesDedup(t *testing.T) {
 	g := wikiSource{classify: classifyGentoo}
-	// NVIDIA/nvidia-drivers (en) and NVidia/nvidia-drivers/zh-cn (zh) are the same topic by a
-	// case-insensitive base -> one entry, the zh page; the /fr translation is dropped.
+	// Case-insensitive topics prefer zh-cn and drop unsupported translations.
 	got := g.pickWikiTitles([]string{
 		"NVIDIA/nvidia-drivers",
 		"NVidia/nvidia-drivers/zh-cn",
@@ -37,13 +31,59 @@ func TestPickWikiTitlesDedup(t *testing.T) {
 	}
 
 	a := wikiSource{classify: classifyArch}
-	// Arch "NVIDIA" (en) and "Nvidia (简体中文)" (zh) collapse case-insensitively -> the zh page.
+	// The localized Arch title must replace its English base topic.
 	if got := a.pickWikiTitles([]string{"NVIDIA", "Nvidia (简体中文)"}, 4); !reflect.DeepEqual(got, []string{"Nvidia (简体中文)"}) {
 		t.Errorf("arch dedup = %v, want [Nvidia (简体中文)]", got)
 	}
 
-	// distinct topics are all kept, in order, capped at max.
 	if got := a.pickWikiTitles([]string{"A", "B", "C", "D", "E"}, 3); !reflect.DeepEqual(got, []string{"A", "B", "C"}) {
 		t.Errorf("cap = %v, want [A B C]", got)
+	}
+}
+
+func TestWikiResultNotice(t *testing.T) {
+	tests := []struct {
+		name  string
+		found bool
+		srcOK []bool
+		want  string
+	}{
+		{
+			name:  "complete miss",
+			srcOK: []bool{true, true},
+			want:  "\n\n没找到相关条目，换个关键词试试？",
+		},
+		{
+			name:  "Gentoo unavailable",
+			srcOK: []bool{false, true},
+			want:  "\n\n以下来源暂时无法查询，结果可能不完整：Gentoo Wiki。请稍后重试。",
+		},
+		{
+			name:  "Arch unavailable with a hit",
+			found: true,
+			srcOK: []bool{true, false},
+			want:  "\n\n以下来源暂时无法查询，结果可能不完整：Arch Wiki。请稍后重试。",
+		},
+		{
+			name:  "all unavailable",
+			srcOK: []bool{false, false},
+			want:  "\n\n以下来源暂时无法查询，结果可能不完整：Gentoo Wiki、Arch Wiki。请稍后重试。",
+		},
+		{
+			name:  "complete hit",
+			found: true,
+			srcOK: []bool{true, true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := wikiResultNotice(tt.found, tt.srcOK)
+			if got != tt.want {
+				t.Errorf("wikiResultNotice() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, "没找到") && (!tt.srcOK[0] || !tt.srcOK[1]) {
+				t.Errorf("unavailable source produced a definitive miss: %q", got)
+			}
+		})
 	}
 }

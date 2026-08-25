@@ -8,12 +8,9 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// setupCommands registers the bot's command list with Telegram so that typing
-// "/" in the chat shows an autocomplete menu. Member commands are visible to
-// everyone; the admin commands are only shown to chat administrators.
-func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
-	// Keep menu descriptions SHORT — Telegram's command menu truncates long ones.
-	member := []telego.BotCommand{
+func memberCommands() []telego.BotCommand {
+	// Keep menu descriptions short because Telegram truncates them.
+	return []telego.BotCommand{
 		{Command: "help", Description: "查看可用指令"},
 		{Command: "pkg", Description: "搜索 Gentoo 包"},
 		{Command: "use", Description: "查包的 USE 标志 + 信息"},
@@ -22,11 +19,17 @@ func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
 		{Command: "wiki", Description: "搜 Gentoo / Arch wiki"},
 		{Command: "bbs", Description: "搜 Linux 论坛(中文优先)"},
 		{Command: "pkgs", Description: "跨发行版查包版本"},
+		{Command: "distro", Description: "/pkgs 的别名"},
 		{Command: "arm", Description: "查包的 arm64 keyword 状态"},
 		{Command: "armpkgs", Description: "跨发行版查 arm64 支持"},
 		{Command: "ping", Description: "机器人状态 / 运行时长"},
 		{Command: "stats", Description: "今日通过 / 拒绝人数"},
 	}
+}
+
+// Telegram shows the admin list only to chat administrators.
+func setupCommands(ctx context.Context, bot *telego.Bot, warnLimit int) {
+	member := memberCommands()
 	admin := append([]telego.BotCommand{
 		{Command: "start", Description: "[管理] 开启入群验证"},
 		{Command: "stop", Description: "[管理] 关闭入群验证"},

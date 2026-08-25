@@ -28,7 +28,7 @@ func (v *Verifier) onPing(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// onStart: in a private chat it's the deep-link verification entry; in a group it's the admin toggle.
+// /start opens verification in DMs and enables verification in groups.
 func (v *Verifier) onStart(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg != nil && msg.Chat.Type == "private" {
@@ -55,14 +55,13 @@ func (v *Verifier) onStats(ctx *th.Context, update telego.Update) error {
 		date, ap, de := v.stats()
 		out := fmt.Sprintf("📊 今日(%s)\n✅ 通过:%d 人\n❌ 拒绝:%d 人\n验证:%s | 运行 %s",
 			date, ap, de, v.stateText(), uptimeStr(v.startTime))
-		if ai := v.agentStatsText(); ai != "" { //累计值,不随每日统计清零
+		if ai := v.agentStatsText(); ai != "" { // Lifetime tally; daily stats reset separately.
 			out += "\n" + ai
 		}
 		return out
 	})
 }
 
-// onRich (admin) toggles rich-message output for /pkg and /use at runtime.
 func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
 		if v.toggleRich() {
@@ -72,8 +71,7 @@ func (v *Verifier) onRich(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// onSpoiler toggles whether a new member's display name is hidden behind a Telegram spoiler in the
-// in-group verification challenge — defeats spammers who set their name to an advert. Persisted.
+// The persisted spoiler hides advertising placed in applicant display names.
 func (v *Verifier) onSpoiler(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
 		if v.toggleNameSpoiler() {
@@ -83,10 +81,7 @@ func (v *Verifier) onSpoiler(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// onVMode handles /vmode — show or switch the join-verification challenge: "kernel" makes the
-// applicant type their running kernel version, "quiz" is the original tap-a-button multiple choice,
-// "mixed" gives each applicant one at random, and "auto" drops the override back to the config.
-// The choice is global (it overrides every group's verify_mode) and persists across restarts.
+// /vmode is a persisted process-wide override of per-group configuration.
 func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
 		gid := update.Message.Chat.ID
@@ -113,9 +108,6 @@ func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// parseAutoDelArg interprets an /autodel argument (already trimmed + lower-cased) into an
-// action: "show" (empty), "off", "on", "set" (with a ttl of 1–1440 minutes), or "" for an
-// invalid argument. Pure (no state) so it's unit-tested directly.
 func parseAutoDelArg(arg string) (action string, ttl time.Duration) {
 	switch arg {
 	case "":
@@ -128,11 +120,9 @@ func parseAutoDelArg(arg string) (action string, ttl time.Duration) {
 	if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= 1440 {
 		return "set", time.Duration(n) * time.Minute
 	}
-	return "", 0 // invalid
+	return "", 0
 }
 
-// onAutoDel handles /autodel — toggle/adjust auto-deletion of lookup commands + answers:
-// no arg shows the state, "on"/"off" enable/disable, "<minutes>" sets the delay (1–1440).
 func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
 	return v.adminCmd(ctx, update, func() string {
 		action, ttl := parseAutoDelArg(strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text))))
@@ -158,7 +148,23 @@ func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// onHelp lists commands (admins also see the moderation/admin commands).
+func memberHelpText() string {
+	return "🤖 可用指令:\n" +
+		"/pkg <包名> — 搜索 Gentoo 包(官方树/gentoo-zh/guru)\n" +
+		"/use <包名> — 某个包的 USE 标志 + 信息\n" +
+		"/bug <编号> — 查询 Gentoo Bugzilla\n" +
+		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
+		"/wiki <关键词> — 搜索 Gentoo / Arch wiki(含中文页)\n" +
+		"/bbs <关键词> — 搜各大 Linux 论坛(中文优先)\n" +
+		"/pkgs <包名> — 跨发行版查包版本(Gentoo/Debian/Ubuntu/Fedora/Arch/openSUSE 等)\n" +
+		"/distro <包名> — /pkgs 的别名\n" +
+		"/arm <包名> — 查该包的 arm64 (aarch64) Gentoo keyword 状态\n" +
+		"/armpkgs <包名> — 跨发行版查 arm64 支持\n" +
+		"/ping — 机器人状态 / 运行时长\n" +
+		"/stats — 今日通过 / 拒绝人数\n" +
+		"/help — 显示本帮助"
+}
+
 func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.dmOrGroup(msg) { // /help is free (no external request)
@@ -168,20 +174,8 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 	c := ctx.Context()
 	chatID := msg.Chat.ID
 	inGroup := v.cfg.IsGroup(chatID)
-	help := "🤖 可用指令:\n" +
-		"/pkg <包名> — 搜索 Gentoo 包(官方树/gentoo-zh/guru)\n" +
-		"/use <包名> — 某个包的 USE 标志 + 信息\n" +
-		"/bug <编号> — 查询 Gentoo Bugzilla\n" +
-		"/news [关键词] — 查看/搜索 Gentoo 新闻\n" +
-		"/wiki <关键词> — 搜索 Gentoo / Arch wiki(含中文页)\n" +
-		"/bbs <关键词> — 搜各大 Linux 论坛(中文优先)\n" +
-		"/pkgs <包名> — 跨发行版查包版本(Gentoo/Debian/Ubuntu/Fedora/Arch/openSUSE 等)\n" +
-		"/arm <包名> — 查该包的 arm64 (aarch64) Gentoo keyword 状态\n" +
-		"/armpkgs <包名> — 跨发行版查 arm64 支持\n" +
-		"/ping — 机器人状态 / 运行时长\n" +
-		"/stats — 今日通过 / 拒绝人数\n" +
-		"/help — 显示本帮助"
-	if inGroup && v.isGroupAdmin(c, bot, chatID, msg.From.ID) {
+	help := memberHelpText()
+	if inGroup && v.isGroupAdminCached(c, bot, chatID, msg.From.ID) {
 		help += "\n\n👮 管理员(回复某条消息使用):\n" +
 			"/mute — 禁言(留群不能发言,到期自动解除);默认1h,可 /mute 30m\n" +
 			"/unmute — 解除禁言\n" +
@@ -203,16 +197,12 @@ func (v *Verifier) onHelp(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	help += "\n\n(以上查询命令私聊也能用,每分钟限次;审核/管理命令仅在群里有效。)"
-	// Plain text (no HTML parse mode): the help lists literal <包名> placeholders that would
-	// otherwise be misread as HTML tags and rejected by Telegram. The group path uses notify,
-	// which is also plain.
+	// Plain text keeps angle-bracket placeholders from being parsed as Telegram HTML.
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(chatID), help))
 	return nil
 }
 
-// memberCmd runs a cheap informational command (no external request) usable by ANY member:
-// in a guarded group (the result auto-deletes and the trigger is removed) or in a private
-// chat (replied plainly). NOT rate-limited — only the API-hitting lookups are. No admin check.
+// Informational commands are unrestricted; only external lookups are rate-limited.
 func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() string) error {
 	msg := update.Message
 	if msg == nil || !v.dmOrGroup(msg) {
@@ -229,8 +219,16 @@ func (v *Verifier) memberCmd(ctx *th.Context, update telego.Update, fn func() st
 	return nil
 }
 
-// adminCmd runs fn only for a group admin in a guarded group, posts the result as
-// a transient (auto-deleting) message, and removes the command message.
+// Zero preserves the legacy policy allowing global commands from any guarded group.
+func (v *Verifier) controlGroupGate(chatID int64) (bool, string) {
+	controlID := v.cfg.ControlGroupID
+	if controlID == 0 || chatID == controlID {
+		return true, ""
+	}
+	return false, fmt.Sprintf("⛔ 该命令只能在控制群（ID %d）中使用。", controlID)
+}
+
+// adminCmd enforces the process-wide control-group boundary.
 func (v *Verifier) adminCmd(ctx *th.Context, update telego.Update, fn func() string) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -242,7 +240,11 @@ func (v *Verifier) adminCmd(ctx *th.Context, update telego.Update, fn func() str
 	defer func() {
 		_ = bot.DeleteMessage(c, &telego.DeleteMessageParams{ChatID: tu.ID(gid), MessageID: msg.MessageID})
 	}()
-	if !v.isGroupAdmin(c, bot, gid, msg.From.ID) {
+	if allowed, refusal := v.controlGroupGate(gid); !allowed {
+		v.notify(c, bot, gid, refusal)
+		return nil
+	}
+	if !v.isGroupAdminCached(c, bot, gid, msg.From.ID) {
 		v.notify(c, bot, gid, "⛔ 该命令仅群管理员可用。")
 		return nil
 	}

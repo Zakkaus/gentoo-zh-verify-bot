@@ -23,7 +23,10 @@ func (v *Verifier) loadWarns() {
 	}
 	var recs []warnRec
 	if err := loadJSONFile(v.warnPath, &recs); err != nil {
-		return // corrupt file backed up to .corrupt; start empty
+		if stateReadFailed(err) {
+			v.warnPath = ""
+		}
+		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
 	}
 	v.mu.Lock()
 	for _, r := range recs {
@@ -42,20 +45,20 @@ func (v *Verifier) saveWarns() {
 	if v.warnPath == "" {
 		return
 	}
-	v.mu.Lock()
-	recs := make([]warnRec, 0, len(v.warns))
-	for k, n := range v.warns {
-		if n > 0 {
-			recs = append(recs, warnRec{GroupID: k.gid, UserID: k.uid, Count: n})
+	saveJSONFile(v.warnPath, func() any {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		recs := make([]warnRec, 0, len(v.warns))
+		for k, n := range v.warns {
+			if n > 0 {
+				recs = append(recs, warnRec{GroupID: k.gid, UserID: k.uid, Count: n})
+			}
 		}
-	}
-	v.mu.Unlock()
-	writeJSONFile(v.warnPath, recs)
+		return recs
+	})
 }
 
-// warnPrecheck shares the admin-gate + reply-target resolution of /warn and /clearwarn.
-// It returns the target user, or nil if the caller should stop (it has already replied
-// with the reason). The invoking command message is removed by the caller's defer.
+// warnPrecheck fails closed on caller or target-admin lookup errors.
 func (v *Verifier) warnPrecheck(c context.Context, bot modBot, msg *telego.Message, cmd string, checkTargetAdmin bool) *telego.User {
 	gid := msg.Chat.ID
 	if !v.isGroupAdmin(c, bot, gid, msg.From.ID) {
@@ -79,9 +82,7 @@ func (v *Verifier) warnPrecheck(c context.Context, bot modBot, msg *telego.Messa
 	return target
 }
 
-// warnKick is the warn-limit auto-kick: it bans uid in gid then immediately unbans (OnlyIfBanned)
-// so the kick is REJOINABLE; rejoinable=false when that unban failed (the ban stuck). err is non-nil
-// only when the ban itself failed. Seamed on modBot so this access action is unit-testable.
+// A kick is ban then OnlyIfBanned unban; failed unban leaves the user banned.
 func (v *Verifier) warnKick(c context.Context, bot modBot, gid, uid int64) (rejoinable bool, err error) {
 	if err = bot.BanChatMember(c, &telego.BanChatMemberParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		return false, err
@@ -94,7 +95,6 @@ func (v *Verifier) warnKick(c context.Context, bot modBot, gid, uid int64) (rejo
 	return rejoinable, nil
 }
 
-// onWarn handles /warn — reply to a user, add a warning; auto-kick (rejoinable) at the limit.
 func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {
@@ -123,8 +123,7 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 		if err != nil {
 			log.Printf("/warn kick %d in %d: %v", target.ID, gid, err)
 			v.notify(c, bot, gid, "⚠️ 已达警告上限,但踢出失败:bot 可能缺少「封禁用户」权限。")
-			// Alert admins (the durable log) — a hit-limit-but-enforcement-failed case is exactly
-			// what they need to act on, and failAlert falls back to the group when admin_log is unset.
+			// A failed limit kick must reach admins even without a configured admin log.
 			v.failAlert(c, bot, gid, fmt.Sprintf("⚠️ %s 已达 %d 次警告上限但自动踢出失败,请手动处理(操作人 %s)", displayName(target), limit, displayName(msg.From)))
 			return nil
 		}
@@ -146,7 +145,6 @@ func (v *Verifier) onWarn(ctx *th.Context, update telego.Update) error {
 	return nil
 }
 
-// onClearWarn handles /clearwarn — reply to a user, clear their warning count.
 func (v *Verifier) onClearWarn(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil || !v.cfg.IsGroup(msg.Chat.ID) {

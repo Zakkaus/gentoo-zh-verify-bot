@@ -11,9 +11,7 @@ import (
 	"time"
 )
 
-// httpStatusError is returned by httpGet for a non-200 response, carrying the status code so a
-// caller can tell a definitive 404 (the resource really isn't there) from a transient 5xx/timeout/
-// network failure (where a definitive negative answer would be wrong).
+// httpStatusError preserves authoritative statuses such as 404 across the shared transport.
 type httpStatusError struct {
 	url  string
 	code int
@@ -21,8 +19,27 @@ type httpStatusError struct {
 
 func (e *httpStatusError) Error() string { return fmt.Sprintf("GET %s: HTTP %d", e.url, e.code) }
 
-// httpStatusCode returns the HTTP status carried by a non-200 httpGet error, or 0 when the failure
-// wasn't an HTTP response at all (timeout, DNS, connection reset, body read).
+// httpBusyError marks local saturation as a temporary lookup failure.
+type httpBusyError struct {
+	url  string
+	wait time.Duration
+}
+
+func (e *httpBusyError) Error() string {
+	return fmt.Sprintf("GET %s: outbound HTTP limit busy for %s", e.url, e.wait)
+}
+
+// httpBodyTooLargeError prevents parsers from treating a valid-looking prefix as a complete reply.
+type httpBodyTooLargeError struct {
+	url   string
+	limit int64
+}
+
+func (e *httpBodyTooLargeError) Error() string {
+	return fmt.Sprintf("GET %s: response body exceeds %d bytes", e.url, e.limit)
+}
+
+// httpStatusCode returns zero for failures without an HTTP response.
 func httpStatusCode(err error) int {
 	var se *httpStatusError
 	if errors.As(err, &se) {
@@ -31,29 +48,23 @@ func httpStatusCode(err error) int {
 	return 0
 }
 
-// The shared outbound HTTP layer used by every network command (/pkg, /use, /bug, /news,
-// /wiki, /bbs, /distro, /arm, /armpkgs, the feed). All requests carry the bot's User-Agent
-// (var userAgent, settable via the user_agent config) and are gated on HTTP 200.
-
 var httpClient = &http.Client{Timeout: 25 * time.Second}
 
-// githubToken (optional, from the GITHUB_TOKEN env var) lifts the GitHub API rate
-// limit from 60/h to 5000/h. Reading public repos needs a token with NO scopes.
+// An unscoped GITHUB_TOKEN raises the public API limit.
 var githubToken string
 
-// maxJSONBytes caps JSON response bodies: large enough for the biggest overlay's
-// recursive GitHub tree (a few MB), small enough to bound memory on a hostile body.
+// Bound JSON memory while accommodating recursive GitHub trees.
 const maxJSONBytes = 32 << 20
 
-// httpSem bounds the number of CONCURRENT outbound requests (every lookup + the feed share it).
-// This preserves "群里不限次" — group lookups aren't frequency-limited — while capping worst-case
-// concurrent network/goroutine pressure under a spam burst (e.g. /armpkgs fans out ~6 each). Each
-// httpGet holds one slot until its response body is closed.
+// Every lookup and feed request shares this concurrency bound until its body closes.
 const httpMaxConcurrent = 24
+
+// Brief queueing absorbs normal fan-out without parking handlers behind 25-second requests.
+const httpSlotWait = 2 * time.Second
 
 var httpSem = make(chan struct{}, httpMaxConcurrent)
 
-// semReleaseCloser releases one httpSem slot exactly once, when the response body is closed.
+// semReleaseCloser releases its outbound slot exactly once.
 type semReleaseCloser struct {
 	io.ReadCloser
 	once sync.Once
@@ -65,8 +76,30 @@ func (s *semReleaseCloser) Close() error {
 	return err
 }
 
-// httpGet issues a GET with the shared client + User-Agent (plus any extra headers)
-// and returns the response only on HTTP 200; the caller must close resp.Body.
+// Saturation returns a typed temporary error instead of queueing without bound.
+func acquireHTTPSlot(ctx context.Context, url string, sem chan struct{}, wait time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case sem <- struct{}{}:
+		return nil
+	default:
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return &httpBusyError{url: url, wait: wait}
+	}
+}
+
+// httpGet returns only HTTP 200 responses; callers must close the body.
 func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -78,10 +111,8 @@ func httpGet(ctx context.Context, url string, hdr http.Header) (*http.Response, 
 			req.Header.Add(k, val)
 		}
 	}
-	select { // acquire a concurrency slot (or give up if the request context is already done)
-	case httpSem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if err := acquireHTTPSlot(ctx, url, httpSem, httpSlotWait); err != nil {
+		return nil, err
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -107,12 +138,19 @@ func httpGetJSON(ctx context.Context, url string, hdr http.Header, dst any) erro
 	return json.NewDecoder(io.LimitReader(resp.Body, maxJSONBytes)).Decode(dst)
 }
 
-// httpGetBody GETs url and returns up to limit bytes of a 200 response (for HTML/text scraping).
+// Reading one extra byte prevents a truncated prefix from reaching a parser.
 func httpGetBody(ctx context.Context, url string, limit int64) ([]byte, error) {
 	resp, err := httpGet(ctx, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, &httpBodyTooLargeError{url: url, limit: limit}
+	}
+	return body, nil
 }

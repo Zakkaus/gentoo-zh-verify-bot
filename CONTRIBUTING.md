@@ -5,7 +5,7 @@ requests are welcome.
 
 ## Building
 
-Requires **Go 1.26.6+** (per `go.mod`). The only dependency is [telego](https://github.com/mymmrac/telego).
+Requires **Go 1.26.7+** (per `go.mod`) and uses [telego v1.11.2](https://github.com/mymmrac/telego).
 
 ```sh
 go build ./...
@@ -21,28 +21,29 @@ gofmt -l .      # must print nothing (run `gofmt -w .` to fix)
 go vet ./...
 go build ./...
 go test -race ./...
-go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
-go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./...
-go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -exclude=G304,G703,G706 ./...   # excluded classes: see SECURITY.md
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -exclude=G304,G703,G706 ./...   # excluded classes: see SECURITY.md
 ```
 
 ## Project layout
 
-The bot is a **single `package main`** with one file per area, all in the repo root —
-that's idiomatic Go for a self-contained binary, and Go requires a package's files to live
-in one directory. The files are named after what they do, so the flat list reads like a
-table of contents:
+The bot remains a **single `package main`** in the repository root. Files are grouped by
+responsibility:
 
-- **Core:** `main.go`, `config.go`, `verify.go`, `quiz.go`, `dm.go`
-- **Moderation:** `moderate.go`, `warn.go`, `antispam.go`, `admin.go`, `commands.go`
-- **Helpers (one per command):** `pkg.go` `use.go` `bug.go` `news.go` `wiki.go` `bbs.go`
-  `pkgs.go` `arm.go` `armpkgs.go`, plus `feed.go` (auto-feed), `releaseinfo.go`, `http.go`
-  (shared HTTP layer). Each `*_test.go` sits next to the file it tests.
+- **Verification and configuration:** `main.go`, `config.go`, `verify.go`, `kernel.go`,
+  `quiz.go`, `dm.go`, `i18n.go`, `settings.go`, `agents.go`, `verifyfail.go`
+- **Moderation:** `moderate.go`, `mute.go`, `bantime.go`, `warn.go`, `antispam.go`,
+  `admin.go`, `commands.go`
+- **Lookups and feeds:** `pkg.go`, `use.go`, `bug.go`, `news.go`, `wiki.go`, `bbs.go`,
+  `pkgs.go`, `arm.go`, `armpkgs.go`, `feed.go`, `releaseinfo.go`, `http.go`
 
-We deliberately do **not** split into `internal/...` sub-packages: at this size (~5k lines)
-that would force exporting every shared helper (`httpGetJSON`, `htmlMessage`, `Verifier`,
-`Config`, …) and add package boilerplate without making anything clearer. Revisit only if
-the bot grows toward being reused as a library.
+Tests sit beside the code they cover. `state_compat_test.go` and `testdata/state/` define
+the persisted-format compatibility contract. A persisted-format change must preserve
+intentional backward compatibility and update the affected fixtures deliberately. Never
+regenerate them as an unrelated cleanup. When a format change requires new fixtures, run
+`UPDATE_STATE_COMPAT_FIXTURES=1 go test -run TestStateCompatGenerateFixtures`, review every
+fixture diff, then run the full test gate.
 
 ## Code style
 

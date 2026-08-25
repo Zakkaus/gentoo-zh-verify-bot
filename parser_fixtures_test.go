@@ -5,13 +5,8 @@ import (
 	"testing"
 )
 
-// These lock the upstream-page PARSERS against silent breakage if a site's HTML / ebuild / metadata
-// structure drifts: a fixed fixture of the real shape must keep parsing the expected items. They
-// change no logic — only pin the current contract so a drift fails a test instead of quietly
-// returning empty results. (/armpkgs' parseMadison + aurArchLabel, and /wiki's pickWikiTitles, are
-// already fixture-tested in armpkgs_test.go / wiki_test.go.)
+// Fixed upstream-shape fixtures turn silent parser drift into test failures.
 
-// /news — the gentoo.org news-items index HTML (newsRe).
 func TestParseNewsFixture(t *testing.T) {
 	fixture := []byte(`<html><body><ul>
  <li><a href="/support/news-items/2026-05-23-kdepim-sql-backend-change.html">KDE PIM SQL backend change</a></li>
@@ -34,7 +29,6 @@ func TestParseNewsFixture(t *testing.T) {
 	}
 }
 
-// /use — an ebuild's IUSE line(s).
 func TestParseIUSEFixture(t *testing.T) {
 	ebuild := []byte("EAPI=8\nDESCRIPTION=\"x\"\nIUSE=\"ssl +zlib doc\"\nIUSE+=\"test\"\nSLOT=\"0\"\n")
 	got := parseIUSE(ebuild)
@@ -53,7 +47,6 @@ func TestParseIUSEFixture(t *testing.T) {
 	}
 }
 
-// /use — a metadata.xml's <flag> descriptions (inner tags stripped).
 func TestParseMetadataUseFixture(t *testing.T) {
 	md := []byte(`<?xml version="1.0"?>
 <pkgmetadata>
@@ -74,7 +67,6 @@ func TestParseMetadataUseFixture(t *testing.T) {
 	}
 }
 
-// /pkg — the packages.gentoo.org search-results HTML (pkgHrefRe) + relevance ranking.
 func TestRankSearchHitsFixture(t *testing.T) {
 	body := []byte(`<html><body>
 <a href="/packages/app-i18n/fcitx">app-i18n/fcitx</a>

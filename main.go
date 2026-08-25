@@ -15,21 +15,13 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-// version is the build version, set at build time via
-// -ldflags "-X main.version=$(git describe --tags)"; "dev" for a plain `go build`.
+// version is set with -ldflags; plain builds use "dev".
 var version = "dev"
 
-// pollRetryInterval pins how long the long poller waits before retrying getUpdates after an error.
-// telego already retries by default (its own ~8s); we set it explicitly so the behaviour is pinned to
-// this value (and a little snappier) rather than depending on a library default. With a non-zero retry
-// the poller keeps the update stream open across a transient Telegram/network hiccup instead of exiting.
+// Pin retries so transient polling errors do not close the update stream.
 const pollRetryInterval = 5 * time.Second
 
-// streamEndedUnexpectedly reports whether bh.Start() returned for a reason OTHER than our own shutdown
-// signal. With the poll retry set, the update stream normally only ends when ctx is cancelled by
-// SIGINT/SIGTERM; if it ended while ctx is still live, something else stopped it, so main exits
-// non-zero to let systemd (Restart=on-failure) restart us instead of falling through to a clean exit 0
-// and silently staying offline. Defensive — not reached in normal operation.
+// A live context means the update stream died unexpectedly; exit non-zero so systemd restarts it.
 func streamEndedUnexpectedly(ctxErr error) bool { return ctxErr == nil }
 
 func main() {
@@ -52,9 +44,7 @@ func main() {
 		log.Printf("GITHUB_TOKEN set — GitHub API rate limit raised (~5000/h)")
 	}
 
-	// A self-hosted Bot API server reaches Telegram over MTProto from the nearest data centre,
-	// which cuts the round trip that api.telegram.org costs from Asia. Unset means the cloud API,
-	// so this stays a no-op until the bot has been logged out of the cloud and pointed here.
+	// TELEGRAM_API_URL selects a lower-latency self-hosted Bot API server.
 	var botOpts []telego.BotOption
 	if apiURL := strings.TrimSpace(os.Getenv("TELEGRAM_API_URL")); apiURL != "" {
 		botOpts = append(botOpts, telego.WithAPIServer(apiURL))
@@ -80,9 +70,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create handler: %v", err)
 	}
-	// bh.Stop() is called explicitly in the graceful-shutdown block after Start() returns; every
-	// other exit from here is a log.Fatalf (which os.Exits and would skip a deferred Stop anyway),
-	// so no defer is needed.
+	// Fatal exits skip defers; the graceful path stops the handler explicitly.
 
 	v := NewVerifier(cfg)
 	me, err := bot.GetMe(ctx)
@@ -103,12 +91,10 @@ func main() {
 	sd := os.Getenv("STATE_DIRECTORY")
 	if sd != "" {
 		if err := os.MkdirAll(sd, 0o700); err != nil {
-			// Don't crash — persistence just won't work; the save helpers log each failure too.
+			// Persistence failure is non-fatal and logged by every save.
 			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
 		}
-		// Reclaim any leftover atomic-write temp files orphaned by a prior hard kill: writeJSONFile
-		// creates ".<name>.tmp-*" and only removes it on its own error paths, so a SIGKILL between
-		// create and rename leaks one. Cheap, bounded, and safe — real state uses atomic rename.
+		// Remove temp files orphaned between atomic creation and rename.
 		if leftover, _ := filepath.Glob(filepath.Join(sd, ".*.tmp-*")); len(leftover) > 0 {
 			for _, f := range leftover {
 				_ = os.Remove(f)
@@ -158,17 +144,14 @@ func main() {
 	if streamEndedUnexpectedly(ctx.Err()) {
 		log.Fatal("update stream ended without a shutdown signal — exiting non-zero so systemd restarts us")
 	}
-	// Graceful shutdown (SIGINT/SIGTERM): stop handlers, then flush the latest in-memory state so a
-	// decline/timeout AfterFunc that updated the maps but whose own save() was cut short still lands
-	// on disk — keeping pending.json / verifyfail.json consistent with the action already taken.
+	// Freeze timers, then flush state updated by any callback whose own save was interrupted.
 	_ = bh.Stop()
 	v.stopForShutdown() // freeze pending timers so a verification deadline firing during exit can't wrongly decline/ban
 	v.save()
 	v.saveVerifyFails()
 	v.saveHeartbeat() // record a clean exit time so the next start sees a recent heartbeat, not a false outage
 	if feedDone != nil {
-		// Let the feed loop flush its final cursor/tracking state, but don't let a stuck network
-		// call hold up shutdown past a short grace period.
+		// Bound shutdown even if the feed's final network call stalls.
 		select {
 		case <-feedDone:
 		case <-time.After(5 * time.Second):

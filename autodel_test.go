@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -13,9 +14,6 @@ func newTestVerifier(ttl *int) *Verifier {
 	})
 }
 
-// TestLookupAutoDelete covers the lookup auto-delete setting: the documented default
-// (unset => on at 3 min), config disable (<=0) and custom seconds, the runtime setter, and
-// that disabling keeps the TTL so re-enabling restores it.
 func TestLookupAutoDelete(t *testing.T) {
 	// default: unset => enabled, 3 minutes
 	if ttl, on := newTestVerifier(nil).lookupAutoDelete(); !on || ttl != 3*time.Minute {
@@ -40,8 +38,6 @@ func TestLookupAutoDelete(t *testing.T) {
 	}
 }
 
-// TestParseAutoDelArg covers the /autodel argument parser: show/on/off, the 1–1440 minute
-// range, and rejection of out-of-range / garbage.
 func TestParseAutoDelArg(t *testing.T) {
 	cases := []struct {
 		arg, action string
@@ -55,5 +51,22 @@ func TestParseAutoDelArg(t *testing.T) {
 		if a, ttl := parseAutoDelArg(c.arg); a != c.action || ttl != c.ttl {
 			t.Errorf("parseAutoDelArg(%q) = (%q,%v), want (%q,%v)", c.arg, a, ttl, c.action, c.ttl)
 		}
+	}
+}
+
+func TestDistroAliasVisible(t *testing.T) {
+	var description string
+	for _, command := range memberCommands() {
+		if command.Command == "distro" {
+			description = command.Description
+			break
+		}
+	}
+	if !strings.Contains(description, "/pkgs") {
+		t.Errorf("/distro menu description = %q, want an explicit /pkgs alias", description)
+	}
+	const helpLine = "/distro <包名> — /pkgs 的别名"
+	if !strings.Contains(memberHelpText(), helpLine) {
+		t.Errorf("member help is missing %q", helpLine)
 	}
 }

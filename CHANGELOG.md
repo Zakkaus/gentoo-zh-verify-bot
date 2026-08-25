@@ -6,6 +6,50 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Optional `control_group_id` for multi-group deployments.** It restricts `/start`, `/stop`,
+  `/vmode`, `/rich`, `/spoiler`, `/autodel`, `/bantime`, and `/bc` to administrators in one
+  guarded group. Leaving it unset preserves the previous any-guarded-group policy and now logs a
+  startup warning when several groups are configured. Naming a chat outside `groups` fails config
+  loading instead of locking every global command out.
+- **`/distro` is now advertised as an alias of `/pkgs`** in the command menu, `/help`, and the
+  user documentation.
+- Unknown config keys now produce a startup warning with their location. They remain ignored, so
+  operators can correct misspellings without a hard startup failure.
+
+### Changed
+- **Join floods have bounded memory use.** The pending queue is capped at 2,000 requests across the
+  process and 500 per group. Requests beyond either cap remain for manual review, with an admin
+  alert throttled to once every 10 minutes.
+- **State saves serialize snapshot creation and commit for each file.** An unreadable state file is
+  left untouched and its write path is disabled until restart instead of loading empty state and
+  later overwriting recoverable data. Operators who see the state-load error must stop the service,
+  repair ownership/permissions or restore the file, and restart.
+- **Package lookups report source availability.** `/pkg`, `/use`, `/arm`, `/pkgs`, and `/armpkgs`
+  now distinguish an answered miss from an upstream failure. Partial results identify the
+  unavailable source instead of presenting an incomplete answer as definitive.
+- **Kernel answers now require a plausible kernel version and context.** Bare releases, Chinese or
+  English lead-ins, and `uname -a` output still pass; unrelated model/product versions such as
+  `model=GPT-5.2` do not. The AI tripwire now matches only its exact nonce-bound `AGENT-… model=…`
+  reply, so quoting or questioning the prompt is treated as a human reply.
+- **Telegram duration normalization is explicit.** Positive ban and mute durations below 30 seconds
+  become 30 seconds. Ban durations above 366 days become permanent, while mute durations cap at
+  366 days; `timeout_seconds` also has a 30-second floor.
+- The build and release gate now uses Go 1.26.7, telego v1.11.2, staticcheck v0.8.1,
+  govulncheck v1.7.0, and gosec v2.28.0.
+
+### Fixed
+- **Bot-side delivery failures no longer misclassify applicants.** A group challenge that Telegram
+  never confirmed used to expire as a normal strike. A failed kernel-question DM used to mark the
+  applicant as prompted, so a later unrelated message could count as an answer. The first path is
+  now strike-free and the second remains unprompted. If Telegram rejects a decline, administrators
+  are alerted because the join request still needs manual handling.
+- **Closed feed bugs no longer always display a green check.** `FIXED` resolves to ✅; `INVALID`,
+  `WONTFIX`, `DUPLICATE`, and other closed-without-a-fix resolutions display ❌.
+- Auto-feed polling now drains multi-page Bugzilla backlogs without advancing across undelivered
+  items, bounds network and Telegram operations, and preserves tracked bugs across transient source
+  or edit failures.
+
 ## [3.11.1] - 2026-08-20
 
 ### Removed

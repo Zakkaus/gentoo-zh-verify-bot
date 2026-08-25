@@ -11,9 +11,6 @@ func privMsg(text string) telego.Update {
 	return telego.Update{Message: &telego.Message{Chat: telego.Chat{Type: "private"}, Text: text}}
 }
 
-// TestDMRouting verifies which private-chat messages reach a command handler (privateNonStart
-// returns false) versus get the unified auto-reply (true): every member command and the
-// /start deep link are handled; admin/moderation commands and plain text get the auto-reply.
 func TestDMRouting(t *testing.T) {
 	handled := []string{
 		"/pkg vim", "/use vim", "/bug 1", "/news", "/wiki x", "/bbs x",

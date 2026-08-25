@@ -2,9 +2,6 @@ package main
 
 import "testing"
 
-// TestShuffledQuestion verifies the quiz shuffler always reports the correct option's NEW
-// index after shuffling — a wrong correctIdx would reject correct answers (or accept wrong
-// ones), breaking verification. Run many times since the order is random.
 func TestShuffledQuestion(t *testing.T) {
 	q := Question{Q: "pick A", Options: []string{"A", "B", "C", "D"}, Answer: 0}
 	for i := 0; i < 200; i++ {

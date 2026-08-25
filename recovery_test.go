@@ -14,7 +14,6 @@ func setOffline(v *Verifier) {
 }
 func setOnline(v *Verifier) { v.mu.Lock(); v.lastOnline = time.Now(); v.mu.Unlock() }
 
-// TestOfflineNow: seeded online at construction; flips offline only after contact goes stale.
 func TestOfflineNow(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	if v.offlineNow() {
@@ -30,22 +29,6 @@ func TestOfflineNow(t *testing.T) {
 	}
 }
 
-// TestStrikesUserReasons: only genuine user failures strike; bot-fault / outage reasons never do.
-func TestStrikesUserReasons(t *testing.T) {
-	for _, r := range []string{"approve-retry", "restart-lapsed", "recovered"} {
-		if strikesUser(r) {
-			t.Errorf("%q must NOT strike the user (not their fault)", r)
-		}
-	}
-	for _, r := range []string{"timeout", "wrong answer"} {
-		if !strikesUser(r) {
-			t.Errorf("%q should strike", r)
-		}
-	}
-}
-
-// TestOnExpiryOfflineDefers: a timeout firing while the bot is offline must not decline or strike; it
-// keeps the pending and re-arms a fresh window, so an outage can't burn a mid-verification user.
 func TestOnExpiryOfflineDefers(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240, VerifyMaxFails: 3})
 	setOffline(v)
@@ -71,7 +54,6 @@ func TestOnExpiryOfflineDefers(t *testing.T) {
 	}
 }
 
-// TestOnExpiryOnlineDeclines: a timeout firing while online (and reachable) declines + strikes.
 func TestOnExpiryOnlineDeclines(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240, VerifyMaxFails: 3}) // seeded online, no probe => reachable
 	key := pkey{-100, 5}
@@ -89,8 +71,6 @@ func TestOnExpiryOnlineDeclines(t *testing.T) {
 	}
 }
 
-// TestOnExpiryOnsetLagProbeDefers: at outage ONSET offlineNow may still read false (heartbeat lag), but
-// an on-demand probe that can't reach Telegram must make the expiry defer instead of declining/striking.
 func TestOnExpiryOnsetLagProbeDefers(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240, VerifyMaxFails: 3}) // offlineNow == false (seeded online)
 	probe := &fakeVerifyBot{getMeErr: errors.New("network down")}
@@ -116,8 +96,6 @@ func TestOnExpiryOnsetLagProbeDefers(t *testing.T) {
 	}
 }
 
-// TestOnExpiryStaleEpochNoop: a superseded timer (its epoch bumped by a later re-arm) must no-op even
-// while online — the guard that stops a pre-recovery timeout from declining/striking a refreshed user.
 func TestOnExpiryStaleEpochNoop(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240, VerifyMaxFails: 3}) // online
 	key := pkey{-100, 5}
@@ -144,8 +122,6 @@ func TestOnExpiryStaleEpochNoop(t *testing.T) {
 	}
 }
 
-// TestExpiryDeferThenOnlineStrikes: a pending deferred during an outage must still be declined AND
-// struck once the bot is back online — the defer must not launder away a genuine timeout forever.
 func TestExpiryDeferThenOnlineStrikes(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240, VerifyMaxFails: 3})
 	setOffline(v)
@@ -174,8 +150,6 @@ func TestExpiryDeferThenOnlineStrikes(t *testing.T) {
 	}
 }
 
-// TestDeferExpiryGuards: deferring a stale expiry (nonce OR epoch no longer matches) is a no-op — it
-// must not resurrect or re-arm a pending a newer request/re-arm has superseded.
 func TestDeferExpiryGuards(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	key := pkey{-100, 5}
@@ -191,8 +165,6 @@ func TestDeferExpiryGuards(t *testing.T) {
 	}
 }
 
-// TestHeartbeatTickRecovers: a successful probe that ends a long outage advances lastOnline and triggers
-// the recovery refresh + re-notify.
 func TestHeartbeatTickRecovers(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	v.botUsername = "bot"
@@ -220,8 +192,6 @@ func TestHeartbeatTickRecovers(t *testing.T) {
 	}
 }
 
-// TestHeartbeatTickOfflineKeepsClock: a failed probe returns false and must NOT advance lastOnline (so
-// offlineNow can flip true).
 func TestHeartbeatTickOfflineKeepsClock(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	before := time.Now().Add(-time.Hour)
@@ -240,8 +210,6 @@ func TestHeartbeatTickOfflineKeepsClock(t *testing.T) {
 	}
 }
 
-// TestOnRecoveryRefreshesAndRenotifies: after an outage, every live pending gets a fresh full window
-// and a best-effort re-notify (a DM plus a fresh in-group challenge), and stays live.
 func TestOnRecoveryRefreshesAndRenotifies(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	v.botUsername = "bot"
@@ -267,8 +235,6 @@ func TestOnRecoveryRefreshesAndRenotifies(t *testing.T) {
 	}
 }
 
-// TestOnRecoveryRenotifyCooldown: a second recovery within a window (flapping) refreshes silently and
-// must NOT re-message the same applicant again.
 func TestOnRecoveryRenotifyCooldown(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	v.botUsername = "bot"
@@ -290,7 +256,6 @@ func TestOnRecoveryRenotifyCooldown(t *testing.T) {
 	}
 }
 
-// TestOnRecoveryShuttingDown: recovery is a no-op once shutdown has begun (don't fight the exit).
 func TestOnRecoveryShuttingDown(t *testing.T) {
 	v := NewVerifier(&Config{TimeoutSeconds: 240})
 	v.pend[pkey{-100, 1}] = &pending{nonce: "a", deadline: time.Now()}
@@ -302,8 +267,6 @@ func TestOnRecoveryShuttingDown(t *testing.T) {
 	}
 }
 
-// TestLoadRefreshesAfterOutage: restoring after a long downtime gives a fresh full window (not the
-// stale ~30s remaining) and re-notifies; the strike-free "recovered" reason means a lapse won't ban.
 func TestLoadRefreshesAfterOutage(t *testing.T) {
 	dir := t.TempDir()
 	seed := NewVerifier(&Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
@@ -339,8 +302,6 @@ func TestLoadRefreshesAfterOutage(t *testing.T) {
 	}
 }
 
-// TestLoadQuickRestartKeepsWindow: a quick restart (recent heartbeat) restores the remaining window and
-// does NOT re-notify — a routine deploy stays quiet.
 func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	dir := t.TempDir()
 	seed := NewVerifier(&Config{TimeoutSeconds: 240, GroupIDs: []int64{-100}})
@@ -372,8 +333,6 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 	}
 }
 
-// TestStreamEndedUnexpectedly: the lifecycle guard — a nil ctx error (stream ended without a shutdown
-// signal) means restart; a cancelled ctx (real shutdown) means graceful exit.
 func TestStreamEndedUnexpectedly(t *testing.T) {
 	if !streamEndedUnexpectedly(nil) {
 		t.Error("nil ctx error should signal an unexpected end => restart")
@@ -383,8 +342,6 @@ func TestStreamEndedUnexpectedly(t *testing.T) {
 	}
 }
 
-// TestOutageText: friendly duration rendering, incl. an hours branch for a long outage, in each
-// locale the verification path speaks.
 func TestOutageText(t *testing.T) {
 	cases := map[time.Duration]string{
 		45 * time.Second: "45 秒",
@@ -401,5 +358,24 @@ func TestOutageText(t *testing.T) {
 	}
 	if got := outageText(langEN, 8*time.Hour); got != "8 hours" {
 		t.Errorf("outageText(en, 8h) = %q, want %q", got, "8 hours")
+	}
+}
+
+func TestChallengeExpiryReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		groupMsgID int
+		wantStrike bool
+	}{
+		{name: "challenge delivered", groupMsgID: 1, wantStrike: true},
+		{name: "challenge missing", groupMsgID: 0, wantStrike: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := challengeExpiryReason(tt.groupMsgID)
+			if got := strikesUser(reason); got != tt.wantStrike {
+				t.Errorf("strikesUser(%q) = %v, want %v", reason, got, tt.wantStrike)
+			}
+		})
 	}
 }

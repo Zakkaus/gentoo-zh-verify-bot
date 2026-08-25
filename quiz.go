@@ -5,9 +5,7 @@ import (
 	"math/big"
 )
 
-// cryptoIntn returns a uniform random int in [0,n) backed by crypto/rand — the quiz pick and
-// shuffle are an anti-automation control, so they use a cryptographic source rather than
-// math/rand. Falls back to 0 on the practically-impossible RNG error (safe, just degenerate).
+// Challenge selection uses crypto/rand; failure degrades to deterministic index zero.
 func cryptoIntn(n int) int {
 	if n <= 1 {
 		return 0
@@ -19,16 +17,12 @@ func cryptoIntn(n int) int {
 	return int(v.Int64())
 }
 
-// randomQuestion picks a random question from the group's pool (its own questions if
-// configured, otherwise the global pool).
 func (c *Config) randomQuestion(gid int64) Question {
 	qs := c.questions(gid)
 	return qs[cryptoIntn(len(qs))]
 }
 
-// shuffledQuestion returns the question text, its options in randomized order, and the index of
-// the correct option within the shuffled slice. Shuffling (Fisher–Yates, crypto/rand-backed)
-// prevents scripts from blindly clicking a fixed button position.
+// Shuffling prevents fixed-position clicks while preserving the correct option's new index.
 func shuffledQuestion(q Question) (text string, opts []string, correctIdx int) {
 	order := make([]int, len(q.Options))
 	for i := range order {

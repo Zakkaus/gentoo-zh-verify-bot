@@ -5,14 +5,13 @@ import (
 	"time"
 )
 
-// vfailRec tracks an applicant's failed-verification strikes and the time of the last one,
-// so re-applying too soon can be throttled and a repeat-offender can be auto-banned.
+// vfailRec drives both retry cooldowns and automatic bans.
 type vfailRec struct {
 	count int
 	last  time.Time
 }
 
-// vfailDisk is the on-disk form (a struct key isn't JSON-friendly, so we store a slice).
+// JSON uses a slice because pkey cannot be an object key.
 type vfailDisk struct {
 	GroupID int64 `json:"group_id"`
 	UserID  int64 `json:"user_id"`
@@ -20,13 +19,10 @@ type vfailDisk struct {
 	Last    int64 `json:"last"`
 }
 
-// vfailMax bounds the strike map; cleared wholesale past the cap (entries are cheap and the
-// real anti-spam teeth is the auto-ban, so a wholesale reset under a flood is acceptable).
+// Clear the bounded map wholesale under an exceptional ID flood.
 const vfailMax = 50000
 
-// verifyFailWindow is the rolling window over which verification failures count toward the
-// auto-ban: a failure older than this is forgotten, so only sustained failures (a spammer
-// retrying) reach the threshold, while a genuine user's occasional mistakes age out.
+// Only sustained failures within this rolling window accumulate toward a ban.
 const verifyFailWindow = 6 * time.Hour
 
 func (v *Verifier) loadVerifyFails() {
@@ -35,7 +31,10 @@ func (v *Verifier) loadVerifyFails() {
 	}
 	var recs []vfailDisk
 	if err := loadJSONFile(v.vfailPath, &recs); err != nil {
-		return // corrupt file backed up to .corrupt; start empty
+		if stateReadFailed(err) {
+			v.vfailPath = ""
+		}
+		return // corrupt files were backed up; unreadable files remain untouched and write-disabled
 	}
 	v.mu.Lock()
 	for _, r := range recs {
@@ -54,20 +53,20 @@ func (v *Verifier) saveVerifyFails() {
 	if v.vfailPath == "" {
 		return
 	}
-	v.mu.Lock()
-	recs := make([]vfailDisk, 0, len(v.vfail))
-	for k, r := range v.vfail {
-		if r.count > 0 {
-			recs = append(recs, vfailDisk{GroupID: k.gid, UserID: k.uid, Count: r.count, Last: r.last.Unix()})
+	saveJSONFile(v.vfailPath, func() any {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		recs := make([]vfailDisk, 0, len(v.vfail))
+		for k, r := range v.vfail {
+			if r.count > 0 {
+				recs = append(recs, vfailDisk{GroupID: k.gid, UserID: k.uid, Count: r.count, Last: r.last.Unix()})
+			}
 		}
-	}
-	v.mu.Unlock()
-	writeJSONFile(v.vfailPath, recs)
+		return recs
+	})
 }
 
-// recordVerifyFail registers a failed verification for (gid,uid) and reports the new strike
-// count and whether it has reached the auto-ban threshold (cfg.VerifyMaxFails; negative =>
-// never). Persisted so a restart doesn't wipe a spammer's strikes.
+// Strikes persist across restarts; a negative threshold disables automatic bans.
 func (v *Verifier) recordVerifyFail(gid, uid int64) (count int, ban bool) {
 	v.mu.Lock()
 	key := pkey{gid, uid}
@@ -80,9 +79,8 @@ func (v *Verifier) recordVerifyFail(gid, uid int64) (count int, ban bool) {
 		v.vfail[key] = r
 	}
 	if r.count > 0 && time.Since(r.last) > verifyFailWindow {
-		r.count = 0 // strikes age out: isolated failures long ago don't count toward the ban,
-		// so a genuine user's occasional timeouts/mistakes spread over time aren't auto-banned —
-		// only sustained failures within the window reach the threshold.
+		r.count = 0 // Isolated old failures must not accumulate into a ban.
+		// Only failures inside verifyFailWindow accumulate.
 	}
 	r.count++
 	r.last = time.Now()
@@ -93,8 +91,7 @@ func (v *Verifier) recordVerifyFail(gid, uid int64) (count int, ban bool) {
 	return count, max > 0 && count >= max
 }
 
-// clearVerifyFails drops an applicant's strikes — called on a successful approval so a member
-// who eventually verifies starts fresh next time.
+// Successful verification clears prior strikes.
 func (v *Verifier) clearVerifyFails(gid, uid int64) {
 	v.mu.Lock()
 	_, had := v.vfail[pkey{gid, uid}]
@@ -105,8 +102,7 @@ func (v *Verifier) clearVerifyFails(gid, uid int64) {
 	}
 }
 
-// verifyCooldownRemaining returns how long an applicant must still wait before re-applying
-// (cfg.VerifyRetrySeconds since their last failure), or 0 if they may apply now.
+// verifyCooldownRemaining returns zero when the applicant may reapply.
 func (v *Verifier) verifyCooldownRemaining(gid, uid int64) time.Duration {
 	secs := v.cfg.VerifyRetrySeconds
 	if secs <= 0 {

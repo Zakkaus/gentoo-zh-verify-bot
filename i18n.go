@@ -2,11 +2,8 @@ package main
 
 import "strings"
 
-// The verification path speaks three locales, chosen from the applicant's Telegram interface
-// language (the `language_code` Telegram sends with every user): Simplified Chinese, Traditional
-// Chinese, and English for everyone else. Only the APPLICANT-facing strings are translated —
-// admin output, the admin log and the group's moderation replies stay Simplified Chinese, because
-// they are read by this community's admins, not by the joiner.
+// Applicant-facing verification uses Telegram's interface language.
+// Administrative and moderation output remains Simplified Chinese.
 type lang string
 
 const (
@@ -15,11 +12,8 @@ const (
 	langEN  lang = "en"
 )
 
-// langFor maps an IETF language tag from Telegram to one of the three supported locales.
-// "zh-hant", "zh-tw", "zh-hk", "zh-mo" (and a bare "yue") read as Traditional; any other zh as
-// Simplified; everything else, including an empty/unknown tag, as English. Telegram sends the
-// user's INTERFACE language, so a Chinese speaker running an English client gets English — that is
-// the best signal available, and the answer (a version number) is language-neutral anyway.
+// Traditional tags and Yue map to Traditional Chinese; other zh tags map to Simplified.
+// Unknown or empty interface languages use English.
 func langFor(code string) lang {
 	c := strings.ToLower(strings.TrimSpace(code))
 	if !strings.HasPrefix(c, "zh") && !strings.HasPrefix(c, "yue") {
@@ -50,10 +44,7 @@ type catalog struct {
 	NoLinuxRetry string // they said they have no Linux but left out (or mistyped) the minute
 	OSMixed      string // they named another OS but also sent a plausible kernel version
 
-	// FallbackIntro + FallbackQuestions are the escape for an applicant with no Linux installed: a
-	// SHORT-ANSWER question whose answer appears nowhere in the message. Never advertised in the
-	// prompt — only offered to someone who says they have no Linux — so a spam operator can't learn
-	// the path exists, and reading it would not hand them an answer anyway.
+	// The no-Linux fallback is answer-hidden and never advertised in the initial prompt.
 	FallbackIntro     string // 1 question, 2 replies left
 	FallbackWrong     string // 1 replies left
 	FallbackQuestions []ShortQuestion
@@ -89,7 +80,7 @@ var catalogs = map[lang]*catalog{
 		KernelQuestion: "你正在运行的 Linux 内核版本号是多少?",
 
 		QuizPrompt:    "请回答下面的问题完成入群验证:\n\n❓ %[1]s",
-		KernelPrompt:  "完成入群验证，请回答以下问题。\n\n❓ %[1]s\n\n<b>作答方式</b>\n在终端执行 <code>uname -r</code>，将输出的内核版本号发送至此。\n格式形如 <code>7.1.30</code> 或 <code>7.1.30-gentoo</code>，各发行版均可。\n请发送本机实际版本号，勿使用示例中的版本号。\n\n<b>无 Linux 设备</b>\n回复 <code>无 Linux 设备</code>，并发送当前分钟数。\n分钟数为时钟冒号后两位，例如 14:46 为 <code>46</code>。\n示例：<code>无 Linux 设备46</code>\n\n剩余 %[2]d 次机会。答错或超时将被拒绝。",
+		KernelPrompt:  "完成入群验证，请回答以下问题。\n\n❓ %[1]s\n\n<b>作答方式</b>\n在终端执行 <code>uname -r</code>，将输出的内核版本号发送至此。\n格式形如 <code>X.Y.Z-gentoo</code>，各发行版均可。\n请发送本机实际版本号，勿使用示例中的占位符。\n\n<b>无 Linux 设备</b>\n回复 <code>无 Linux 设备</code>，并发送当前分钟数。\n分钟数为时钟冒号后两位，例如 14:46 为 <code>46</code>。\n示例：<code>无 Linux 设备46</code>\n\n剩余 %[2]d 次机会。答错或超时将被拒绝。",
 		KernelWrong:   "❌ 这不是有效的 Linux 内核版本号。请执行 <code>uname -r</code>，发送其输出。剩余 %[1]d 次机会。",
 		SampleCopied:  "你发送的是示例中的版本号，而非本机版本号。请执行 <code>uname -r</code>，发送实际输出。再次发送示例将被拒绝。",
 		NoLinuxRetry:  "格式如下：回复 <code>无 Linux 设备</code>，并发送当前分钟数。分钟数为时钟冒号后两位，例如 14:46 为 <code>46</code>。",
@@ -130,7 +121,7 @@ var catalogs = map[lang]*catalog{
 		KernelQuestion: "你正在執行的 Linux 核心(kernel)版本號是多少?",
 
 		QuizPrompt:    "請回答下面的問題完成入群驗證:\n\n❓ %[1]s",
-		KernelPrompt:  "完成入群驗證，請回答以下問題。\n\n❓ %[1]s\n\n<b>作答方式</b>\n在終端機執行 <code>uname -r</code>，將輸出的核心版本號傳送至此。\n格式形如 <code>7.1.30</code> 或 <code>7.1.30-gentoo</code>，各發行版皆可。\n請傳送本機實際版本號，勿使用範例中的版本號。\n\n<b>無 Linux 裝置</b>\n回覆 <code>無 Linux 裝置</code>，並傳送當前分鐘數。\n分鐘數為時鐘冒號後兩位，例如 14:46 為 <code>46</code>。\n範例：<code>無 Linux 裝置46</code>\n\n剩餘 %[2]d 次機會。答錯或逾時將被拒絕。",
+		KernelPrompt:  "完成入群驗證，請回答以下問題。\n\n❓ %[1]s\n\n<b>作答方式</b>\n在終端機執行 <code>uname -r</code>，將輸出的核心版本號傳送至此。\n格式形如 <code>X.Y.Z-gentoo</code>，各發行版皆可。\n請傳送本機實際版本號，勿使用範例中的佔位符。\n\n<b>無 Linux 裝置</b>\n回覆 <code>無 Linux 裝置</code>，並傳送當前分鐘數。\n分鐘數為時鐘冒號後兩位，例如 14:46 為 <code>46</code>。\n範例：<code>無 Linux 裝置46</code>\n\n剩餘 %[2]d 次機會。答錯或逾時將被拒絕。",
 		KernelWrong:   "❌ 這不是有效的 Linux 核心版本號。請執行 <code>uname -r</code>，傳送其輸出。剩餘 %[1]d 次機會。",
 		SampleCopied:  "你傳送的是範例中的版本號，而非本機版本號。請執行 <code>uname -r</code>，傳送實際輸出。再次傳送範例將被拒絕。",
 		NoLinuxRetry:  "格式如下：回覆 <code>無 Linux 裝置</code>，並傳送當前分鐘數。分鐘數為時鐘冒號後兩位，例如 14:46 為 <code>46</code>。",
@@ -171,7 +162,7 @@ var catalogs = map[lang]*catalog{
 		KernelQuestion: "What is the version of the Linux kernel you are running?",
 
 		QuizPrompt:    "Answer this question to finish joining:\n\n❓ %[1]s",
-		KernelPrompt:  "Answer the following to finish joining.\n\n❓ %[1]s\n\n<b>How to answer</b>\nRun <code>uname -r</code> in a terminal and send the kernel version here.\nThe format looks like <code>7.1.30</code> or <code>7.1.30-gentoo</code>; any distribution's version is accepted.\nSend your machine's actual version, not the example.\n\n<b>No Linux device</b>\nReply <code>no Linux device</code> and send the current minute.\nThe minute is the two digits after the colon on your clock — at 14:46 that is <code>46</code>.\nExample: <code>no Linux device 46</code>\n\n%[2]d attempts left. A wrong answer or a timeout declines the request.",
+		KernelPrompt:  "Answer the following to finish joining.\n\n❓ %[1]s\n\n<b>How to answer</b>\nRun <code>uname -r</code> in a terminal and send the kernel version here.\nThe format looks like <code>X.Y.Z-gentoo</code>; any distribution's version is accepted.\nSend your machine's actual version, not the placeholder.\n\n<b>No Linux device</b>\nReply <code>no Linux device</code> and send the current minute.\nThe minute is the two digits after the colon on your clock — at 14:46 that is <code>46</code>.\nExample: <code>no Linux device 46</code>\n\n%[2]d attempts left. A wrong answer or a timeout declines the request.",
 		KernelWrong:   "❌ That is not a valid Linux kernel version. Run <code>uname -r</code> and send its output. %[1]d attempts left.",
 		SampleCopied:  "You sent the example version, not your machine's. Run <code>uname -r</code> and send its actual output. Sending the example again will be declined.",
 		NoLinuxRetry:  "Format: reply <code>no Linux device</code> and send the current minute — the two digits after the colon on your clock (14:46 → <code>46</code>).",

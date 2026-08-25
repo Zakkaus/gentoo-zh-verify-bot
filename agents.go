@@ -8,28 +8,19 @@ import (
 	"strings"
 )
 
-// --- automated-agent tally -------------------------------------------------------------------
-//
-// The kernel-mode DM carries a tripwire asking an LLM agent to name its model instead of answering
-// (see aiTrapLine). Every agent that complies is counted here — per claimed model — so admins can
-// see WHICH models are being pointed at the group, not just that "a bot tried". The claim is
-// self-reported and trivially spoofable; it is a usage tally, never evidence.
+// Tallies self-reported models from the kernel challenge's agent tripwire.
+// Claims are untrusted usage data, never evidence.
 
-// agentModelMax bounds the distinct model keys kept, so a spammer sending random strings can't grow
-// the state file without limit. Once full, further unknown models fold into the "other" bucket.
+// Unknown models fold into "other" after this many distinct keys.
 const agentModelMax = 200
 
-// modelValue is what may survive from a self-reported model name: letters, digits and the handful
-// of separators real model ids use. Everything else is dropped before the name is stored or shown.
+// Only model-ID characters may reach logs or persisted state.
 var modelValue = regexp.MustCompile(`[^0-9A-Za-z.:_/+-]+`)
 
-// modelDeclare matches an explicit "model=…" / "model: …" claim, the form the tripwire asks for.
+// modelDeclare matches the explicit form requested by the tripwire.
 var modelDeclare = regexp.MustCompile(`(?i)\bmodel\s*[=:]\s*([0-9A-Za-z][0-9A-Za-z.:_/+-]*)`)
 
-// modelFamilies are the model names worth recognising when an agent answers in prose ("I'm ChatGPT,
-// running GPT-5") instead of the requested form. Matched case-insensitively against the whole reply
-// and normalised to the family, so the tally stays readable instead of splitting across phrasings.
-// Scanned LONGEST FIRST (see init) so "chatgpt" isn't swallowed by "gpt" and "chatglm" not by "glm".
+// Prose replies are normalized to these families. Longest matches win.
 var modelFamilies = []string{
 	// western
 	"claude", "sonnet", "opus", "haiku", "chatgpt", "gpt", "openai", "o3", "o4", "gemini", "gemma",
@@ -43,8 +34,7 @@ var modelFamilies = []string{
 	"ollama", "openrouter", "groq", "together", "siliconflow",
 }
 
-// familyRe matches any of the names above as a WHOLE word, longest first (built in init). Word
-// boundaries matter for the short ones: a bare Contains("yi") would tag half the alphabet.
+// Whole-word matching prevents short names such as "yi" from matching inside other words.
 var familyRe *regexp.Regexp
 
 func init() {
@@ -57,9 +47,7 @@ func init() {
 	familyRe = regexp.MustCompile(`(?i)\b(` + strings.Join(modelFamilies, "|") + `)\b`)
 }
 
-// claimedModel extracts the model an agent named in its reply: the requested "model=<id>" form
-// first, then a recognised family name anywhere in the text, else "unknown". The result is
-// sanitised and length-capped — it is untrusted input that ends up in a log line and a state file.
+// claimedModel extracts and sanitizes an explicit model ID or recognized family.
 func claimedModel(text string) string {
 	if m := modelDeclare.FindStringSubmatch(text); len(m) == 2 {
 		return sanitizeModel(m[1])
@@ -70,7 +58,6 @@ func claimedModel(text string) string {
 	return "unknown"
 }
 
-// sanitizeModel strips anything that isn't part of a plausible model id and caps the length.
 func sanitizeModel(s string) string {
 	s = strings.ToLower(strings.TrimSpace(modelValue.ReplaceAllString(s, "")))
 	if s == "" {
@@ -82,36 +69,39 @@ func sanitizeModel(s string) string {
 	return s
 }
 
-// agentTally is the persisted count of tripped agents, keyed by claimed model.
+// agentTally persists tripwire counts by claimed model.
 type agentTally struct {
 	Total  int            `json:"total"`
 	Counts map[string]int `json:"counts"`
 }
 
-// recordAgent counts one tripped agent under its claimed model and persists the tally. Returns the
-// model as recorded and the new total, for the log line and the admin alert.
+// recordAgent persists one tripwire result and returns its model and the new total.
 func (v *Verifier) recordAgent(text string) (model string, total int) {
 	model = claimedModel(text)
-	v.agentMu.Lock()
-	defer v.agentMu.Unlock()
-	if v.agents.Counts == nil {
-		v.agents.Counts = map[string]int{}
+	// Snapshot under stateWriteMu before agentMu; reversing that order can deadlock other saves.
+	count := func() any {
+		v.agentMu.Lock()
+		defer v.agentMu.Unlock()
+		if v.agents.Counts == nil {
+			v.agents.Counts = map[string]int{}
+		}
+		if _, known := v.agents.Counts[model]; !known && len(v.agents.Counts) >= agentModelMax {
+			model = "other" // key cap reached: fold the long tail into one bucket
+		}
+		v.agents.Counts[model]++
+		v.agents.Total++
+		total = v.agents.Total
+		return agentTally{Total: v.agents.Total, Counts: copyCounts(v.agents.Counts)}
 	}
-	if _, known := v.agents.Counts[model]; !known && len(v.agents.Counts) >= agentModelMax {
-		model = "other" // key cap reached: fold the long tail into one bucket
+	if v.agentPath == "" {
+		count() // no persistence configured: the in-memory tally still has to advance
+		return model, total
 	}
-	v.agents.Counts[model]++
-	v.agents.Total++
-	total = v.agents.Total
-	tally := agentTally{Total: v.agents.Total, Counts: copyCounts(v.agents.Counts)}
-	if v.agentPath != "" {
-		writeJSONFile(v.agentPath, tally)
-	}
+	saveJSONFile(v.agentPath, count)
 	return model, total
 }
 
-// copyCounts copies a counter map so the snapshot written to disk can't race further increments.
-// (Not named maps() — that would shadow the stdlib package for the whole main package.)
+// copyCounts isolates the persisted snapshot from later increments.
 func copyCounts(m map[string]int) map[string]int {
 	out := make(map[string]int, len(m))
 	for k, n := range m {
@@ -120,14 +110,16 @@ func copyCounts(m map[string]int) map[string]int {
 	return out
 }
 
-// loadAgents restores the tally at startup. A missing file is a first run; a corrupt one is backed
-// up by loadJSONFile and we start from zero.
+// Missing or corrupt state restores as an empty tally; unreadable state disables later writes.
 func (v *Verifier) loadAgents() {
 	if v.agentPath == "" {
 		return
 	}
 	var t agentTally
 	if err := loadJSONFile(v.agentPath, &t); err != nil {
+		if stateReadFailed(err) {
+			v.agentPath = ""
+		}
 		return
 	}
 	v.agentMu.Lock()
@@ -141,8 +133,7 @@ func (v *Verifier) loadAgents() {
 	}
 }
 
-// agentStatsText renders the tally as one line, models ordered by count (ties alphabetical), or ""
-// when nothing has ever been caught — so /stats stays quiet on a group that has never seen one.
+// agentStatsText returns the six busiest models, or "" before the first catch.
 func (v *Verifier) agentStatsText() string {
 	v.agentMu.Lock()
 	total := v.agents.Total

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -17,10 +18,27 @@ var bugIDRe = regexp.MustCompile(`^[0-9]{1,9}$`)
 type bugInfo struct {
 	summary, status, resolution, product, component, severity string
 }
+type bugLookupState uint8
 
-// Bugzilla enum-value translations for Chinese output. The labels are already
-// localized; these turn the finite status / resolution / severity / priority *values*
-// into Chinese too. Component names, keywords and people stay as-is (official identifiers).
+const (
+	bugLookupUnavailable bugLookupState = iota
+	bugLookupFound
+	bugLookupNotFound
+)
+
+type bugResponse struct {
+	Error bool `json:"error"`
+	Bugs  []struct {
+		Summary    string `json:"summary"`
+		Status     string `json:"status"`
+		Resolution string `json:"resolution"`
+		Product    string `json:"product"`
+		Component  string `json:"component"`
+		Severity   string `json:"severity"`
+	} `json:"bugs"`
+}
+
+// Only Bugzilla's finite enum values are localized; official identifiers stay unchanged.
 var (
 	bugStatusZH = map[string]string{
 		"UNCONFIRMED": "未确认", "CONFIRMED": "已确认", "IN_PROGRESS": "处理中",
@@ -28,19 +46,18 @@ var (
 	}
 	bugResolutionZH = map[string]string{
 		"FIXED": "已修复", "WONTFIX": "不予修复", "CANTFIX": "无法修复", "DUPLICATE": "重复",
-		"INVALID": "无效", "WORKSFORME": "无法复现", "OBSOLETE": "已过时", "UPSTREAM": "上游",
-		"NEEDINFO": "需补充信息", "TEST-REQUEST": "待测试", "PENDING-UPSTREAM": "待上游",
+		"INVALID": "无效", "WORKSFORME": "无法复现", "OBSOLETE": "已过时", "UPSTREAM": "需向上游报告",
+		"PKGREMOVED": "软件包已移除", "NEEDINFO": "需补充信息", "TEST-REQUEST": "待测试", "PENDING-UPSTREAM": "待上游",
 	}
 	bugSeverityZH = map[string]string{
 		"blocker": "阻断", "critical": "严重", "major": "重大", "normal": "普通",
-		"minor": "次要", "trivial": "轻微", "enhancement": "增强",
+		"minor": "次要", "trivial": "轻微", "enhancement": "功能请求",
 	}
 	bugPriorityZH = map[string]string{
 		"Highest": "最高", "High": "高", "Normal": "普通", "Low": "低", "Lowest": "最低",
 	}
 )
 
-// zhVal returns v translated via m when zh is true and a translation exists; else v.
 func zhVal(m map[string]string, v string, zh bool) string {
 	if zh {
 		if t, ok := m[v]; ok {
@@ -50,30 +67,31 @@ func zhVal(m map[string]string, v string, zh bool) string {
 	return v
 }
 
-// fetchBug queries the public Gentoo Bugzilla REST API. ok=false for missing,
-// restricted (both return 404), or any error — callers fall back to a bare link.
-func fetchBug(ctx context.Context, id string) (bugInfo, bool) {
+// Only an HTTP 404 is authoritative; malformed, restricted, and failed responses are retryable.
+func fetchBug(ctx context.Context, id string) (bugInfo, bugLookupState) {
 	u := "https://bugs.gentoo.org/rest/bug/" + id +
 		"?include_fields=summary,status,resolution,product,component,severity"
-	var br struct {
-		Error bool `json:"error"`
-		Bugs  []struct {
-			Summary    string `json:"summary"`
-			Status     string `json:"status"`
-			Resolution string `json:"resolution"`
-			Product    string `json:"product"`
-			Component  string `json:"component"`
-			Severity   string `json:"severity"`
-		} `json:"bugs"`
+	var br bugResponse
+	if err := httpGetJSON(ctx, u, nil, &br); err != nil {
+		if httpStatusCode(err) == http.StatusNotFound {
+			return bugInfo{}, bugLookupNotFound
+		}
+		return bugInfo{}, bugLookupUnavailable
 	}
-	if err := httpGetJSON(ctx, u, nil, &br); err != nil || br.Error || len(br.Bugs) == 0 {
-		return bugInfo{}, false
+	if br.Error || len(br.Bugs) == 0 {
+		return bugInfo{}, bugLookupUnavailable
 	}
 	b := br.Bugs[0]
-	return bugInfo{b.Summary, b.Status, b.Resolution, b.Product, b.Component, b.Severity}, true
+	return bugInfo{b.Summary, b.Status, b.Resolution, b.Product, b.Component, b.Severity}, bugLookupFound
 }
 
-// onBug handles /bug <id> — Gentoo Bugzilla quick lookup.
+func bugLookupFailureMessage(id, link string, state bugLookupState) string {
+	if state == bugLookupNotFound {
+		return fmt.Sprintf("❓ Bug %s 不存在。", id)
+	}
+	return fmt.Sprintf("❓ 暂时无法获取 Bug %s 的详情，请稍后重试。可直接查看：%s", id, link)
+}
+
 func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.queryAllowed(ctx, msg) {
@@ -90,12 +108,10 @@ func (v *Verifier) onBug(ctx *th.Context, update telego.Update) error {
 
 	hc, cancel := context.WithTimeout(c, 20*time.Second)
 	defer cancel()
-	info, ok := fetchBug(hc, id)
-	if !ok {
-		// Route through replyLookupPlain like every other lookup's not-found path: reply-linked
-		// + auto-deleted with the command, instead of lingering in the group forever.
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID,
-			fmt.Sprintf("❓ 暂时无法获取 Bug %s 的详情(可能不存在或非公开)。可直接查看:%s", id, link))
+	info, state := fetchBug(hc, id)
+	if state != bugLookupFound {
+		// Keep unsuccessful lookups on the reply-linked cleanup path.
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, bugLookupFailureMessage(id, link, state))
 		return nil
 	}
 

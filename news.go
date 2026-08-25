@@ -21,7 +21,6 @@ type newsItem struct {
 
 const newsTTL = 30 * time.Minute
 
-// newsURL / newsBase are configurable (default: gentoo.org).
 var newsURL = "https://www.gentoo.org/support/news-items/"
 var newsBase = "https://www.gentoo.org"
 
@@ -34,7 +33,7 @@ func configureNews(cfg *Config) {
 	}
 }
 
-// matches <a href="/support/news-items/YYYY-MM-DD-slug.html">Title</a>
+// Gentoo news links encode the publication date in their path.
 var newsRe = regexp.MustCompile(`href="(/support/news-items/(\d{4}-\d{2}-\d{2})-[^"]+\.html)"[^>]*>([^<]+)<`)
 
 var newsC = struct {
@@ -51,15 +50,12 @@ func fetchNews(c context.Context) ([]newsItem, error) {
 	}
 	items := parseNews(body)
 	if len(items) == 0 && len(body) > 0 {
-		// We fetched a page but matched nothing — most likely the index HTML structure changed
-		// and newsRe needs updating. Log loudly rather than silently returning "no news".
-		log.Printf("fetchNews: parsed 0 items from %d bytes of %s — the news page layout may have changed (update newsRe)", len(body), newsURL)
+		// Treat markup drift as unavailable so it cannot become an authoritative empty index.
+		return nil, fmt.Errorf("parsed 0 items from %d bytes of %s; the news page layout may have changed", len(body), newsURL)
 	}
 	return items, nil
 }
 
-// parseNews extracts the (deduped) news items from the index HTML. Split out from the fetch so a
-// fixture of the real page structure can guard the regex against a silent "0 items" if it drifts.
 func parseNews(body []byte) []newsItem {
 	seen := map[string]bool{}
 	var items []newsItem
@@ -74,16 +70,14 @@ func parseNews(body []byte) []newsItem {
 	return items
 }
 
-func getNews(c context.Context) []newsItem {
+func getNews(c context.Context) ([]newsItem, bool) {
 	newsC.mu.Lock()
-	// Gate freshness on the fetch TIME, not on having items: a legitimately empty fetch is still a
-	// successful fetch, so caching it (rather than re-checking len>0) stops /news from re-hitting
-	// upstream on every call when the page genuinely has no items.
+	// Freshness follows fetch time so an empty success is cached.
 	fresh := !newsC.fetched.IsZero() && time.Since(newsC.fetched) < newsTTL
 	if fresh || newsC.loading {
 		items := newsC.items
 		newsC.mu.Unlock()
-		return items
+		return items, fresh
 	}
 	newsC.loading = true
 	newsC.mu.Unlock()
@@ -95,27 +89,15 @@ func getNews(c context.Context) []newsItem {
 		newsC.mu.Lock()
 		old := newsC.items
 		newsC.mu.Unlock()
-		return old
+		return old, false
 	}
 	newsC.mu.Lock()
 	newsC.items, newsC.fetched = items, time.Now()
 	newsC.mu.Unlock()
-	return items
+	return items, true
 }
 
-// onNews handles /news [keyword] — list recent Gentoo news, or filter by keyword.
-func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
-	msg := update.Message
-	if msg == nil || !v.queryAllowed(ctx, msg) {
-		return nil
-	}
-	bot := ctx.Bot()
-	c := ctx.Context()
-	hc, cancel := context.WithTimeout(c, 25*time.Second)
-	defer cancel()
-	items := getNews(hc)
-
-	arg := commandArg(msg.Text)
+func renderNews(arg string, items []newsItem, available bool) string {
 	q := strings.ToLower(arg)
 	var b strings.Builder
 	if q == "" {
@@ -136,12 +118,29 @@ func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
 		}
 	}
 	if n == 0 {
-		if len(items) == 0 {
-			b.WriteString("\n(暂时无法获取新闻列表,请稍后重试)")
-		} else {
+		if available {
 			b.WriteString("\n没找到匹配的新闻。")
+		} else {
+			b.WriteString("\n暂时无法获取新闻列表，请稍后重试。")
 		}
+	} else if !available {
+		b.WriteString("\n新闻列表暂时无法更新，以上结果可能不完整，请稍后重试。")
 	}
-	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b.String())
+	return b.String()
+}
+
+func (v *Verifier) onNews(ctx *th.Context, update telego.Update) error {
+	msg := update.Message
+	if msg == nil || !v.queryAllowed(ctx, msg) {
+		return nil
+	}
+	bot := ctx.Bot()
+	c := ctx.Context()
+	hc, cancel := context.WithTimeout(c, 25*time.Second)
+	defer cancel()
+	items, available := getNews(hc)
+	arg := commandArg(msg.Text)
+	b := renderNews(arg, items, available)
+	v.replyLookupHTML(c, bot, msg.Chat.ID, msg.MessageID, b)
 	return nil
 }

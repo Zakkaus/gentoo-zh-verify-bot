@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// TestEnsureReleaseInfoEmptyDoesNotOverwrite drives ensureReleaseInfo with injected fetchers that
-// return EMPTY maps (a malformed HTTP-200): the previously-good cache must NOT be overwritten, and
-// the round must take the short retry window (fetched != now) rather than full-TTL freshness.
 func TestEnsureReleaseInfoEmptyDoesNotOverwrite(t *testing.T) {
 	relInfo.mu.Lock()
 	relInfo.debian = map[string]string{"13": "stable"}
@@ -42,9 +39,6 @@ func TestEnsureReleaseInfoEmptyDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-// TestDeriveDebianStatus verifies the role mapping is derived from release dates (not
-// hardcoded): with Trixie/13 released and Forky/14 not yet, 13 is stable and 14 testing;
-// when 14 later releases, the mapping shifts automatically (second sub-test).
 func TestDeriveDebianStatus(t *testing.T) {
 	csv := `version,codename,series,created,release,eol
 11,Bullseye,bullseye,2019-07-06,2021-08-14,2024-08-14
@@ -75,9 +69,6 @@ func TestDeriveDebianStatus(t *testing.T) {
 	}
 }
 
-// TestUbuntuExcluded verifies the stable-line exclusion: an unreleased series (future date),
-// proposed/backports pockets, and a series past standard EOL (18.04/20.04) are all excluded;
-// current released series and unknown labels are not.
 func TestUbuntuExcluded(t *testing.T) {
 	relInfo.mu.Lock()
 	relInfo.ubuntuRel = map[string]bool{"18.04": true, "20.04": true, "24.04": true, "26.04": true, "26.10": false}
@@ -100,9 +91,6 @@ func TestUbuntuExcluded(t *testing.T) {
 	}
 }
 
-// TestDeriveDebianStatusEmpty verifies the v3.6.1 empty-CSV guard's signal: a malformed/empty or
-// header-only HTTP-200 body parses to an EMPTY status map (which ensureReleaseInfo's len>0 check
-// then treats as a failed fetch and retries soon), rather than a non-empty map cached as success.
 func TestDeriveDebianStatusEmpty(t *testing.T) {
 	now := time.Date(2026, 6, 21, 0, 0, 0, 0, time.UTC)
 	for _, body := range []string{
@@ -117,8 +105,6 @@ func TestDeriveDebianStatusEmpty(t *testing.T) {
 	}
 }
 
-// TestRelInfoNextFetched verifies the freshness marker: both-sources-OK is fresh for the full TTL,
-// while a failed fetch is only fresh for relInfoRetryTTL (so it self-heals soon, not in 24h).
 func TestRelInfoNextFetched(t *testing.T) {
 	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 	if got := relInfoNextFetched(now, true); !got.Equal(now) {
@@ -134,5 +120,35 @@ func TestRelInfoNextFetched(t *testing.T) {
 	}
 	if now.Add(relInfoRetryTTL+time.Minute).Sub(marker) < relInfoTTL {
 		t.Error("should be stale just after the retry TTL elapses (triggering a refetch)")
+	}
+}
+
+func TestUbuntuRelabelStandardSupportEnd(t *testing.T) {
+	relInfo.mu.Lock()
+	oldLTS, oldEOL := relInfo.ubuntu, relInfo.ubuntuEOL
+	relInfo.ubuntu = map[string]bool{"18.04": true, "24.04": true}
+	relInfo.ubuntuEOL = map[string]bool{"18.04": true, "22.10": true}
+	relInfo.mu.Unlock()
+	t.Cleanup(func() {
+		relInfo.mu.Lock()
+		relInfo.ubuntu, relInfo.ubuntuEOL = oldLTS, oldEOL
+		relInfo.mu.Unlock()
+	})
+
+	tests := []struct {
+		raw  string
+		want string
+	}{
+		{raw: "18.04", want: "18.04 LTS · 标准支持已结束"},
+		{raw: "22.10", want: "22.10 · 标准支持已结束"},
+		{raw: "24.04", want: "24.04 LTS"},
+		{raw: "99.99", want: "99.99"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			if got := ubuntuRelabel(tt.raw); got != tt.want {
+				t.Errorf("ubuntuRelabel(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }

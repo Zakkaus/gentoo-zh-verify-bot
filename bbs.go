@@ -18,9 +18,7 @@ const archcnForum = "https://forum.archlinuxcn.org"
 
 type forumTopic struct{ title, url string }
 
-// searchArchcn searches the Arch Linux CN Discourse forum (clean JSON API) and returns the top
-// matching topics, plus ok=false if the FETCH failed (transient — distinct from a successful search
-// with no matches) so the caller doesn't report a transient blip as a definitive "no results".
+// ok distinguishes a fetch failure from an authoritative empty search.
 func searchArchcn(ctx context.Context, query string, limit int) (topics []forumTopic, ok bool) {
 	u := archcnForum + "/search.json?q=" + url.QueryEscape(query)
 	var resp struct {
@@ -43,9 +41,6 @@ func searchArchcn(ctx context.Context, query string, limit int) (topics []forumT
 	return out, true
 }
 
-// forumLinks are the major English Linux forums offered as one-tap search buttons (a
-// site-scoped DuckDuckGo search, which needs no forum API) — the English backup to the
-// inline Chinese results above.
 var forumLinks = []struct{ name, site string }{
 	{"Gentoo 论坛", "forums.gentoo.org"},
 	{"Arch BBS", "bbs.archlinux.org"},
@@ -57,8 +52,6 @@ func ddgSiteSearch(site, query string) string {
 	return "https://duckduckgo.com/?q=" + url.QueryEscape("site:"+site+" "+query)
 }
 
-// onBbs handles /bbs <query> — inline results from the Arch Linux CN forum (Chinese first),
-// plus search-link buttons to the major English forums.
 func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || !v.queryAllowed(ctx, msg) {
@@ -90,9 +83,7 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 	}
 	b.WriteString("\n\n其它论坛(点按钮搜索):")
 
-	// Cap the query used in the button URLs: a pathologically long /bbs query would make a DuckDuckGo
-	// button URL exceed Telegram's limit, which rejects the WHOLE reply — taking the Arch CN hits we
-	// already fetched down with it. The buttons are a convenience; the inline results matter more.
+	// Telegram rejects the whole reply when a button URL exceeds its limit.
 	qBtn := q
 	if r := []rune(qBtn); len(r) > 200 {
 		qBtn = string(r[:200])
@@ -109,8 +100,7 @@ func (v *Verifier) onBbs(ctx *th.Context, update telego.Update) error {
 		WithReplyMarkup(tu.InlineKeyboard(rows...)).
 		WithReplyParameters(replyParams(msg.MessageID)))
 	if err != nil {
-		// The buttons sank the send (e.g. a still-too-long URL) — fall back to the inline results
-		// alone so the user at least gets the Arch CN hits.
+		// Preserve inline results when Telegram rejects the buttons.
 		log.Printf("/bbs send with buttons failed (%v) — retrying text-only", err)
 		sent, _ = bot.SendMessage(c, htmlMessage(msg.Chat.ID, b.String()).WithReplyParameters(replyParams(msg.MessageID)))
 	}

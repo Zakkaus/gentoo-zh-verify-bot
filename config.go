@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 )
@@ -16,9 +18,8 @@ type Question struct {
 	Answer  int      `json:"answer"`
 }
 
-// ShortQuestion is a TYPED, open-ended verification question: no options are shown, so the answer
-// appears nowhere in the message and cannot be copied out of it. Answers lists the accepted words,
-// matched case-insensitively as whole words, so "emerge" accepts "用 emerge 装" too.
+// ShortQuestion is typed; accepted answers never appear in its prompt.
+// Answers contains normalized whole replies, not substrings in prose.
 type ShortQuestion struct {
 	Q       string   `json:"q"`
 	Answers []string `json:"answers"`
@@ -31,30 +32,22 @@ type OverlayCfg struct {
 	Branch string `json:"branch"` // default "master" if empty
 }
 
-// GroupConfig is one guarded group's settings. Every field except ID is optional and
-// falls back to the top-level global default when unset — so groups can share settings
-// or each be configured independently. Built from "groups" plus the legacy group_ids/group_id.
+// GroupConfig overrides top-level defaults for one guarded group.
 type GroupConfig struct {
 	ID                int64      `json:"id"`
 	RequiredChannelID *int64     `json:"required_channel_id"` // nil => global required_channel_id
 	ChannelDisplay    string     `json:"channel_display"`     // "" => global channel_display
 	ChannelInviteURL  string     `json:"channel_invite_url"`  // "" => global channel_invite_url
 	Questions         []Question `json:"questions"`           // empty => global questions
-	// VerifyMode: this group's challenge type ("kernel", "quiz" or "mixed"); "" => global verify_mode.
+	// VerifyMode is "kernel", "quiz", "mixed", or "" to inherit.
 	VerifyMode string `json:"verify_mode"`
-	// TrustedMemberGroupIDs lists OTHER chats whose existing members skip THIS group's join
-	// verification: an applicant already in any of them is auto-approved (no quiz). Use it so
-	// verified members of a trusted group (e.g. the main group) don't re-verify in a sub-group.
-	// OMITTED (nil) => inherit the global trusted_member_group_ids; explicit [] => DISABLE the bypass
-	// for this group (opt out of a global trusted source); non-empty => override the global. Fails
-	// SAFE — an unconfirmable membership falls back to the normal challenge. The bot must be able to
-	// read each listed chat's membership (be a member/admin there); those chats are also treated as
-	// known (no auto-leave).
+	// TrustedMemberGroupIDs bypasses verification for confirmed members of other chats.
+	// nil inherits the global list; [] disables it; non-empty replaces it.
+	// Failed membership checks fall back to verification, never approval.
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 }
 
-// FeedConfig configures the optional auto-feed: the bot polls Gentoo Bugzilla + news
-// and posts new items to ChatID. A nil Feed or zero ChatID disables the feature.
+// FeedConfig configures one optional Bugzilla/news destination.
 type FeedConfig struct {
 	ChatID          int64  `json:"chat_id"`          // channel/group to post to (bot must be admin there)
 	Lang            string `json:"lang"`             // bug field labels: "zh" (default) or "en"
@@ -69,7 +62,6 @@ type FeedConfig struct {
 func (f *FeedConfig) bugsOn() bool { return f.Bugs == nil || *f.Bugs }
 func (f *FeedConfig) newsOn() bool { return f.News == nil || *f.News }
 
-// interval is the poll interval, defaulting to 5 min with a 60 s floor.
 func (f *FeedConfig) interval() time.Duration {
 	switch {
 	case f.IntervalSeconds <= 0:
@@ -81,75 +73,52 @@ func (f *FeedConfig) interval() time.Duration {
 	}
 }
 
-// Config is loaded from a JSON file. The bot token comes from the BOT_TOKEN env var.
+// Config is loaded from JSON; BOT_TOKEN remains environment-only.
 type Config struct {
-	// Groups: per-group settings (each can override the globals below). The legacy
-	// group_ids / group_id are merged in as groups with no overrides. After LoadConfig,
-	// Groups is the canonical list and GroupIDs mirrors its ids.
+	// Groups is canonical after legacy group_ids/group_id are merged; GroupIDs mirrors it.
 	Groups   []GroupConfig `json:"groups"`
 	GroupIDs []int64       `json:"group_ids"`
 	GroupID  int64         `json:"group_id"`
-	// RequiredChannelID: applicants must have joined this channel (0 = disabled).
+	// ControlGroupID limits global commands; zero allows any guarded group's admins.
+	ControlGroupID int64 `json:"control_group_id"`
+	// RequiredChannelID gates approval on channel membership; zero disables it.
 	RequiredChannelID int64  `json:"required_channel_id"`
 	ChannelDisplay    string `json:"channel_display"`
-	// TrustedMemberGroupIDs: global default for the trusted-member bypass — an applicant already in
-	// any of these chats is auto-approved without a quiz. A per-group trusted_member_group_ids
-	// overrides this. Use real chat ids (groups/supergroups are -100…). NOT a required_channel: a
-	// failed/unreadable membership check falls back to normal verification (never auto-approves).
+	// TrustedMemberGroupIDs is the global bypass source list.
+	// Unreadable membership falls back to verification.
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
-	// KnownChatIDs: extra chats the bot stays in (never auto-leaves) WITHOUT any verification role —
-	// e.g. a channel the bot only POSTS to (announcements / a directory post). Unlike a
-	// trusted_member_group these are NOT a bypass source (their members do NOT skip verification), and
-	// unlike a guarded group the bot runs no join-verification there; it simply won't remove itself.
+	// KnownChatIDs prevents auto-leave without granting verification or bypass semantics.
 	KnownChatIDs []int64 `json:"known_chat_ids"`
-	// ChannelInviteURL: explicit join link for the required channel — needed for
-	// PRIVATE channels (no public @handle). If empty, an @handle channel_display
-	// is turned into a t.me link automatically.
+	// ChannelInviteURL is required for private channels without a public handle.
 	ChannelInviteURL string `json:"channel_invite_url"`
-	// TimeoutSeconds before an unfinished verification is auto-declined.
+	// TimeoutSeconds is the verification deadline.
 	TimeoutSeconds int `json:"timeout_seconds"`
-	// AdminLogChatID (optional): receives a line per moderation / failed-approve event.
+	// AdminLogChatID receives moderation and failed-action notices.
 	AdminLogChatID int64 `json:"admin_log_chat_id"`
-	// NotifyTTLSeconds: auto-delete the bot's own in-group messages after N seconds
-	// (0 => default 60; negative => never delete).
+	// NotifyTTLSeconds: 0 defaults to 60; negative disables deletion.
 	NotifyTTLSeconds int `json:"notify_ttl_seconds"`
-	// LookupTTLSeconds: auto-delete a lookup command (/pkg /use /bug /news /wiki /bbs /pkgs
-	// /arm /armpkgs, …) AND its answer after N seconds. Unset (nil) => default 180 (3 min),
-	// enabled; 0 or negative => disabled. Admins can toggle/adjust at runtime with /autodel.
+	// LookupTTLSeconds deletes lookup commands and answers together.
+	// nil defaults to 180; non-positive disables it.
 	LookupTTLSeconds *int `json:"lookup_ttl_seconds"`
-	// WarnLimit: number of /warn strikes before the user is auto-kicked (default 3).
+	// WarnLimit defaults to three strikes before an automatic kick.
 	WarnLimit int `json:"warn_limit"`
-	// PrivateQueryPerMin: how many lookup queries (/pkg /use /bug …) a user may run per
-	// minute in a PRIVATE chat (anti-abuse; default 3). Guarded groups are never limited.
+	// PrivateQueryPerMin limits DMs only and defaults to three.
 	PrivateQueryPerMin int `json:"private_query_per_min"`
-	// RequiredChannelFailOpen: when the bot cannot read the required channel's membership
-	// (it isn't an admin there, the channel moved, etc.), should a verified applicant be let
-	// through (fail-open, default true — a permission slip won't lock everyone out) or held
-	// back (fail-closed, set false — strictly enforce the channel gate)? Admins are alerted
-	// either way. nil => default true.
+	// RequiredChannelFailOpen controls unreadable membership: nil/true admits verified users;
+	// false blocks them. Admins are alerted either way.
 	RequiredChannelFailOpen *bool `json:"required_channel_fail_open"`
-	// BanSeconds: default ban duration for /ban, /sb and the auto-ban after repeated failed
-	// verification. 0 => permanent (the default). Runtime-adjustable by admins with /bantime.
+	// BanSeconds: 0 is permanent; /bantime may override it at runtime.
 	BanSeconds int `json:"ban_seconds"`
-	// MuteSeconds: default /mute (禁言) duration in seconds — the user stays in the group but
-	// can't send messages until it expires (Telegram auto-lifts it). Default 3600 (1h); mute is
-	// always timed (no permanent mute). Admins can override per-use inline, e.g. "/mute 30m".
+	// MuteSeconds is always finite; it defaults to one hour and may be overridden per command.
 	MuteSeconds int `json:"mute_seconds"`
-	// VerifyRetrySeconds: how long a declined applicant should wait before re-applying
-	// (default 180). Re-applying sooner is declined with a "please wait" notice; negative => no cooldown.
+	// VerifyRetrySeconds defaults to 180; negative disables the cooldown.
 	VerifyRetrySeconds int `json:"verify_retry_seconds"`
-	// VerifyMaxFails: failed verifications (wrong answer / timeout) before the applicant is
-	// permanently banned (default 3). Negative => never auto-ban (unlimited retries).
+	// VerifyMaxFails defaults to three; negative disables automatic bans.
 	VerifyMaxFails int `json:"verify_max_fails"`
-	// VerifyMode selects the join challenge: "kernel" (default) makes the applicant TYPE the
-	// version of the Linux kernel they run, "quiz" is the original tap-a-button multiple choice,
-	// "mixed" picks one at random per applicant. Kernel mode exists because a spam bot passes a
-	// 4-option button quiz by clicking blindly one time in four; typing has no button to click.
-	// Per-group override: verify_mode inside "groups". Admins can switch at runtime with /vmode.
+	// VerifyMode is "kernel", "quiz", or "mixed"; typing prevents blind button clicks.
+	// Per-group config and /vmode may override it.
 	VerifyMode string `json:"verify_mode"`
-	// FallbackQuestions overrides the built-in short-answer pool used for an applicant who says they
-	// have no Linux installed (kernel mode). Typed, no options, and the answer is never printed in the
-	// question — so offering it can't hand anyone a free pass. Empty => the built-in localized pool.
+	// FallbackQuestions is the answer-hidden path for applicants without Linux.
 	FallbackQuestions []ShortQuestion `json:"fallback_questions"`
 	// Overlays searched by /pkg (defaults to gentoo-zh + guru when empty).
 	Overlays []OverlayCfg `json:"overlays"`
@@ -157,24 +126,67 @@ type Config struct {
 	NewsURL string `json:"news_url"`
 	// StatsTimezone: IANA tz for the daily /stats reset boundary (defaults to UTC+8 when empty/invalid).
 	StatsTimezone string `json:"stats_timezone"`
-	// RichMessages: use Bot API 10.1 rich messages for the text-heavy /use output (more
-	// info; unsupported on old/third-party clients; falls back to HTML on server reject).
+	// RichMessages falls back to HTML when Bot API 10.1 rejects the request.
 	RichMessages bool `json:"rich_messages"`
 	// UserAgent (optional): overrides the outbound HTTP User-Agent for /pkg /use /news /bug.
 	UserAgent string `json:"user_agent"`
-	// PrivateReply: the unified auto-reply sent when someone DMs the bot outside the
-	// verification flow (the commands only work in groups). Empty => a built-in default.
+	// PrivateReply handles non-command DMs outside verification.
 	PrivateReply string `json:"private_reply"`
-	// BlockChannelSenders: delete + ban messages posted on behalf of a channel ("channel
-	// sock-puppets") in the guarded groups. Needs the bot's privacy mode OFF to see them.
+	// BlockChannelSenders requires BotFather privacy mode to be off.
 	BlockChannelSenders bool `json:"block_channel_senders"`
 	// ChannelWhitelist: channel sender chats allowed to post in the groups (never blocked).
 	ChannelWhitelist []int64 `json:"channel_whitelist"`
-	// Feeds (optional): one or more auto-feed destinations (see FeedConfig), each with its own
-	// chat, language and filters. The singular "feed" is also accepted and merged into Feeds.
+	// Feed is the legacy singular form and is merged into Feeds.
 	Feeds     []FeedConfig `json:"feeds"`
 	Feed      *FeedConfig  `json:"feed"`
 	Questions []Question   `json:"questions"`
+}
+
+func warnUnknownJSONKeys(raw json.RawMessage, typ reflect.Type, where string) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return
+	}
+	known := make(map[string]struct{}, typ.NumField())
+	for i := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			known[name] = struct{}{}
+		}
+	}
+	var unknown []string
+	for name := range object {
+		if _, ok := known[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	sort.Strings(unknown)
+	for _, name := range unknown {
+		log.Printf("WARNING: %s: unknown key %q", where, name)
+	}
+}
+
+func warnUnknownJSONEntries(raw json.RawMessage, typ reflect.Type, where string) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return
+	}
+	for i, entry := range entries {
+		warnUnknownJSONKeys(entry, typ, fmt.Sprintf("%s[%d]", where, i))
+	}
+}
+
+func warnUnknownConfigKeys(data []byte) {
+	warnUnknownJSONKeys(data, reflect.TypeOf(Config{}), "config")
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return
+	}
+	warnUnknownJSONEntries(top["groups"], reflect.TypeOf(GroupConfig{}), "config groups")
+	warnUnknownJSONEntries(top["feeds"], reflect.TypeOf(FeedConfig{}), "config feeds")
+	if raw, ok := top["feed"]; ok {
+		warnUnknownJSONKeys(raw, reflect.TypeOf(FeedConfig{}), "config feed")
+	}
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -186,8 +198,8 @@ func LoadConfig(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	// Canonical group list = explicit "groups" + legacy group_ids/group_id (as groups
-	// with no overrides). Then mirror the ids into GroupIDs so IsGroup etc. stay simple.
+	warnUnknownConfigKeys(data)
+	// Merge legacy group IDs before building the canonical mirror.
 	legacy := c.GroupIDs
 	if c.GroupID != 0 {
 		legacy = append(legacy, c.GroupID)
@@ -204,7 +216,7 @@ func LoadConfig(path string) (*Config, error) {
 	if len(c.Groups) == 0 {
 		return nil, fmt.Errorf("at least one group is required (groups, group_ids, or group_id)")
 	}
-	// Fail fast on group-list mistakes that would otherwise misbehave silently at runtime.
+	// Reject invalid or duplicate groups before handlers start.
 	seenGroup := map[int64]bool{}
 	for i := range c.Groups {
 		id := c.Groups[i].ID
@@ -216,8 +228,7 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		seenGroup[id] = true
 	}
-	// Validate overlay entries up front: an empty/malformed repo would only surface as a
-	// confusing runtime GitHub API error, and a duplicate name would collide cache keys.
+	// Invalid repos fail here; duplicate names would collide in the cache.
 	seenOverlay := map[string]bool{}
 	for i, o := range c.Overlays {
 		if parts := strings.Split(o.Repo, "/"); o.Repo == "" || len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -268,9 +279,7 @@ func LoadConfig(path string) (*Config, error) {
 		if g.VerifyMode != "" && !validMode(g.VerifyMode) {
 			return nil, fmt.Errorf("group %d: verify_mode %q is not one of %q, %q, %q", g.ID, g.VerifyMode, modeKernel, modeQuiz, modeMixed)
 		}
-		// A quiz pool is only required when this group can actually serve a quiz — a kernel-mode
-		// group needs no questions. /vmode can still switch a pool-less group to quiz at runtime;
-		// pickMode falls back to kernel there rather than posting an unanswerable challenge.
+		// Kernel-only groups need no quiz pool; runtime quiz mode falls back to kernel.
 		if c.verifyMode(g.ID) != modeKernel && len(c.questions(g.ID)) == 0 {
 			return nil, fmt.Errorf("group %d: no questions (add global questions or this group's own questions, or set verify_mode to %q)", g.ID, modeKernel)
 		}
@@ -305,9 +314,7 @@ func LoadConfig(path string) (*Config, error) {
 	if c.MuteSeconds <= 0 {
 		c.MuteSeconds = 3600 // mute is always timed; default 1h (no permanent mute)
 	}
-	// Normalize config-supplied durations to Telegram's honoured window, mirroring the runtime
-	// /bantime + inline /mute clamp — so an out-of-range config value can't silently become a
-	// permanent ban/mute while the bot reports a finite duration.
+	// Keep reported config durations within Telegram's enforced window.
 	c.BanSeconds = clampBanSecs(c.BanSeconds)
 	c.MuteSeconds = clampMuteSecs(c.MuteSeconds)
 	if c.PrivateReply == "" {
@@ -316,8 +323,7 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Feed != nil { // accept singular "feed" as one entry in "feeds"
 		c.Feeds = append(c.Feeds, *c.Feed)
 	}
-	// Drop duplicate feed targets: feed state is keyed by chat_id, so two feeds posting to
-	// the same chat would share one cursor and silently drop each other's items. Keep first.
+	// Duplicate chat IDs share one cursor and would silently drop each other's items.
 	seenFeed := map[int64]bool{}
 	deduped := c.Feeds[:0]
 	for _, f := range c.Feeds {
@@ -329,6 +335,13 @@ func LoadConfig(path string) (*Config, error) {
 		deduped = append(deduped, f)
 	}
 	c.Feeds = deduped
+	// An unguarded control group would lock out every global command.
+	if c.ControlGroupID != 0 && !c.IsGroup(c.ControlGroupID) {
+		return nil, fmt.Errorf("control_group_id %d is not one of the configured groups", c.ControlGroupID)
+	}
+	if c.ControlGroupID == 0 && len(c.Groups) > 1 {
+		log.Printf("WARNING: control_group_id is unset; administrators of any of the %d guarded groups can change process-global settings", len(c.Groups))
+	}
 	return &c, nil
 }
 
@@ -342,7 +355,6 @@ func (c *Config) IsGroup(id int64) bool {
 	return false
 }
 
-// group returns the per-group config for id, or nil if id isn't a guarded group.
 func (c *Config) group(id int64) *GroupConfig {
 	for i := range c.Groups {
 		if c.Groups[i].ID == id {
@@ -352,8 +364,7 @@ func (c *Config) group(id int64) *GroupConfig {
 	return nil
 }
 
-// requiredChannel / channelDisplay / channelInvite / questions resolve a setting for a
-// group: its per-group override when set, otherwise the top-level global default.
+// Per-group values override top-level defaults.
 func (c *Config) requiredChannel(id int64) int64 {
 	if g := c.group(id); g != nil && g.RequiredChannelID != nil {
 		return *g.RequiredChannelID
@@ -361,10 +372,7 @@ func (c *Config) requiredChannel(id int64) int64 {
 	return c.RequiredChannelID
 }
 
-// trustedGroups returns the chats whose existing members skip group id's join verification. A
-// per-group trusted_member_group_ids that is PRESENT (non-nil) overrides the global default — INCLUDING
-// an explicit empty [], which disables the bypass for that group so a sensitive group can opt out of a
-// global trusted source. Only an OMITTED (nil) field inherits the global default.
+// A present per-group list, including [], overrides the global bypass list.
 func (c *Config) trustedGroups(id int64) []int64 {
 	if g := c.group(id); g != nil && g.TrustedMemberGroupIDs != nil {
 		return g.TrustedMemberGroupIDs
@@ -372,8 +380,7 @@ func (c *Config) trustedGroups(id int64) []int64 {
 	return c.TrustedMemberGroupIDs
 }
 
-// failOpenChannel reports whether to let a verified applicant through when the required
-// channel's membership can't be read (default true). See RequiredChannelFailOpen.
+// Unreadable required-channel membership defaults to fail-open.
 func (c *Config) failOpenChannel() bool {
 	return c.RequiredChannelFailOpen == nil || *c.RequiredChannelFailOpen
 }
@@ -392,8 +399,7 @@ func (c *Config) channelInvite(id int64) string {
 	return c.ChannelInviteURL
 }
 
-// verifyMode resolves the CONFIGURED challenge mode for a group: its own verify_mode, else the
-// global one, else the built-in default. May return modeMixed — pickMode resolves that per applicant.
+// verifyMode resolves per-group, global, then built-in defaults.
 func (c *Config) verifyMode(id int64) string {
 	if g := c.group(id); g != nil && validMode(g.VerifyMode) {
 		return g.VerifyMode
@@ -411,25 +417,20 @@ func (c *Config) questions(id int64) []Question {
 	return c.Questions
 }
 
-// IsKnownChat reports whether id is a chat the bot is meant to be in: a guarded group, a
-// (global or per-group) required channel, a trusted-member source, a feed target, the
-// admin-log chat, or an explicit known_chat_ids entry (a chat the bot only posts to). Any
-// other group/channel is unauthorized and the bot auto-leaves it.
+// IsKnownChat is the auto-leave allowlist, including support-only chats.
 func (c *Config) IsKnownChat(id int64) bool {
 	if c.IsGroup(id) ||
 		(c.RequiredChannelID != 0 && id == c.RequiredChannelID) ||
 		(c.AdminLogChatID != 0 && id == c.AdminLogChatID) {
 		return true
 	}
-	// Explicit stay-in chats (known_chat_ids): the bot posts to / is present in these but runs no
-	// verification on them — still must never be auto-left.
+	// Explicit support-only chats.
 	for _, k := range c.KnownChatIDs {
 		if k == id {
 			return true
 		}
 	}
-	// Trusted-member source groups (global + per-group) — the bot must stay in them to read
-	// membership for the bypass, so they must NOT be auto-left.
+	// Trusted bypass sources must remain readable.
 	for _, t := range c.TrustedMemberGroupIDs {
 		if t == id {
 			return true

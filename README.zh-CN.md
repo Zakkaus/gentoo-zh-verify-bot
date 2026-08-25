@@ -2,131 +2,140 @@
 
 [English](README.md) | 简体中文
 
-为开源社区群组打造的 Telegram **入群验证机器人**(Go,单一静态二进制,仅依赖 [telego](https://github.com/mymmrac/telego))。
+`gentoo-zh-verify-bot` 是面向 Gentoo 中文社区群组的 Telegram 入群验证机器人，用于筛除批量提交入群申请的垃圾账号。
 
-有人申请入群时机器人不会直接放行:先在群内贴出验证链接 → 申请人私聊机器人完成验证,默认要求**自己填写正在运行的 Linux 内核版本号**(可选:必须已关注指定频道)→ 通过后才批准入群。管理员也可一键「直接通过」或「拒绝并封禁」。另附轻量管理命令、Gentoo 包搜索与新闻查询。
+四选一按钮题允许仅随机点击的账号以 1/4 概率通过。因此，默认验证要求申请人**手动输入正在运行的 Linux 内核版本**。私聊提示还包含一条按申请人变化、默认折叠显示的指令，用于识别替垃圾账号作答并遵循该指令的 LLM 智能体。
 
-## 功能
+机器人是一个静态链接的 Go 二进制文件，采用长轮询，不开放入站端口。项目只有一个直接依赖：[telego](https://github.com/mymmrac/telego)，即 Telegram Bot API 绑定。
 
-**入群验证** —— 申请入群**不**自动批准。机器人在群里 @ 申请人并附「✅ 完成验证」深层链接;申请人打开机器人,在私聊里完成验证 —— 可选先加入**必需关注的频道**(私聊两步引导;私有频道用 `channel_invite_url`)—— 通过才批准,答错/超时则拒绝。每条申请还带「👮 直接通过」/「🚫 拒绝并封禁」按钮。
+## 验证流程
 
-- **验证方式**(`verify_mode`,管理员可用 `/vmode` 随时切换):
+1. Telegram 发来入群申请后，机器人保持申请待审，并在公开群组中发送带有 `✅ 完成验证` 按钮的深层链接。
+2. 申请人通过链接私聊机器人。可信群组成员可免验证；管理员也可配置批准前必须加入的频道。同一申请人在多个群组中待验证且必需频道不同时，私聊使用第一项待处理申请对应的频道。
+3. 申请人完成指定验证后，机器人批准申请。答错或超时会被拒绝；管理员也可在群消息中选择 `👮 直接通过` 或 `🚫 拒绝并封禁`。
 
-  | 模式 | 申请人要做的事 | 说明 |
-  | --- | --- | --- |
-  | `kernel`(默认) | **手动填写自己正在运行的 Linux 内核版本号**(`uname -r`) | 没有按钮可点,只会乱点的诈骗机器人填不出合理的版本号。任何发行版的内核号都接受:历史版本(`2.6.32`)、当前版本(`6.18.45`)、以后的新主版本(`8.0`),以及各种带后缀的串:`5.14.0-570.12.1.el9_6.x86_64`、`5.15.167.4-microsoft-standard-WSL2`,**ARM 同样通过** —— `6.6.51+rpt-rpi-v8`(树莓派)、`5.10.110-tegra`(Jetson)、`6.1.75-android14-11-g1c2d3e4f`(安卓 / Termux)、`6.11.0-asahi-…`(Apple Silicon)、`…el9.aarch64`;整段 `uname -a` 粘进来也认。共 3 次机会,打错一次不会立即被拒。手边没有 Linux 设备的人可以回复「我现在没有Linux设备」**加上此刻的分钟数**(14:46 就写 46;允许一分钟误差,并兼容 +30、+45 分钟的时区偏移)—— 写死的脚本没有时钟,多数 LLM 智能体也没有,真人看一眼表就行。这样会换成一道**简答题**(题库 `fallback_questions`,例如「Gentoo 中文社区的官网网址是什么?」→ `gentoozh.org`):要手动打字、没有选项、没用过 Linux 也答得出、**答案不出现在题面里**,所以看到这条路也捞不到答案。格式写错只会得到一次免费提醒,不算答错;把我们自己印的格式示例原样发回来会被退回一次,不会直接算过 |
-  | `quiz` | 从 `questions` 中随机抽一题(用加密安全随机数打乱选项顺序),点对应按钮 | 原有方式;成员不全是 Linux 用户的群可以继续用 |
-  | `mixed` | 每个申请人随机拿到上面两种之一 | |
+| 模式 | 申请人操作 | 说明 |
+| --- | --- | --- |
+| `kernel`（默认） | 执行 `uname -r` 并手动发送结果 | 最多尝试 3 次。没有 Linux 设备时，可提供当前分钟数，再回答 `fallback_questions` 中不显示答案的简答题。 |
+| `quiz` | 点击 `questions` 中随机打乱后的正确选项 | 适用于不要求申请人使用 Linux 的群组。 |
+| `mixed` | 完成随机选中的一种验证 | 每项待验证申请独立选择。 |
 
-- **AI 代答陷阱 + 模型统计**:私聊消息里带一句只对自动化程序说的话 —— 要求代人答题的 LLM 智能体不要作答,改回复「每人不同的令牌 + 自己的模型名」(`AGENT-… model=gpt-5-mini`)。照做的智能体等于自报身份:当场拒绝,同时把它自称的模型记进 `agents.json`,`/stats` 显示 `🤖 拦截 AI 代答:12 次(gpt-5 5、claude-opus-4.5 4、unknown 3)`,管理日志每次也有一条。模型是对方自己报的,只能当使用统计,不能当证据。这是威慑手段,**不是**安全边界,真正拦人的仍是「必须手动打字」加上超时、冷却与失败计数。那句提示装在折叠引用里(`<blockquote expandable>`,Bot API 7.4):旧客户端只是不折叠、照常显示;万一自建的旧版 Bot API server 不认这个实体,私聊会自动改发不带折叠的版本,再不行发纯文本,不会让申请人收不到题。
-- **三种语言,按申请人自动选**:入群提示、私聊题目、关注频道引导、通过/拒绝结果,全部按申请人 Telegram 的界面语言(`language_code`)渲染 —— 简体中文、繁体中文(`zh-TW`/`zh-HK`/`zh-Hant`),其余语言一律英文。管理端输出和管理日志保持简体中文。选择题题库 `questions` 来自配置文件,**不会**被翻译,这也是混合语言群建议用内核模式的原因。
-- **防滥用**:验证失败先**拒绝**并冷却(`verify_retry_seconds`,180 秒);数小时内连续失败 `verify_max_fails`(默认 3)次后自动封禁。失败计数持久化、成功清零、随时间衰减。
+申请人看到的验证文案按 Telegram `language_code` 使用简体中文、繁体中文或英文。管理端输出仍为简体中文，配置中的 `questions` 按原文显示，不会自动翻译。
 
-**管理命令**(管理员,回复目标消息):
+验证失败后进入 `verify_retry_seconds` 冷却期。在失败计数有效期内达到 `verify_max_fails` 次会自动封禁；验证成功后清除该申请人的失败计数。待验证状态最多保留 2,000 项，每个群组最多 500 项。达到任一上限后，新申请留给管理员手动审核，管理告警每 10 分钟最多发送一次。
+
+## 本仓库自行实现的部分
+
+telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、管理及 Gentoo 语义均由本仓库基于标准库实现；外部数据仍来自所列的上游服务。链接文件是审查或修改对应行为的入口。
+
+- **内核版本验证**：[`kernel.go`](kernel.go) 可解析单独的版本号、常见英文说明、中文说明、WSL 输出，以及粘贴的 `uname -a` 或 `/proc/version` 形式输出。ASCII 上下文采用有限白名单，因此 `model=GPT-5.2` 等无关版本标识无法通过。1.x 仅接受 1.0–1.3，2.x 仅接受 2.0–2.6；3.x–30.x 均在预留范围内，不受当前内核主版本限制。
+- **AI 代答陷阱**：[`kernel.go`](kernel.go)、[`verify.go`](verify.go) 和 [`agents.go`](agents.go) 根据待验证申请的 nonce 生成 `AGENT-… model=…` 回复 token，因此不存在可供所有申请共用的固定 token。完全匹配时，机器人拒绝申请，将对方声明的模型写入 `agents.json`，并在 `/stats` 中显示。模型名称仅用于统计，不构成证据；该机制用于威慑，不是安全边界。
+- **中断恢复**：[`verify.go`](verify.go) 定期检测 Telegram 连通性，并在计时器到期时再次探测。Telegram 无法访问时，机器人不会拒绝申请或增加失败计数，而是重新提供完整验证时限。持续中断恢复后，所有进行中的申请都会获得新截止时间；机器人还会重新发送私聊通知和群验证消息，每次恢复最多通知 30 人，并抑制网络反复波动产生的重复通知。
+- **状态写入**：[`verify.go`](verify.go) 将快照创建和提交串行化，先写入同目录临时文件，执行 `fsync`，再原子重命名并同步目录。JSON 格式损坏时，原文件先移至 `<name>.corrupt`，然后才创建新状态。`pending.json`、`warns.json`、`antispam.json`、`verifyfail.json`、`settings.json` 和 `heartbeat.json` 无法读取时，对应路径会停止写入，避免覆盖仍可恢复的数据。
+- **Gentoo 语义**：[`pkg.go`](pkg.go) 按数值比较 revision 和 Gentoo 后缀，例如 `-r10` 高于 `-r2`，并遵循 `_alpha < _beta < _pre < _rc < release < _p`。[`use.go`](use.go) 区分本地、全局 USE 标志和 USE_EXPAND 组，还会解析 overlay 中的 `IUSE` 与 `metadata.xml`。[`arm.go`](arm.go) 区分稳定 `arm64`、测试 `~arm64`、无 keyword 和数据源不可用。[`pkgs.go`](pkgs.go) 分开处理 RHEL 兼容发行版、CentOS Stream 与 EPEL；[`releaseinfo.go`](releaseinfo.go) 根据实时发行版元数据解析 Debian 和 Ubuntu 的稳定版、测试版、LTS 及 EOL 状态，不写死版本号。
+## 群组管理
+管理员须以个人身份发送命令，并回复目标消息。
 
 | 命令 | 作用 |
 | --- | --- |
-| `/mute [时长]` · `/unmute` | 禁言 —— 留群但不能发言;限时(默认 1 小时,如 `/mute 30m`);`/unmute` 提前解除 |
-| `/ban` | 封禁 —— 踢出群;时长见 `/bantime`(默认永久,或限时=到期可重进) |
-| `/sb` | 封禁并清消息 —— 同 `/ban`,再**清除该用户全部消息** |
-| `/warn` · `/clearwarn` | 警告(满 `warn_limit` 次自动踢,默认 3) · 清除警告 |
-| `/bantime` | 设定封禁时长:`0`=永久,或 `7d`/`12h`/`30m` |
-| `/bc` | 频道身份发言封禁 + 白名单(需关闭隐私模式;持久化) |
+| `/mute [时长]` · `/unmute` | 限时禁言，默认 1 小时，例如 `/mute 30m`；`/unmute` 可提前解除。 |
+| `/ban` | 移出并封禁，时长由 `/bantime` 决定；只删除被回复的消息。 |
+| `/sb` | 封禁后清除该用户的全部消息。 |
+| `/warn` · `/clearwarn` | 增加或清除警告；达到 `warn_limit` 后自动移出群组。 |
+| `/bantime` | 设置 `0` 表示永久，也可使用 `7d`、`12h` 或 `30m`；1–29 秒按 30 秒处理，超过 366 天按永久封禁处理。 |
+| `/bc` | 拦截以频道身份发送的消息并管理白名单。需要关闭 BotFather 隐私模式；状态会持久化。 |
 
-**Gentoo / Linux 查询**(私聊也能用,每分钟限 `private_query_per_min` 次):
+`/start`、`/stop`、`/vmode`、`/rich`、`/spoiler`、`/autodel`、`/bantime` 和 `/bc` 修改进程级状态。可用 `control_group_id` 将这些命令限制到一个受管理群组。`/ping`、`/stats` 和 `/help` 显示运行状态；`/stats` 除每日批准和拒绝人数外，还显示 AI 代答陷阱的累计统计。
 
-| 命令 | 查询 |
+## Gentoo 与 Linux 查询
+查询命令也可在私聊中使用，每分钟限制为 `private_query_per_min` 次。
+
+| 命令 | 结果 |
 | --- | --- |
-| `/pkg <名字>` | Gentoo 包 + 版本(官方树 + `gentoo-zh`/`guru` overlay) |
-| `/use <包名>` | 某个包的 USE 标志 + 信息 |
-| `/bug <编号>` | Gentoo Bugzilla 工单 |
-| `/news [关键词]` | Gentoo 新闻 |
-| `/wiki <关键词>` | Gentoo / Arch wiki(优先简体中文页) |
-| `/bbs <关键词>` | Linux 论坛(直接展示 Arch Linux CN 结果 + 英文论坛搜索按钮) |
-| `/pkgs <包名>` | 跨发行版版本(走 [Repology](https://repology.org),按 release 标注;RHEL ≠ CentOS Stream ≠ EPEL) |
-| `/arm <包名>` | 某 Gentoo 包的 arm64 keyword 状态 |
-| `/armpkgs <包名>` | 跨发行版 arm64 支持(Gentoo/Debian/Ubuntu/Fedora/Arch ARM/AUR) |
+| `/pkg <包名>` | Gentoo 官方树和已配置 overlay 中的软件包与版本。 |
+| `/use <包名>` | USE、USE_EXPAND、软件包信息和版本。 |
+| `/bug <编号>` | Gentoo Bugzilla 工单。 |
+| `/news [关键词]` | Gentoo 新闻。 |
+| `/wiki <关键词>` | Gentoo 和 Arch wiki，优先返回简体中文页面。 |
+| `/bbs <关键词>` | Arch Linux CN 结果和英文论坛搜索链接。 |
+| `/pkgs <包名>` · `/distro <包名>` | [Repology](https://repology.org) 中按发行版及稳定、测试等状态标注的版本。 |
+| `/arm <包名>` | Gentoo `arm64` keyword 状态。 |
+| `/armpkgs <包名>` | Gentoo、Debian、Ubuntu、Fedora、Arch ARM 和 AUR 的 arm64 支持。 |
 
-**自动播报(可选)** —— 轮询 Gentoo Bugzilla + 新闻,把**新增**项发到一个或多个频道(`feed` / `feeds`),各有语言 + 过滤;去重、重启不丢,**bug 状态变化时就地编辑那条消息**(未确认→已确认时就地编辑并补发一条 🔔 通知——因为未确认时的原消息是静默的;解决时 🐞→✅)。
+可选播报功能按 `feed` 或 `feeds` 中的目标轮询 Gentoo Bugzilla 和新闻，游标可跨重启保留。bug 状态变化时，机器人编辑原消息；确认状态可补发一次 `🔔` 通知，关闭后则将 `🐞` 改为 `✅` 或 `❌`。
 
-**其它**:守护多个群;自动退出未授权聊天;验证进度重启不丢;群消息按 TTL 自动删除;**默认把新成员的名字用防剧透遮盖**,防止广告号拿名字刷屏(`/spoiler`,可持久化);`/pkg` `/use` 可选富文本(`rich_messages` / `/rich`,默认关);`/ping` `/stats` `/start` `/stop` `/autodel` `/rich` `/spoiler` `/vmode` `/help`。
+## 配置
 
-## 部署
+`BOT_TOKEN` 必填且没有默认值。可选的 `GITHUB_TOKEN` 无需 scope，可将 overlay 请求的 GitHub API 限额从每小时 60 次提高到约 5,000 次。可选的 `TELEGRAM_API_URL` 使用自建 Bot API server，未设置时使用 Telegram 官方 Bot API。
 
-### 1. 创建机器人
-通过 [@BotFather](https://t.me/BotFather) 创建机器人取得 token。(隐私模式默认可保持**开启**:验证、命令、按钮回调都正常;**仅当**要用频道身份发言封禁 `/bc` 时,才需在 BotFather 关闭群隐私,否则机器人收不到「以频道身份发的」消息。)
+其它设置使用 JSON。将 [`config.example.json`](config.example.json) 复制到 `/etc/gentoo-zh-verify-bot/config.json`。当前版本中，除下表注明的命令覆盖项外，修改配置文件后需要重启服务。
 
-### 2. 群 / 频道设置
-- 把机器人加入每个群并设为**管理员**,授予三项权限:**批准新成员**、**封禁用户**、**删除消息**。
-- 每个群须为**公开群**(待审申请人才看得到验证链接),并开启**「新成员需管理员批准」**(join-by-request)。
-- (可选频道门槛)把机器人加入指定频道并设为**管理员**——`getChatMember` 只有在机器人是该频道管理员时,才能可靠查询他人是否已关注。
+### 群组与验证
+| 键 | 作用 | 默认值和归一化规则 |
+| --- | --- | --- |
+| `groups` | 受管理群组及按群覆盖项：`id`、`required_channel_id`、`channel_display`、`channel_invite_url`、`trusted_member_group_ids`、`questions`、`verify_mode`。 | 默认 `[]`，但合并旧字段后至少需要一个群组。ID 必须非零且不得重复。空字段继承全局值；显式设置频道 ID `0` 或可信群组列表 `[]` 可对该群关闭相应门槛。 |
+| `group_ids` / `group_id` | 旧版群组列表和单个群组字段，加载时合并到 `groups`。 | `[]` / `0`；旧字段中的重复 ID 合并到已有群组。 |
+| `control_group_id` | 可执行进程级命令的群组。 | `0` 表示任一受管理群组的管理员均可执行；配置多个群组时会记录启动告警。非零 ID 不属于 `groups` 时配置无效。 |
+| `required_channel_id` | 全局必需频道门槛。 | `0` 表示关闭。 |
+| `channel_display` | 全局频道名称或公开 `@handle`。 | 空。 |
+| `channel_invite_url` | 全局加入链接；私有频道没有 `@handle` 时必填。 | 空。 |
+| `trusted_member_group_ids` | 可信群组成员免验证来源；无法读取成员状态时仍执行常规验证。 | `[]` 表示不启用。 |
+| `known_chat_ids` | 允许机器人停留的其它聊天，不会因此成为受管理群组、必需频道或可信来源。 | `[]`。 |
+| `verify_mode` | 全局验证模式：`kernel`、`quiz` 或 `mixed`；按群配置和 `/vmode ...|auto` 可覆盖。 | 空值变为 `kernel`；其它值导致加载失败。 |
+| `timeout_seconds` | 验证时限。 | `<=0` 变为 240；1–29 变为 30；上限 1,800。 |
+| `required_channel_fail_open` | 申请人通过验证后，机器人无法读取必需频道成员状态时的处理方式。两种模式都会通知管理员。 | `true`（默认）批准；`false` 拒绝并允许重试。 |
+| `verify_retry_seconds` | 验证失败后的冷却时间。 | `0` 变为 180；负数关闭；正数不变。 |
+| `verify_max_fails` | 自动封禁前的失败次数。 | `0` 变为 3；负数关闭；正数不变。 |
+| `fallback_questions` | 无 Linux 设备时的简答题库：`[{q,answers:[…]}]`。 | `[]` 使用内置多语言题库。每项需要非空 `q` 和至少一个非空完整答案。 |
+| `questions` | 全局选择题库：`[{q,options:[…],answer}]`。 | 只有全部群组均为 `kernel` 模式时才可为 `[]`。`options` 至少两项；`answer` 默认为索引 0 且不得越界；`q` 按原文显示。 |
 
-> 获取数字 chat id(`-100…` 形式):转发任意一条消息给 [@userinfobot](https://t.me/userinfobot) / [@JsonDumpBot](https://t.me/JsonDumpBot),或查看本机器人日志。
+### 管理、消息与运行默认值
+| 键 | 作用 | 默认值和归一化规则 |
+| --- | --- | --- |
+| `notify_ttl_seconds` | 多少秒后删除机器人发送的群消息。 | `0` 变为 60；负数保留消息；正数不变。 |
+| `lookup_ttl_seconds` | 同时删除查询命令和回复；`/autodel` 可覆盖到重启。 | 未设置变为 180；`0` 或负数关闭；正数不变。 |
+| `warn_limit` | `/warn` 达到多少次后自动移出群组。 | `<=0` 变为 3；无上限。 |
+| `private_query_per_min` | 每名用户每分钟可在私聊中执行的查询次数；受管理群组内不限次。 | `<=0` 变为 3；无上限。 |
+| `ban_seconds` | `/ban`、`/sb` 和验证自动封禁的默认时长；`/bantime` 可覆盖到重启。 | `<=0` 表示永久；1–29 变为 30；超过 366 天变为永久。 |
+| `mute_seconds` | `/mute` 默认时长；禁言始终限时。 | `<=0` 变为 3,600；1–29 变为 30；超过 366 天变为 366 天。 |
+| `admin_log_chat_id` | 接收管理操作和失败告警的专用聊天。 | `0` 表示关闭；不做归一化。 |
+| `stats_timezone` | `/stats` 每日重置所用 IANA 时区。 | 空值或无效值变为固定 UTC+8。 |
+| `rich_messages` | `/pkg` 和 `/use` 的初始富文本状态；`/rich` 可覆盖到重启。 | `false`。 |
+| `private_reply` | 验证流程外普通私聊的回复。 | 空值使用内置帮助文本。 |
+| `block_channel_senders` | `/bc` 的初始过滤状态；需要关闭隐私模式。 | `false`；持久化的 `antispam.json` 优先。 |
+| `channel_whitelist` | 允许发言的频道 ID 初始列表。 | `[]`；持久化的 `antispam.json` 优先。 |
 
-### 3. 配置
-token 走环境变量(**切勿提交进仓库**):
+### 查询与播报源
+| 键 | 作用 | 默认值和归一化规则 |
+| --- | --- | --- |
+| `overlays` | `/pkg` 使用的 GitHub overlay：`[{name,repo,branch}]`。 | `[]` 使用 gentoo-zh 和 guru。空 `name` 变为 `repo`；空 `branch` 变为 `master`；`repo` 必须为 `owner/name`；实际名称不得重复。 |
+| `news_url` | Gentoo 新闻索引。 | 空值变为 `https://www.gentoo.org/support/news-items/`。 |
+| `user_agent` | 出站 HTTP User-Agent。 | 空值变为 `gentoo-zh-verify-bot`。 |
+| `feed` / `feeds` | 单个播报目标或目标数组。 | 未设置或 `[]` 表示关闭；同一非零 `chat_id` 重复出现时只保留第一项。 |
 
-```sh
-# /etc/gentoo-zh-verify-bot/bot.env   (chmod 600)
-BOT_TOKEN=123456:ABC-DEF...
-# 可选:配置一个无需任何权限/scope 的 GitHub token,可把 /pkg 查询 overlay 的 API 限额
-# 从 60/h 提到约 5000/h,这样能安全地多配几个 overlay。
-GITHUB_TOKEN=ghp_xxx
-```
+| 播报键 | 作用 | 默认值和归一化规则 |
+| --- | --- | --- |
+| `chat_id` | 目标频道或群组；机器人须有发帖权限。 | `0` 表示关闭。 |
+| `lang` | bug 字段标签。 | `en` 使用英文；空值或其它值使用中文。 |
+| `interval_seconds` | 轮询间隔。 | `<=0` 变为 300；1–59 变为 60；无上限。 |
+| `bugs` / `news` | 分别启用新 Bugzilla 工单和新闻播报。 | 未设置变为 `true`。 |
+| `bug_product` / `bug_component` | 可选 Bugzilla 过滤条件。 | 空值匹配全部。 |
+| `silent_bugs` | 是否静默发送 bug。 | `true` 表示全部静默；未设置或 `false` 时只静默 UNCONFIRMED bug，并允许补发一次确认通知。 |
 
-其余配置写在 `config.json`(复制 `config.example.json` 修改):
+未知 JSON 键会被忽略，并记录 `WARNING: config: unknown key ...`。出现该告警时应修正配置文件中的拼写。
 
-| 键 | 含义 |
-| --- | --- |
-| `groups` | 每个群单独配置:`[{id, required_channel_id?, channel_display?, channel_invite_url?, trusted_member_group_ids?, questions?, verify_mode?}]`。每个可选字段**省略时使用下面的全局默认值**,所以两个群既能共享设置、也能各自独立配置。也接受裸 `group_ids` 列表(或单数 `group_id`),当作无覆盖的群 |
-| `required_channel_id` | **全局默认**:申请人必须关注的频道数字 id;`0` 关闭(可在 `groups` 里按群覆盖) |
-| `channel_display` | **全局默认**:展示给用户的频道,如 `@YourChannel` |
-| `channel_invite_url` | **全局默认**:频道邀请链接;**私有频道**(无 `@` 用户名)必填 |
-| `timeout_seconds` | 验证超时秒数(默认 240,上限 1800) |
-| `notify_ttl_seconds` | 机器人群消息 N 秒后自动删除(`0`→60,负数→不删) |
-| `lookup_ttl_seconds` | 查询命令(`/pkg` `/use` `/bug` `/news` `/wiki` `/bbs` `/pkgs` `/arm` `/armpkgs`)及其回复 N 秒后自动删除(不设→180=3 分钟、开;`0`/负数→关)。管理员用 `/autodel` 运行时开关/调节 |
-| `warn_limit` | `/warn` 多少次后自动踢出(默认 3) |
-| `private_query_per_min` | 私聊中每人每分钟可用的查询次数(默认 3;受管理的群里不限次) |
-| `ban_seconds` | `/ban`、`/sb` 和验证自动封禁的默认时长;`0` = 永久(默认)。可用 `/bantime` 运行时调整 |
-| `mute_seconds` | `/mute`(禁言)默认时长;用户留在群里但不能发言,到期自动解除(默认 3600 = 1 小时;始终限时)。可在命令后指定,如 `/mute 30m`;`/unmute` 提前解除 |
-| `verify_retry_seconds` | 被拒申请人需等待多久才能重新申请(默认 180;负数 = 无冷却) |
-| `verify_max_fails` | 连续验证失败多少次后自动封禁(默认 3;负数 = 永不自动封禁) |
-| `required_channel_fail_open` | 机器人读不到必需关注频道的成员状态时,`true`(默认)批准已答对的申请人,`false` 拒绝申请并让其稍后重试。两种设置都会告警管理员 |
-| `trusted_member_group_ids` | **可信成员免验证**:申请人若**已经是这些群之一的成员**,直接批准、跳过答题(例:子群信任主群的成员)。**全局默认;按群**:省略=继承全局,写 `[]`=本群**关闭**,写 id 列表=覆盖全局。用真实 chat id(群是 `-100…`);bot 必须在每个列出的群里才能读成员状态(当作已知聊天、不会被自动退出)。可信成员**优先于失败冷却**(即使之前验证失败被冷却,也会被直接放行并清空验证失败计数)。与必需关注的频道不同,这里是 **fail-closed**——读不到成员身份就走常规验证流程,绝不直接批准 |
-| `admin_log_chat_id` | 可选:接收每次管理操作 / 批准失败的日志 |
-| `overlays` | `/pkg` 的 GitHub overlay `[{name,repo,branch}]`(默认 gentoo-zh + guru) |
-| `news_url` | `/news` 源索引 URL(默认 gentoo.org) |
-| `stats_timezone` | `/stats` 每日清零所用 IANA 时区(默认 UTC+8) |
-| `rich_messages` | `/pkg`、`/use` 用 Bot API 10.1 富消息(默认 `false`;也可群内 `/rich` 开关) |
-| `user_agent` | 覆盖出站 HTTP User-Agent(可选;默认 `gentoo-zh-verify-bot`) |
-| `private_reply` | 私聊(非验证流程)的统一自动回复(空=内置默认) |
-| `block_channel_senders` | 频道身份发言封禁的**初始**状态(运行时用 `/bc` 开关,持久化;默认 `false`;需关隐私模式)。`antispam.json` 一旦生成即以它为准——之后改这个键不再生效,除非删掉该文件 |
-| `channel_whitelist` | **初始**频道白名单(运行时用 `/bc allow` / `deny`,持久化到 `antispam.json`,该文件随后优先于此键) |
-| `feed` / `feeds` | 可选:自动播报——轮询 Gentoo Bugzilla + 新闻并把新增项发到某聊天。`feed` 是单个目标;`feeds` 是它们的数组(每个有各自的聊天、语言、过滤)。见下;省略即关闭 |
-| `verify_mode` | 验证方式:`kernel`(默认,填 `uname -r` 的内核版本号)、`quiz`(点选项)或 `mixed`(每人随机)。**全局默认,可在 `groups` 里按群覆盖**;管理员用 `/vmode kernel\|quiz\|mixed\|auto` 实时切换(可持久化,`auto` 表示回到配置文件) |
-| `fallback_questions` | 覆盖内置简答题库(申请人说自己没装 Linux 时用):`[{q, answers:[…]}]`,答案按整词、不分大小写匹配。**答案不要写进题面**。留空则用内置的三语题库 |
-| `questions` | **全局默认**题库;每次随机抽一题,选项顺序打乱(可在 `groups` 里按群覆盖)。只有会出选择题的群才需要;纯 `kernel` 模式可以不写 |
+## 运维
 
-可选的 **`feed`** 对象——或 **`feeds`**(这些对象的数组,配多个目标,每周期共享一次抓取)。两者都省略即关闭:
+### Telegram 前置条件
+1. 通过 [@BotFather](https://t.me/BotFather) 创建机器人。
+2. 将机器人设为每个受管理**公开群组**的管理员，授予**批准新成员**、**封禁用户**和**删除消息**权限，并为群组启用入群申请。
+3. 使用必需频道时，将机器人设为该频道管理员，使 `getChatMember` 能可靠读取其它用户的成员状态。配置申请人可访问的 `@handle` 或 `channel_invite_url`。
+4. 除非 `/bc` 需要检查以频道身份发送的消息，否则 BotFather 隐私模式可保持开启。
 
-| `feed` 键 | 含义 |
-| --- | --- |
-| `chat_id` | 发送目标频道/群(`0`/缺省关闭;机器人须是该频道管理员且有发帖权) |
-| `lang` | bug 字段标签语言:`zh`(默认)或 `en` |
-| `interval_seconds` | 轮询间隔(默认 300,最小 60) |
-| `bugs` | 是否播报新 Bugzilla bug(默认 `true`) |
-| `news` | 是否播报新新闻(默认 `true`) |
-| `bug_product` | 只播报该 Bugzilla 产品的 bug,如 `"Gentoo Security"`(空=全部) |
-| `bug_component` | 只播报该组件的 bug,如 `"Vulnerabilities"`(空=全部) |
-| `silent_bugs` | `true` 强制所有 bug 静默。不设时:**未确认(UNCONFIRMED)bug 静默推送**(可能误报),已确认 bug 带通知;静默的未确认 bug 之后变为已确认时,会补发一条 🔔 提示(`silent_bugs` 为 `true` 时不补发) |
+数字 chat ID 使用 `-100…` 形式。可将消息转发给 [@userinfobot](https://t.me/userinfobot) 或 [@JsonDumpBot](https://t.me/JsonDumpBot)，也可查看启动日志。
 
-### 4. 构建运行
-需要 **Go 1.26.6+**(与 `go.mod` 一致;1.26.6 含安全修复)。
-
-> **安装:** 可从 [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 下载预编译的
-> `linux-amd64`/`arm64` 静态二进制(附 `SHA256SUMS`),或按下面从源码构建。注意 `go install …@v3.x`
-> **不可用**(module path 没有 `/vN` 大版本后缀 —— 这是二进制而非被引用的库,属预期);请 clone 后
-> `go build`,或直接用 release 二进制。
+### 构建与安装
+需要 **Go 1.26.7+**，与 `go.mod` 一致。[Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 提供静态链接的 `linux-amd64`、`arm64` 二进制文件和 `SHA256SUMS`。模块路径未使用 `/vN` 后缀，因此不支持 `go install …@v3.x`；请使用发布文件，或克隆仓库后构建。
 
 ```sh
 CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .
@@ -136,26 +145,34 @@ sudo systemctl enable --now gentoo-zh-verify-bot
 journalctl -fu gentoo-zh-verify-bot
 ```
 
-采用长轮询(long polling),无需开放入站端口或反向代理。
+随附的 unit 读取 `/etc/gentoo-zh-verify-bot/bot.env` 和 `config.json`，通过 `DynamicUser=` 运行，并由 `StateDirectory=` 创建 `/var/lib/gentoo-zh-verify-bot`。长轮询只需要出站 HTTPS，不需要监听端口或反向代理。
 
-## 说明 / 限制
-- **状态持久化。** 在 systemd 下(unit 的 `StateDirectory=` 会设置 `$STATE_DIRECTORY`),机器人持久化下列状态并在重启后重新载入;若 `STATE_DIRECTORY` 未设置,则**一律不持久化**——全部仅存于内存,重启即丢(会打日志告警)。状态目录必须**仅对机器人的服务用户私有**、不可被不可信用户写入(unit 的 `StateDirectory=` + `DynamicUser=` 已保证这点)。
+### 状态与重启
+未设置 `$STATE_DIRECTORY` 时，所有状态只保存在内存中，机器人会记录告警。随附的 unit 已设置该变量。状态目录只能由服务用户访问。
 
-  | 持久化(`$STATE_DIRECTORY/…`) | 内容 |
-  | --- | --- |
-  | `pending.json` | 进行中的验证(重启后重新启动定时器) |
-  | `warns.json` | 每用户 `/warn` 警告计数 |
-  | `antispam.json` | `/bc` 频道身份发言封禁状态 + 白名单 |
-  | `verifyfail.json` | 验证失败计数 / 冷却状态 |
-  | `feed-<chat_id>.json` | 播报去重游标 + 已跟踪 bug 的消息 id |
-  | `settings.json` | 验证开关状态(`/start` · `/stop`)、名字遮盖开关(`/spoiler`)和验证方式(`/vmode`)—— 均可跨重启保留 |
-  | `agents.json` | AI 代答陷阱命中次数,按自称模型分类(`/stats` 显示) |
+| `$STATE_DIRECTORY` 中的文件 | 跨重启保留的内容 |
+| --- | --- |
+| `pending.json` | 进行中的验证、尝试次数、nonce、题目和截止时间；重启后重新设置计时器。 |
+| `warns.json` | 每名用户的 `/warn` 计数。 |
+| `antispam.json` | `/bc` 状态和频道白名单。 |
+| `verifyfail.json` | 验证失败计数和冷却状态。 |
+| `settings.json` | `/start`、`/stop`、`/spoiler` 和 `/vmode` 状态。 |
+| `heartbeat.json` | 最近一次成功连接 Telegram 的时间，用于重启恢复。 |
+| `agents.json` | AI 代答陷阱累计次数和对方声明的模型计数。 |
+| `feed-<chat_id>.json` | 播报游标和已跟踪 bug 的消息 ID。 |
 
-  **不**持久化(重启清零):每日 `/stats`;`/rich`、`/autodel`、`/bantime` 的运行时改动;以及查询 / 新闻 / 包缓存。
-- 验证链接依赖群为**公开群**。
-- 管理指令需**以个人身份**发送 —— 匿名管理员发言显示为「群」而非用户,因此无法通过管理员身份校验。
-- 多个受管理群组若**必需关注的频道不同**,私聊引导只使用第一个待处理群的频道;建议各群共用一个频道。
-- **入群验证**的文案支持简体中文、繁体中文与英文,按申请人 Telegram 的 `language_code` 自动选择(见 `i18n.go`)。其余部分 —— 管理回复、`/help`、管理日志、查询命令 —— 仍是**简体中文**(本项目面向 Gentoo 中文社区),要改需修改 `.go` 源码中的字符串字面量(主要在 `verify.go`、`admin.go`、`commands.go`)。选择题题库 `questions` 按配置原样使用,不做翻译。
+每日 `/stats`、`/rich`、`/autodel` 和 `/bantime` 覆盖值、限流窗口，以及查询、新闻和软件包缓存均在重启后重置。
+
+### 故障处理
+| 故障 | 机器人行为 | 管理员操作 |
+| --- | --- | --- |
+| 配置文件缺失或无效、未设置 `BOT_TOKEN`，或启动阶段的必要 Telegram 请求失败 | 进程以非零状态退出；systemd 按 `Restart=on-failure` 重试。 | 查看 journal 中第一条 fatal 日志，修正文件、token 或网络后重启。 |
+| 运行期间 Telegram 无法访问 | 长轮询继续重试。验证超时会延后，不拒绝申请，也不增加失败计数；恢复后重新提供完整时限，并执行有上限的通知。 | 无需清理申请。heartbeat 告警持续出现时检查网络。 |
+| 出现 `ERROR state load <path>: ...; writes disabled until restart` | 使用该路径的核心状态转为内存运行，不再持久化；原文件保留以便恢复。 | 立即停止服务，检查或恢复文件，修正所有权和权限后重启。等待不会恢复写入。 |
+| 软件包或发行版数据源没有响应 | `/pkg`、`/use`、`/arm`、`/pkgs` 和 `/armpkgs` 会区分“未找到”和“数据源不可用”，并标记不完整结果。播报抓取失败时保留游标，留待下次轮询。 | 检查结果中标明的数据源，不要将不可用或不完整结果解释为不存在。 |
+| 无法读取必需频道成员状态 | 机器人通知管理员。申请人通过验证后，默认的 `required_channel_fail_open: true` 会批准；设置为 `false` 时拒绝并允许重试。 | 恢复机器人的频道管理员身份；默认策略不合适时应显式选择开放或关闭回退。 |
+| 启动日志出现 `bot is NOT admin`、`CANNOT read membership`，或后续操作报告权限不足 | 日志所列的验证、管理或频道检查未按预期执行。批准失败时保留申请以便重试；拒绝失败时留给管理员处理；封禁失败时需要手动操作。 | 恢复日志所列权限，并手动处理日志指出的申请。 |
+| 播报目标无法访问或没有发帖权限 | 启动时记录告警；暂时性发送失败不会越过未发送项目。 | 修正 `chat_id`，加入机器人，并授予频道发帖权限。 |
 
 ## 许可证
 MIT — 见 [LICENSE](LICENSE)。

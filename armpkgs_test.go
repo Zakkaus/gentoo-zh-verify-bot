@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
-// TestParseMadison verifies the madison parser: it keeps base-release suites (newest wins
-// per suite), drops pocket variants (-updates / -security / -backports) and the
-// "/component" qualifier, and ignores malformed lines.
 func TestParseMadison(t *testing.T) {
 	body := `htop | 3.0.5-7 | bullseye | arm64
 htop | 3.2.2-2 | bookworm | arm64
@@ -47,10 +47,6 @@ htop | 2.0.1-1 | xenial/universe | arm64`
 	}
 }
 
-// TestPickMadison verifies the /armpkgs suite selection: the newest RELEASED suite wins, an
-// unreleased development series (e.g. "stonking") is skipped (or flagged when it's all there is),
-// and with no devSuite filter (Debian) the newest suite — including sid — is kept as-is. The Snap
-// transitional version is left for displayVer to render.
 func TestPickMadison(t *testing.T) {
 	dev := func(s string) bool { return s == "stonking" } // the only unreleased dev series here
 
@@ -77,8 +73,6 @@ func TestPickMadison(t *testing.T) {
 	}
 }
 
-// TestAurArchLabel verifies the PKGBUILD arch=() classification: any / aarch64 / 32-bit
-// ARM only / x86-only, and a missing arch line.
 func TestAurArchLabel(t *testing.T) {
 	for _, c := range []struct{ pkgbuild, wantSub string }{
 		{"pkgname=x\narch=('any')\n", "any"},
@@ -91,5 +85,67 @@ func TestAurArchLabel(t *testing.T) {
 		if got := aurArchLabel(c.pkgbuild); !strings.Contains(got, c.wantSub) {
 			t.Errorf("aurArchLabel(%q) = %q, want substring %q", c.pkgbuild, got, c.wantSub)
 		}
+	}
+}
+
+func TestFedoraArmStatusAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		err     error
+		want    string
+		notWant string
+	}{
+		{name: "found", version: "3.4.1-2.fc44", want: "rawhide 3.4.1-2.fc44"},
+		{name: "404", err: &httpStatusError{url: "u", code: 404}, want: "不在 Fedora"},
+		{name: "429", err: &httpStatusError{url: "u", code: 429}, want: "查询失败", notWant: "不在 Fedora"},
+		{name: "503", err: &httpStatusError{url: "u", code: 503}, want: "查询失败", notWant: "不在 Fedora"},
+		{name: "network", err: errors.New("connection reset"), want: "查询失败", notWant: "不在 Fedora"},
+		{name: "busy", err: &httpBusyError{url: "u", wait: time.Millisecond}, want: "查询失败", notWant: "不在 Fedora"},
+		{name: "oversized", err: &httpBodyTooLargeError{url: "u", limit: 3}, want: "查询失败", notWant: "不在 Fedora"},
+		{name: "missing version", want: "查询失败", notWant: "不在 Fedora"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fedoraArmStatusWith(
+				context.Background(),
+				"htop",
+				func(context.Context, string) (string, error) { return tc.version, tc.err },
+			)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("fedoraArmStatusWith() = %q, want substring %q", got, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("fedoraArmStatusWith() = %q, unwanted substring %q", got, tc.notWant)
+			}
+		})
+	}
+}
+
+func TestGentooArmStatusAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		atoms     []string
+		available bool
+		want      string
+		notWant   string
+	}{
+		{name: "search unavailable", want: "查询失败", notWant: "不在官方树"},
+		{name: "answered miss", available: true, want: "不在官方树", notWant: "查询失败"},
+		{name: "found", atoms: []string{"sys-process/htop"}, available: true, want: "稳定 3.4.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := gentooArmStatusWith(
+				context.Background(),
+				"htop",
+				func(context.Context, string) ([]string, bool) { return tc.atoms, tc.available },
+				func(context.Context, string) (string, string, bool) { return "3.4.1", "", true },
+			)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("gentooArmStatusWith() = %q, want substring %q", got, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("gentooArmStatusWith() = %q, unwanted substring %q", got, tc.notWant)
+			}
+		})
 	}
 }

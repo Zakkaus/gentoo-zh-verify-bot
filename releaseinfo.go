@@ -8,20 +8,14 @@ import (
 	"time"
 )
 
-// Release-status info for distros whose channel semantics shift over time (Debian's
-// "stable" is 13/trixie today, will be 14 next year). Rather than hardcode the numbers, we
-// derive them live from Debian's distro-info-data (release dates decide what's stable vs
-// testing) and cache the result. /pkgs uses these to label a Debian/Ubuntu release by its
-// role (stable / testing / oldstable / LTS) instead of a bare number.
+// Debian and Ubuntu channel roles come from live distro-info-data, not hardcoded releases.
+// /pkgs uses the cached roles for stable, testing, oldstable, LTS, and EOL labels.
 
 const relInfoTTL = 24 * time.Hour
 
-// relInfoRetryTTL is the short freshness window used after a fetch fails, so degraded/empty
-// release metadata is retried within minutes instead of being cached for the full relInfoTTL.
+// Failed refreshes retry quickly instead of retaining degraded data for 24 hours.
 const relInfoRetryTTL = 10 * time.Minute
 
-// fetchDebianStatusFn / fetchUbuntuFn indirect over the real fetchers so tests can inject
-// empty/malformed results and assert ensureReleaseInfo's store + freshness behaviour offline.
 var (
 	fetchDebianStatusFn = fetchDebianStatus
 	fetchUbuntuFn       = fetchUbuntu
@@ -32,16 +26,14 @@ var relInfo = struct {
 	debian     map[string]string // Debian version ("13") -> status ("stable"/"testing"/...)
 	ubuntu     map[string]bool   // Ubuntu version ("24.04") -> is it an LTS?
 	ubuntuRel  map[string]bool   // Ubuntu version ("24.04") -> already released (date in the past)?
-	ubuntuEOL  map[string]bool   // Ubuntu version ("18.04") -> past standard end-of-life?
+	ubuntuEOL  map[string]bool   // Ubuntu version ("18.04") -> past the standard-support end date?
 	ubuntuSer  map[string]bool   // Ubuntu series codename ("resolute") -> already released?
 	fetched    time.Time
 	refreshing bool // a fetch is in flight (so concurrent /pkgs don't all hit upstream)
 }{}
 
-// ensureReleaseInfo refreshes the Debian/Ubuntu release-status caches if stale. Best-effort:
-// a fetch failure leaves the previous (or empty) data, and the relabel helpers fall back to
-// the raw version, so /pkgs still works without this enrichment. A `refreshing` guard means a
-// burst of concurrent /pkgs on a cold/expired cache triggers ONE upstream fetch, not N.
+// Refresh is optional enrichment: failures retain old data and raw labels still work.
+// The in-flight guard coalesces concurrent cold lookups.
 func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	relInfo.mu.Lock()
 	fresh := relInfo.debian != nil && now.Sub(relInfo.fetched) < relInfoTTL
@@ -51,8 +43,7 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	}
 	relInfo.refreshing = true
 	relInfo.mu.Unlock()
-	// Always clear the in-flight flag, even if a fetch panics — otherwise refreshing would stay
-	// true forever and the labels would never refresh again (mirrors pkgCache.refresh/getNews).
+	// Always clear the in-flight flag, including during panic unwinding.
 	defer func() {
 		relInfo.mu.Lock()
 		relInfo.refreshing = false
@@ -62,10 +53,7 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	deb := fetchDebianStatusFn(ctx, now)
 	ubu, ubuRel, ubuEOL, ubuSer := fetchUbuntuFn(ctx, now)
 
-	// Treat an EMPTY parsed result as a failed fetch, not success: a malformed/empty HTTP-200 body
-	// (GitLab Pages error page, schema drift) parses to zero rows -> empty maps, which must not
-	// overwrite good data or be cached as fresh for the full 24h. A valid CSV always yields a
-	// non-empty status/lts map, so len>0 is a sound validity proxy.
+	// Empty HTTP-200 parses indicate upstream errors or schema drift; never replace good data.
 	debOK, ubuOK := len(deb) > 0, len(ubu) > 0
 	relInfo.mu.Lock()
 	if debOK {
@@ -77,16 +65,12 @@ func ensureReleaseInfo(ctx context.Context, now time.Time) {
 	if relInfo.debian == nil {
 		relInfo.debian = map[string]string{} // mark attempted so the freshness gate can hold (no per-call refetch)
 	}
-	// Only treat the data fresh for the full TTL when BOTH sources succeeded this round; otherwise
-	// keep it fresh only briefly (relInfoRetryTTL) so a failed/degraded source self-heals soon
-	// instead of serving degraded EOL/dev labels for 24h.
+	// Full TTL requires both sources; partial refreshes use the short retry window.
 	relInfo.fetched = relInfoNextFetched(now, debOK && ubuOK)
 	relInfo.mu.Unlock()
 }
 
-// relInfoNextFetched returns the `fetched` marker to store after a refresh round: now (full-TTL
-// freshness) when both sources succeeded, else a back-dated marker giving only relInfoRetryTTL of
-// freshness so ensureReleaseInfo retries soon rather than caching a partial/empty result for 24h.
+// Backdate failed refreshes to leave only relInfoRetryTTL freshness.
 func relInfoNextFetched(now time.Time, bothOK bool) time.Time {
 	if bothOK {
 		return now
@@ -94,8 +78,7 @@ func relInfoNextFetched(now time.Time, bothOK bool) time.Time {
 	return now.Add(relInfoRetryTTL - relInfoTTL)
 }
 
-// distroInfoCSV columns: version,codename,series,created,release,eol[,eol-lts,...]. A row
-// is "released" when its release date is set and in the past.
+// A release date at or before now marks a distro-info row released.
 func parseDistroInfo(body string) (rows [][]string) {
 	for i, line := range strings.Split(body, "\n") {
 		if i == 0 || strings.TrimSpace(line) == "" { // skip header + blanks
@@ -114,10 +97,7 @@ func fetchDebianStatus(ctx context.Context, now time.Time) map[string]string {
 	return deriveDebianStatus(string(body), now)
 }
 
-// deriveDebianStatus maps Debian version numbers to roles from distro-info-data, using
-// release dates (vs now) rather than hardcoded numbers: the newest released versions are
-// stable/oldstable/oldoldstable, and the lowest not-yet-released version above stable is
-// testing. So when Debian 14 releases, "stable" follows automatically.
+// Derive stable generations and the next testing release from dates.
 func deriveDebianStatus(body string, now time.Time) map[string]string {
 	type rel struct {
 		ver      string
@@ -125,8 +105,7 @@ func deriveDebianStatus(body string, now time.Time) map[string]string {
 	}
 	var rels []rel
 	for _, c := range parseDistroInfo(body) {
-		// Need at least version,codename,series,created. A not-yet-released version (testing)
-		// has no release column (4 fields); a released one has a release date at index 4.
+		// Testing rows may omit the release column; versionless rows are sid/experimental.
 		if len(c) < 4 || c[0] == "" { // skip sid/experimental (no version) and malformed rows
 			continue
 		}
@@ -168,9 +147,7 @@ func deriveDebianStatus(body string, now time.Time) map[string]string {
 	return out
 }
 
-// fetchUbuntu returns, per Ubuntu version, whether it's an LTS and whether it's already
-// released (release date in the past) — the latter so /pkgs can exclude an in-development
-// series (e.g. 26.10 before its release date) from the "current stable" line.
+// Ubuntu maps track LTS, release, standard-support end, and codename release state.
 func fetchUbuntu(ctx context.Context, now time.Time) (lts, released, eol, series map[string]bool) {
 	body, err := httpGetBody(ctx, "https://debian.pages.debian.net/distro-info-data/ubuntu.csv", 1<<20)
 	if err != nil {
@@ -183,8 +160,7 @@ func fetchUbuntu(ctx context.Context, now time.Time) (lts, released, eol, series
 		}
 		ver := strings.TrimSpace(strings.TrimSuffix(c[0], "LTS"))
 		lts[ver] = strings.Contains(c[0], "LTS")
-		// Record released status for EVERY series (true/false), so an unreleased series is
-		// known-and-false (excluded) rather than merely absent (treated as unknown).
+		// Store unreleased series as known false, not unknown.
 		rel := false
 		if len(c) >= 5 {
 			if t, perr := time.Parse("2006-01-02", c[4]); perr == nil && !t.After(now) {
@@ -192,16 +168,13 @@ func fetchUbuntu(ctx context.Context, now time.Time) (lts, released, eol, series
 			}
 		}
 		released[ver] = rel
-		// eol (index 5) = end of standard support. A series past it (e.g. 18.04, 20.04) is no
-		// longer a current desktop release, so /pkgs must not surface its last lingering deb as
-		// Ubuntu's current version — newer releases ship the app as a Snap instead.
+		// Exclude releases past standard support that would mask newer releases shipping only a Snap.
 		if len(c) >= 6 {
 			if t, perr := time.Parse("2006-01-02", c[5]); perr == nil && !t.After(now) {
 				eol[ver] = true
 			}
 		}
-		// series codename (index 2) -> released, keyed lowercase: madison labels Ubuntu suites by
-		// codename (e.g. "resolute"), so /armpkgs can flag an unreleased dev series ("stonking").
+		// Madison uses codenames, so retain their release state too.
 		if len(c) >= 3 {
 			if s := strings.ToLower(strings.TrimSpace(c[2])); s != "" {
 				series[s] = rel
@@ -211,10 +184,7 @@ func fetchUbuntu(ctx context.Context, now time.Time) (lts, released, eol, series
 	return lts, released, eol, series
 }
 
-// ubuntuDevSuite reports whether an Ubuntu madison suite (a series codename like "stonking" or
-// "questing") is a not-yet-released development series, per distro-info-data — so /armpkgs flags
-// it instead of presenting it as Ubuntu's current arm64 version. Unknown suites (a Debian
-// codename, or before the CSV loads) are NOT dev, so the newest suite still shows.
+// Known unreleased Ubuntu suites are development; unknown suites remain displayable.
 func ubuntuDevSuite(series string) bool {
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
@@ -222,8 +192,7 @@ func ubuntuDevSuite(series string) bool {
 	return known && !released
 }
 
-// debianRelabel maps a raw Debian release label to its role; "unstable" and unknowns pass
-// through, so labels stay meaningful even before the CSV is loaded.
+// Unknown Debian labels pass through before metadata loads.
 func debianRelabel(raw string) string {
 	if raw == "unstable" {
 		return "unstable/sid" // the rolling unstable channel is codenamed sid
@@ -236,7 +205,6 @@ func debianRelabel(raw string) string {
 	return raw
 }
 
-// ubuntuRelabel appends "LTS" to an Ubuntu release that is one.
 func ubuntuRelabel(raw string) string {
 	relInfo.mu.Lock()
 	defer relInfo.mu.Unlock()
@@ -244,20 +212,14 @@ func ubuntuRelabel(raw string) string {
 	if relInfo.ubuntu[raw] {
 		out += " LTS"
 	}
-	if relInfo.ubuntuEOL[raw] { // honest marker if an EOL series is shown anyway (fallback path)
-		out += " · 已停止支持"
+	if relInfo.ubuntuEOL[raw] { // the upstream EOL column marks the end of standard support
+		out += " · 标准支持已结束"
 	}
 	return out
 }
 
-// ubuntuExcluded reports whether an Ubuntu release label should be excluded from the "current
-// stable" line: a pre-release pocket (proposed/backports); a series whose release date is still
-// in the future per distro-info-data (e.g. 26.10 before it ships); or a series past its standard
-// end-of-life (e.g. 18.04, 20.04). The EOL exclusion is what stops an ancient LTS — which only
-// still carries a real deb because newer releases moved the app to a Snap — from masquerading as
-// Ubuntu's current version. All derived live from distro-info-data; unknown/clean released series
-// are NOT excluded, so before the CSV loads /pkgs falls back to the highest numbered series.
-// Mirrors debianTesting (which excludes the numbered testing series).
+// Exclude proposed, backports, unreleased, and post-standard-support Ubuntu series from the current line.
+// Unknown series remain eligible so lookups still work before metadata loads.
 func ubuntuExcluded(label string) bool {
 	if strings.Contains(label, "proposed") || strings.Contains(label, "backport") {
 		return true

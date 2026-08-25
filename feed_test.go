@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 )
 
 // TestBugSilent verifies status-aware notifications: UNCONFIRMED bugs post silently (a
@@ -56,8 +58,8 @@ func TestFormatNewBug(t *testing.T) {
 	}
 }
 
-// TestResolvedMark: only an actually-FIXED bug gets ✅; everything else closed (INVALID 误报,
-// WONTFIX, DUPLICATE, WORKSFORME, …) gets ❌. Case-insensitive on the resolution.
+// TestResolvedMark: only an actually-FIXED bug gets the fixed marker; every other closure
+// (INVALID, WONTFIX, DUPLICATE, WORKSFORME, …) gets the not-fixed one, case-insensitively.
 func TestResolvedMark(t *testing.T) {
 	if resolvedMark(recentBug{Resolution: "FIXED"}) != "✅" || resolvedMark(recentBug{Resolution: "fixed"}) != "✅" {
 		t.Error("FIXED (any case) should be ✅")
@@ -69,56 +71,106 @@ func TestResolvedMark(t *testing.T) {
 	}
 }
 
-// TestNewsCursorMonotonic guards the news-feed dedup against the "cursor scrolled off the
-// page -> re-broadcast the whole archive" bug: when the stored cursor URL is no longer in
-// the fetched list, nothing is re-posted and the cursor re-baselines to the newest item.
-// This mirrors the !found path in postFeedItems.
+// TestNewsCursorMonotonic protects postFeedItems' news dedup cursor: a missing cursor re-baselines
+// without replay, a present cursor sends only newer items oldest-first, and the newest cursor sends
+// nothing. Removing the production cursor guard changes the fake's sent items or final cursor.
 func TestNewsCursorMonotonic(t *testing.T) {
-	news := []newsItem{{url: "u5"}, {url: "u4"}, {url: "u3"}, {url: "u2"}, {url: "u1"}}
+	oldPause := feedSendPause
+	feedSendPause = 0
+	t.Cleanup(func() { feedSendPause = oldPause })
+	news := []newsItem{
+		{url: "https://example.test/u5", title: "u5", date: "2026-05-05"},
+		{url: "https://example.test/u4", title: "u4", date: "2026-05-04"},
+		{url: "https://example.test/u3", title: "u3", date: "2026-05-03"},
+		{url: "https://example.test/u2", title: "u2", date: "2026-05-02"},
+		{url: "https://example.test/u1", title: "u1", date: "2026-05-01"},
+	}
+	newsOn, bugsOff := true, false
+	feed := &FeedConfig{ChatID: -100, Lang: "en", News: &newsOn, Bugs: &bugsOff}
+	tests := []struct {
+		name       string
+		cursor     string
+		wantCursor string
+		wantURLs   []string
+	}{
+		{name: "cursor missing", cursor: "https://example.test/gone", wantCursor: news[0].url},
+		{name: "cursor in window", cursor: news[2].url, wantCursor: news[0].url, wantURLs: []string{news[1].url, news[0].url}},
+		{name: "cursor already newest", cursor: news[0].url, wantCursor: news[0].url},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &feedState{LastNewsURL: tt.cursor}
+			fake := &fakeFeedBot{}
+			postFeedItems(context.Background(), newAPITestBot(t, fake), feed, state, nil, news)
 
-	// Helper replicating the dedup window + the cursor-lost guard.
-	window := func(cursor string) (toPost int, newCursor string) {
-		found := false
-		var nn []newsItem
-		for _, n := range news {
-			if n.url == cursor {
-				found = true
-				break
+			if state.LastNewsURL != tt.wantCursor {
+				t.Errorf("LastNewsURL = %q, want %q", state.LastNewsURL, tt.wantCursor)
 			}
-			nn = append(nn, n)
-		}
-		if !found {
-			return 0, news[0].url // cursor lost: post nothing, re-baseline
-		}
-		return len(nn), cursor
-	}
-
-	if n, c := window("GONE"); n != 0 || c != "u5" {
-		t.Errorf("cursor lost: posted=%d cursor=%q, want 0 and re-baseline to u5", n, c)
-	}
-	if n, _ := window("u3"); n != 2 { // u5,u4 are newer than the cursor u3
-		t.Errorf("normal window: posted=%d, want 2", n)
-	}
-	if n, _ := window("u5"); n != 0 { // already at newest
-		t.Errorf("at newest: posted=%d, want 0", n)
+			if len(fake.sentText) != len(tt.wantURLs) {
+				t.Fatalf("sent items = %d, want %d", len(fake.sentText), len(tt.wantURLs))
+			}
+			for i, wantURL := range tt.wantURLs {
+				if !strings.Contains(fake.sentText[i], wantURL) {
+					t.Errorf("sent item %d = %q, want URL %q", i, fake.sentText[i], wantURL)
+				}
+			}
+		})
 	}
 }
 
-// TestBugCursorForwardOnly guards against the bug-feed cursor regressing: it must only ever
-// advance forward, so a transiently lower max bug id (e.g. newest bugs hidden) can't make
-// it re-post older bugs when they reappear. Mirrors the guarded advance in postFeedItems.
+// TestBugCursorForwardOnly protects postFeedItems' bug cursor against regression and verifies the
+// forward path sends every newer matching bug oldest-first. Removing the guarded cursor advance
+// changes LastBugID or causes the shared fake to resend an old item.
 func TestBugCursorForwardOnly(t *testing.T) {
-	advance := func(cursor, newestFetched int) int {
-		if newestFetched > cursor {
-			return newestFetched
-		}
-		return cursor
+	oldPause := feedSendPause
+	feedSendPause = 0
+	t.Cleanup(func() { feedSendPause = oldPause })
+	bugsOn, newsOff := true, false
+	feed := &FeedConfig{ChatID: -100, Lang: "en", Bugs: &bugsOn, News: &newsOff}
+	tests := []struct {
+		name       string
+		bugs       []recentBug
+		wantCursor int
+		wantIDs    []int
+	}{
+		{
+			name: "lower fetched IDs do not regress",
+			bugs: []recentBug{
+				{ID: 98, Summary: "older-98", Status: "CONFIRMED"},
+				{ID: 97, Summary: "older-97", Status: "CONFIRMED"},
+			},
+			wantCursor: 100,
+		},
+		{
+			name: "new bugs advance after delivery",
+			bugs: []recentBug{
+				{ID: 105, Summary: "new-105", Status: "CONFIRMED"},
+				{ID: 104, Summary: "new-104", Status: "CONFIRMED"},
+				{ID: 99, Summary: "older-99", Status: "CONFIRMED"},
+			},
+			wantCursor: 105,
+			wantIDs:    []int{104, 105},
+		},
 	}
-	if got := advance(100, 98); got != 100 {
-		t.Errorf("cursor regressed to %d, want it to stay 100", got)
-	}
-	if got := advance(100, 105); got != 105 {
-		t.Errorf("cursor should advance to 105, got %d", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &feedState{LastBugID: 100}
+			fake := &fakeFeedBot{}
+			postFeedItems(context.Background(), newAPITestBot(t, fake), feed, state, tt.bugs, nil)
+
+			if state.LastBugID != tt.wantCursor {
+				t.Errorf("LastBugID = %d, want %d", state.LastBugID, tt.wantCursor)
+			}
+			if len(fake.sentText) != len(tt.wantIDs) {
+				t.Fatalf("sent items = %d, want %d", len(fake.sentText), len(tt.wantIDs))
+			}
+			for i, wantID := range tt.wantIDs {
+				wantURL := "https://bugs.gentoo.org/" + strconv.Itoa(wantID)
+				if !strings.Contains(fake.sentText[i], wantURL) {
+					t.Errorf("sent item %d = %q, want bug %d", i, fake.sentText[i], wantID)
+				}
+			}
+		})
 	}
 }
 
@@ -281,10 +333,34 @@ func (b *fakeFeedBot) SendMessage(_ context.Context, p *telego.SendMessageParams
 	return &telego.Message{MessageID: 100 + b.sends}, nil
 }
 
+// Call adapts fakeFeedBot to telego's transport hook so postFeedItems itself can be exercised even
+// though its public entry point still accepts a concrete *telego.Bot.
+func (b *fakeFeedBot) Call(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+	method := url[strings.LastIndexByte(url, '/')+1:]
+	switch method {
+	case "sendMessage":
+		p, err := fakeSendMessageParams(data.BodyRaw)
+		if err != nil {
+			return nil, err
+		}
+		msg, err := b.SendMessage(ctx, p)
+		return fakeTelegramResponse(msg, err)
+	case "editMessageText":
+		var p telego.EditMessageTextParams
+		if err := json.Unmarshal(data.BodyRaw, &p); err != nil {
+			return nil, err
+		}
+		msg, err := b.EditMessageText(ctx, &p)
+		return fakeTelegramResponse(msg, err)
+	default:
+		return nil, errors.New("unexpected Telegram method " + method)
+	}
+}
+
 // TestRefreshTrackedEditBranches drives the real EditMessageText result branches via a fake:
 // a successful edit syncs state and keeps tracking; "message is not modified" counts as success;
-// a permanent error drops the bug; a transient error keeps it tracked with its old state; and a
-// resolved bug is edited then untracked. None of these transitions trips the confirm-ping.
+// a known permanent error drops the bug; transient errors stay uncounted; and an otherwise
+// unclassified permanent 400 increments the bounded failure counter.
 func TestRefreshTrackedEditBranches(t *testing.T) {
 	feedSendPause = 0 // never sleep in tests
 	f := &FeedConfig{ChatID: -100, Lang: "en"}
@@ -327,9 +403,9 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("non-rate-limit transient keeps tracking, old state, counts a fail", func(t *testing.T) {
+	t.Run("non-rate-limit transient keeps tracking, old state, and no failure count", func(t *testing.T) {
 		st := track("UNCONFIRMED|")
-		fb := &fakeFeedBot{editErr: errors.New("Bad Gateway")} // transient but NOT a 429
+		fb := &fakeFeedBot{editErr: errors.New("Bad Gateway")}
 		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
 		tb := st.Tracked["500"]
 		if tb == nil {
@@ -338,8 +414,24 @@ func TestRefreshTrackedEditBranches(t *testing.T) {
 		if tb.State != "UNCONFIRMED|" {
 			t.Errorf("a transient error must NOT advance the stored state, got %q", tb.State)
 		}
+		if tb.EditFails != 0 {
+			t.Errorf("a transient failure must not count toward permanent edit failures, got %d", tb.EditFails)
+		}
+	})
+
+	t.Run("unclassified permanent 400 counts one failure", func(t *testing.T) {
+		st := track("UNCONFIRMED|")
+		fb := &fakeFeedBot{editErr: errors.New("Bad Request: can't parse entities")}
+		refreshTracked(context.Background(), fb, f, st, map[int]recentBug{500: {ID: 500, Status: "IN_PROGRESS"}}, true)
+		tb := st.Tracked["500"]
+		if tb == nil {
+			t.Fatal("an unclassified permanent 400 should be retried up to the failure limit")
+		}
+		if tb.State != "UNCONFIRMED|" {
+			t.Errorf("a rejected edit must NOT advance the stored state, got %q", tb.State)
+		}
 		if tb.EditFails != 1 {
-			t.Errorf("a non-rate-limit transient should count one edit failure, got %d", tb.EditFails)
+			t.Errorf("a permanent 400 should count one edit failure, got %d", tb.EditFails)
 		}
 	})
 
@@ -425,23 +517,47 @@ func TestRefreshTrackedMissDrop(t *testing.T) {
 	}
 }
 
-// TestRefreshTrackedEditFailDrop: a bug whose edit keeps failing with a non-rate-limit transient
-// error is dropped after maxEditFails consecutive failures, so it can't burn an edit forever.
+// TestRefreshTrackedEditFailDrop proves repeated permanent message rejections eventually release
+// tracking, while the same number of transient failures never ages a live tracked bug out.
 func TestRefreshTrackedEditFailDrop(t *testing.T) {
 	feedSendPause = 0
 	f := &FeedConfig{ChatID: -100, Lang: "en"}
-	st := &feedState{Tracked: map[string]*trackedBug{"950": {MsgID: 1, State: "CONFIRMED|"}}}
-	fb := &fakeFeedBot{editErr: errors.New("Bad Gateway")} // transient, not a 429
 	b := map[int]recentBug{950: {ID: 950, Status: "IN_PROGRESS"}}
-	for i := 1; i < maxEditFails; i++ {
-		refreshTracked(context.Background(), fb, f, st, b, true)
-		if st.Tracked["950"] == nil {
-			t.Fatalf("dropped too early after %d fails", i)
-		}
+	tests := []struct {
+		name        string
+		err         error
+		wantDropped bool
+		wantFails   int
+	}{
+		{
+			name:        "permanent 400 drops at limit",
+			err:         errors.New("Bad Request: can't parse entities"),
+			wantDropped: true,
+		},
+		{
+			name:      "transient failures never drop",
+			err:       errors.New("Bad Gateway"),
+			wantFails: 0,
+		},
 	}
-	refreshTracked(context.Background(), fb, f, st, b, true) // maxEditFails-th failure
-	if st.Tracked["950"] != nil {
-		t.Errorf("bug 950 should be dropped after %d consecutive edit failures", maxEditFails)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &feedState{Tracked: map[string]*trackedBug{"950": {MsgID: 1, State: "CONFIRMED|"}}}
+			fb := &fakeFeedBot{editErr: tt.err}
+			for i := 1; i <= maxEditFails; i++ {
+				refreshTracked(context.Background(), fb, f, st, b, true)
+				if i < maxEditFails && st.Tracked["950"] == nil {
+					t.Fatalf("dropped too early after %d failures", i)
+				}
+			}
+			tb := st.Tracked["950"]
+			if (tb == nil) != tt.wantDropped {
+				t.Fatalf("dropped = %v, want %v", tb == nil, tt.wantDropped)
+			}
+			if tb != nil && tb.EditFails != tt.wantFails {
+				t.Errorf("EditFails = %d, want %d", tb.EditFails, tt.wantFails)
+			}
+		})
 	}
 }
 
