@@ -23,8 +23,14 @@ var (
 type fakeModBot struct {
 	member            telego.ChatMember
 	memberByID        map[int64]telego.ChatMember
+	memberByChat      map[int64]telego.ChatMember
 	memberErr         error
+	memberErrByChat   map[int64]error
 	memberRequests    []telego.GetChatMemberParams
+	chats             map[int64]*telego.ChatFullInfo
+	chatErrByID       map[int64]error
+	chatRequests      []telego.GetChatParams
+	sendErrByChat     map[int64]error
 	banErr            error
 	unbanErr          error
 	muteErr           error
@@ -52,13 +58,40 @@ func newFakeMod() *fakeModBot { return &fakeModBot{} }
 
 func (b *fakeModBot) GetChatMember(_ context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error) {
 	b.memberRequests = append(b.memberRequests, *params)
+	if err := b.memberErrByChat[params.ChatID.ID]; err != nil {
+		return nil, err
+	}
 	if b.memberErr != nil {
 		return nil, b.memberErr
+	}
+	if member, ok := b.memberByChat[params.ChatID.ID]; ok {
+		return member, nil
 	}
 	if member, ok := b.memberByID[params.UserID]; ok {
 		return member, nil
 	}
 	return b.member, nil
+}
+
+func (b *fakeModBot) GetChat(_ context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error) {
+	b.chatRequests = append(b.chatRequests, *params)
+	if err := b.chatErrByID[params.ChatID.ID]; err != nil {
+		return nil, err
+	}
+	if chat := b.chats[params.ChatID.ID]; chat != nil {
+		return chat, nil
+	}
+	return &telego.ChatFullInfo{ID: params.ChatID.ID, Type: telego.ChatTypeSupergroup}, nil
+}
+
+func (b *fakeModBot) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
+	b.sends++
+	b.lastSendChat = params.ChatID.ID
+	b.lastSendText = params.Text
+	if err := b.sendErrByChat[params.ChatID.ID]; err != nil {
+		return nil, err
+	}
+	return &telego.Message{MessageID: b.sends}, nil
 }
 
 func (b *fakeModBot) CachedAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
@@ -230,6 +263,7 @@ func runFakeHandler(t *testing.T, bot *telego.Bot, handler th.Handler, update te
 	})
 	started := make(chan error, 1)
 	go func() { started <- botHandler.Start() }()
+
 	updates <- update
 	close(updates)
 	if err := <-handled; err != nil {
@@ -237,6 +271,123 @@ func runFakeHandler(t *testing.T, bot *telego.Bot, handler th.Handler, update te
 	}
 	if err := <-started; err != nil {
 		t.Fatalf("bot handler returned %v", err)
+	}
+}
+func TestGroupSetupReportPermissionsAndChannelReadability(t *testing.T) {
+	const (
+		groupID   = int64(-100)
+		channelID = int64(-200)
+		selfID    = int64(900)
+	)
+	completeAdmin := func() telego.ChatMember {
+		return &telego.ChatMemberAdministrator{
+			Status:             telego.MemberStatusAdministrator,
+			User:               telego.User{ID: selfID},
+			CanInviteUsers:     true,
+			CanRestrictMembers: true,
+			CanDeleteMessages:  true,
+		}
+	}
+	tests := []struct {
+		name            string
+		groupMember     telego.ChatMember
+		channelMember   telego.ChatMember
+		channelErr      error
+		requiredChannel bool
+		ready           bool
+		wantText        string
+		wantLookups     int
+	}{
+		{name: "group owner", groupMember: &telego.ChatMemberOwner{Status: telego.MemberStatusCreator}, ready: true, wantLookups: 1},
+		{name: "complete administrator", groupMember: completeAdmin(), ready: true, wantLookups: 1},
+		{
+			name: "missing invite right",
+			groupMember: &telego.ChatMemberAdministrator{
+				Status: telego.MemberStatusAdministrator, CanRestrictMembers: true, CanDeleteMessages: true,
+			},
+			wantText: i18n.Messages.Moderate.Setup.ApproveJoinRequests.For(i18n.LangEN), wantLookups: 1,
+		},
+		{
+			name: "missing restrict right",
+			groupMember: &telego.ChatMemberAdministrator{
+				Status: telego.MemberStatusAdministrator, CanInviteUsers: true, CanDeleteMessages: true,
+			},
+			wantText: i18n.Messages.Moderate.Setup.BanUsers.For(i18n.LangEN), wantLookups: 1,
+		},
+		{
+			name: "missing delete right",
+			groupMember: &telego.ChatMemberAdministrator{
+				Status: telego.MemberStatusAdministrator, CanInviteUsers: true, CanRestrictMembers: true,
+			},
+			wantText: i18n.Messages.Moderate.Setup.DeleteMessages.For(i18n.LangEN), wantLookups: 1,
+		},
+		{
+			name: "plain group member", groupMember: &telego.ChatMemberMember{Status: telego.MemberStatusMember},
+			wantText: i18n.Messages.Moderate.Setup.GroupAdmin.For(i18n.LangEN), wantLookups: 1,
+		},
+		{
+			name: "plain channel member", groupMember: completeAdmin(), requiredChannel: true,
+			channelMember: &telego.ChatMemberMember{Status: telego.MemberStatusMember},
+			wantText:      "plain membership", wantLookups: 2,
+		},
+		{
+			name: "channel administrator", groupMember: completeAdmin(), requiredChannel: true,
+			channelMember: &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator},
+			ready:         true, wantLookups: 2,
+		},
+		{
+			name: "channel owner", groupMember: completeAdmin(), requiredChannel: true,
+			channelMember: &telego.ChatMemberOwner{Status: telego.MemberStatusCreator},
+			ready:         true, wantLookups: 2,
+		},
+		{
+			name: "channel lookup failure", groupMember: completeAdmin(), requiredChannel: true,
+			channelErr: errors.New("forbidden"), wantText: "plain membership", wantLookups: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Groups:   []config.GroupConfig{{ID: groupID}},
+				GroupIDs: []int64{groupID},
+				Lang:     "en",
+			}
+			if test.requiredChannel {
+				cfg.RequiredChannelID = channelID
+			}
+			telegram := newFakeMod()
+			telegram.chats = map[int64]*telego.ChatFullInfo{
+				groupID:   {ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Test Group"},
+				channelID: {ID: channelID, Type: telego.ChatTypeChannel, Title: "Required Channel"},
+			}
+			telegram.memberByChat = map[int64]telego.ChatMember{
+				groupID:   test.groupMember,
+				channelID: test.channelMember,
+			}
+			telegram.memberErrByChat = map[int64]error{channelID: test.channelErr}
+			service := newTestService(t, cfg, telegram, "")
+			report := service.CheckGroupSetup(context.Background(), telegram, selfID, groupID)
+			if report.Ready != test.ready {
+				t.Fatalf("ready = %t, want %t: %s", report.Ready, test.ready, report.Text)
+			}
+			if test.wantText != "" && !strings.Contains(report.Text, test.wantText) {
+				t.Fatalf("report %q does not contain %q", report.Text, test.wantText)
+			}
+			if len(telegram.memberRequests) != test.wantLookups {
+				t.Fatalf("member lookups = %d, want %d: %+v", len(telegram.memberRequests), test.wantLookups, telegram.memberRequests)
+			}
+			service.LogGroupSetup(context.Background(), telegram, selfID, groupID)
+			wantSends := 1
+			if test.ready {
+				wantSends = 0
+			}
+			if telegram.sends != wantSends {
+				t.Fatalf("setup report sends = %d, want %d", telegram.sends, wantSends)
+			}
+			if !test.ready && telegram.lastSendText != report.Text {
+				t.Fatalf("delivered report = %q, want %q", telegram.lastSendText, report.Text)
+			}
+		})
 	}
 }
 

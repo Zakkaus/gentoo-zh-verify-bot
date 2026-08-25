@@ -48,31 +48,11 @@ func main() {
 		log.Fatal("BOT_TOKEN environment variable is required")
 	}
 
-	cfg, err := config.LoadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("config: %v", err)
-	}
 	sd := os.Getenv("STATE_DIRECTORY")
-	settingsPath := ""
-	if sd != "" {
-		if err := os.MkdirAll(sd, 0o700); err != nil {
-			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", sd, err)
-		}
-		store.ReclaimTemps(sd)
-		settingsPath = filepath.Join(sd, "settings.json")
-	}
-	baseline, err := store.LoadBaseline(*configPath, cfg)
+	cfg, runtimeSettings, err := loadRuntimeState(*configPath, sd)
 	if err != nil {
-		log.Fatalf("settings baseline: %v", err)
+		log.Fatal(err)
 	}
-	runtimeSettings, err := store.NewSettings(settingsPath, baseline)
-	if err != nil {
-		log.Fatalf("settings: %v", err)
-	}
-	if status := runtimeSettings.Persistence(); status.LastError != nil {
-		log.Printf("WARNING: runtime settings persistence unavailable: %v", status.LastError)
-	}
-	cfg = store.EffectiveConfig(cfg, runtimeSettings)
 
 	// TELEGRAM_API_URL selects a lower-latency self-hosted Bot API server.
 	var botOpts []telego.BotOption
@@ -126,7 +106,18 @@ func main() {
 	application := botapp.New(
 		cfg, runtimeSettings, telegram, verification, administration, moderation, lookups, version,
 	)
-	application.LogStartup(ctx, bot, identity)
+	registration := newRegistrationService(
+		ctx, bot, runtimeSettings, cfg, identity.Username, identity.ID,
+		func(checkCtx context.Context, groupID int64) {
+			moderation.LogGroupSetup(checkCtx, bot, identity.ID, groupID)
+		},
+	)
+	if err := registration.EnsureOwnerClaim(); err != nil {
+		log.Printf("WARNING: owner claim is unavailable until durable settings storage is restored: %v", err)
+	}
+	registration.Register(bh)
+	log.Printf("verify bot @%s (%s) started — groups=%d", identity.Username, version, len(runtimeSettings.GroupIDs()))
+	go moderation.LogGroupAdmin(ctx, bot, identity.ID)
 	application.Register(bh)
 	application.SetupCommands(ctx, bot)
 
@@ -168,4 +159,31 @@ func main() {
 			log.Printf("shutdown: feed state flush timed out")
 		}
 	}
+}
+
+func loadRuntimeState(configPath, stateDirectory string) (*config.Config, *store.Settings, error) {
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("config: %w", err)
+	}
+	settingsPath := ""
+	if stateDirectory != "" {
+		if err := os.MkdirAll(stateDirectory, 0o700); err != nil {
+			log.Printf("WARNING: cannot create STATE_DIRECTORY %q (%v) — persistence will not work", stateDirectory, err)
+		}
+		store.ReclaimTemps(stateDirectory)
+		settingsPath = filepath.Join(stateDirectory, "settings.json")
+	}
+	baseline, err := store.LoadBaseline(configPath, cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("settings baseline: %w", err)
+	}
+	runtimeSettings, err := store.NewSettings(settingsPath, baseline)
+	if err != nil {
+		return nil, nil, fmt.Errorf("settings: %w", err)
+	}
+	if status := runtimeSettings.Persistence(); status.LastError != nil {
+		log.Printf("WARNING: runtime settings persistence unavailable: %v", status.LastError)
+	}
+	return store.EffectiveConfig(cfg, runtimeSettings), runtimeSettings, nil
 }

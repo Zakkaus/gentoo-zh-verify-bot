@@ -8,6 +8,8 @@ type BotCatalog struct {
 	Lifecycle BotLifecycleCatalog
 	// DirectMessage contains ordinary direct-message replies.
 	DirectMessage BotDirectMessageCatalog
+	// Registration contains owner claim and runtime group-registration text.
+	Registration BotRegistrationCatalog
 }
 
 // BotMenuCatalog contains member and administrator command descriptions.
@@ -90,4 +92,24 @@ type BotLifecycleCatalog struct {
 type BotDirectMessageCatalog struct {
 	// AutoReply formats the built-in direct-message guidance.
 	AutoReply Format
+}
+
+// BotRegistrationCatalog contains private owner and group-enrollment notices.
+type BotRegistrationCatalog struct {
+	// OwnerClaimed confirms the first successful owner claim.
+	OwnerClaimed Text
+	// OwnerClaimRefused reports an invalid, used, or expired owner claim.
+	OwnerClaimRefused Text
+	// EnrollmentOwnerOnly rejects enrollment-link creation by a non-owner.
+	EnrollmentOwnerOnly Text
+	// EnrollmentLink formats a one-use enrollment link and its lifetime.
+	EnrollmentLink Format
+	// EnrollmentRefused reports an invalid, used, or expired enrollment link.
+	EnrollmentRefused Text
+	// RegistrationPending formats an authorized add awaiting promotion.
+	RegistrationPending Format
+	// GroupRegistered formats a completed group registration and settings link.
+	GroupRegistered Format
+	// RegistrationSaveFailed reports a registration that could not be made durable.
+	RegistrationSaveFailed Text
 }

@@ -16,6 +16,8 @@ type ModerateCatalog struct {
 	Duration ModerateDurationCatalog
 	// Antispam contains sender-channel filtering notices.
 	Antispam ModerateAntispamCatalog
+	// Setup contains startup permission and membership diagnostics.
+	Setup ModerateSetupCatalog
 }
 
 // ModerateCommonCatalog contains shared moderation notices.
@@ -144,4 +146,26 @@ type ModerateAntispamCatalog struct {
 	Allowed Format
 	// Usage explains sender-channel filtering commands.
 	Usage Text
+}
+
+// ModerateSetupCatalog contains one actionable setup report per guarded group.
+type ModerateSetupCatalog struct {
+	// Ready formats a complete setup result.
+	Ready Format
+	// MissingHeader formats the heading for an incomplete setup.
+	MissingHeader Format
+	// GroupAccess asks the operator to restore group access.
+	GroupAccess Text
+	// GroupAdmin asks the operator to promote the bot.
+	GroupAdmin Text
+	// ApproveJoinRequests asks for the invite-users capability.
+	ApproveJoinRequests Text
+	// BanUsers asks for the restrict-members capability.
+	BanUsers Text
+	// DeleteMessages asks for the delete-messages capability.
+	DeleteMessages Text
+	// ChannelAdmin formats the required-channel administrator action.
+	ChannelAdmin Format
+	// Recheck explains how to rerun the setup check.
+	Recheck Text
 }

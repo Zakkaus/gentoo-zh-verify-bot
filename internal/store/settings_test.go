@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
@@ -567,6 +568,47 @@ func TestSettingsUnknownVersionPreservesFile(t *testing.T) {
 	}
 }
 
+func TestOwnerClaimExpiryAndEnrollmentIssuance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	settings, err := NewSettings(path, testSettingsBaseline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(2_000_000_000, 0)
+	first, created, err := settings.EnsureOwnerClaim(now, time.Minute)
+	if err != nil || !created || first == "" {
+		t.Fatalf("first owner claim = %q, created %t, error %v", first, created, err)
+	}
+	if err := settings.ClaimOwner(42, first, now.Add(time.Minute)); !errors.Is(err, ErrOwnerClaimInvalid) {
+		t.Fatalf("expired owner claim error = %v", err)
+	}
+	replacement, created, err := settings.EnsureOwnerClaim(now.Add(time.Minute), time.Minute)
+	if err != nil || !created || replacement == "" || replacement == first {
+		t.Fatalf("replacement owner claim = %q, created %t, error %v", replacement, created, err)
+	}
+	if err := settings.ClaimOwner(42, replacement, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.ClaimOwner(43, replacement, now.Add(time.Minute)); !errors.Is(err, ErrOwnerClaimInvalid) {
+		t.Fatalf("used owner claim error = %v", err)
+	}
+	if _, err := settings.IssueEnrollmentNonce(43, now, time.Minute); !errors.Is(err, ErrRegistrationOwnerOnly) {
+		t.Fatalf("non-owner enrollment error = %v", err)
+	}
+	issued, err := settings.IssueEnrollmentNonce(42, now, time.Minute)
+	if err != nil || issued.Nonce == "" || issued.IssuedBy != 42 {
+		t.Fatalf("owner enrollment nonce = %+v, error %v", issued, err)
+	}
+	reloaded, err := NewSettings(path, testSettingsBaseline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := reloaded.Registrations()
+	if state.OwnerID != 42 || state.OwnerClaimNonce != "" || len(state.EnrollmentNonces) != 1 {
+		t.Fatalf("registration state after reload = %+v", state)
+	}
+}
+
 func TestSettingsRegistrationRoundTripAndRuntimeOnlyPolicy(t *testing.T) {
 	runtimeOnly, err := NewSettings("", testSettingsBaseline())
 	if err != nil {
@@ -593,7 +635,6 @@ func TestSettingsRegistrationRoundTripAndRuntimeOnlyPolicy(t *testing.T) {
 	}
 	registration := settings.Registrations()
 	registration.OwnerID = 42
-	registration.OwnerClaimNonce = "owner-nonce"
 	registration.ControlGroupID = -1009000000003
 	registration.RegisteredGroups = []RegisteredGroup{{ID: -1009000000003, RegisteredBy: 42, Title: "Runtime"}}
 	registration.EnrollmentNonces = []EnrollmentNonce{{Nonce: "enroll", IssuedBy: 42, ExpiresAt: 1000}}
@@ -620,7 +661,7 @@ func TestSettingsRegistrationRoundTripAndRuntimeOnlyPolicy(t *testing.T) {
 		t.Fatalf("effective groups after reload = %v", got)
 	}
 	metadata := reloaded.Registrations()
-	if metadata.Revision != 1 || metadata.OwnerID != 42 || metadata.OwnerClaimNonce != "owner-nonce" || len(metadata.EnrollmentNonces) != 1 || len(metadata.PendingRegistrations) != 1 {
+	if metadata.Revision != 1 || metadata.OwnerID != 42 || metadata.OwnerClaimNonce != "" || len(metadata.EnrollmentNonces) != 1 || len(metadata.PendingRegistrations) != 1 {
 		t.Fatalf("registration metadata after reload = %+v", metadata)
 	}
 	runtimeGroup, _ = reloaded.Group(-1009000000003)
@@ -637,7 +678,6 @@ func TestSettingsEveryCommitPreservesRegistrationAndLegacyMirrors(t *testing.T) 
 	}
 	registration := settings.Registrations()
 	registration.OwnerID = 99
-	registration.OwnerClaimNonce = "claim"
 	if _, err := settings.CommitRegistrations(registration.Revision, registration); err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +693,7 @@ func TestSettingsEveryCommitPreservesRegistrationAndLegacyMirrors(t *testing.T) 
 	}
 	var state settingsFile
 	decodeFile(t, path, &state)
-	if state.OwnerID != 99 || state.OwnerClaimNonce != "claim" {
+	if state.OwnerID != 99 || state.OwnerClaimNonce != "" {
 		t.Fatalf("metadata lost after setters: %#v", state)
 	}
 	if state.Enabled == nil || !*state.Enabled || state.NameSpoiler == nil || *state.NameSpoiler || state.VerifyMode != config.ModeKernel {

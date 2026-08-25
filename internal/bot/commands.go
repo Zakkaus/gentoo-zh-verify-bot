@@ -34,6 +34,7 @@ func adminCommands(l i18n.Lang, warnLimit int) []telego.BotCommand {
 	menu := i18n.Messages.Bot.Menu.Admin
 	return append([]telego.BotCommand{
 		{Command: "start", Description: menu.Start.For(l)},
+		{Command: "settings", Description: i18n.Messages.Panel.Menu.Settings.For(l)},
 		{Command: "stop", Description: menu.Stop.For(l)},
 		{Command: "mute", Description: menu.Mute.For(l)},
 		{Command: "unmute", Description: menu.Unmute.For(l)},

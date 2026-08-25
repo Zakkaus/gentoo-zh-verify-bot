@@ -1,117 +1,243 @@
 package i18n
 
-// PanelCatalog contains control-panel text.
+// PanelCatalog contains administration and settings-panel text.
 type PanelCatalog struct {
-	// State contains verification-state labels.
-	State PanelStateCatalog
-	// Status contains status and statistics messages.
-	Status PanelStatusCatalog
-	// Verification contains verification-setting confirmations.
-	Verification PanelVerificationCatalog
-	// RichText contains rich-text setting confirmations.
-	RichText PanelRichTextCatalog
-	// NameSpoiler contains applicant-name hiding confirmations.
-	NameSpoiler PanelNameSpoilerCatalog
-	// VerificationMode contains verification-mode settings and guidance.
+	State            PanelStateCatalog
+	Status           PanelStatusCatalog
+	Verification     PanelVerificationCatalog
+	RichText         PanelRichTextCatalog
+	NameSpoiler      PanelNameSpoilerCatalog
 	VerificationMode PanelVerificationModeCatalog
-	// AutoDelete contains lookup cleanup settings and guidance.
-	AutoDelete PanelAutoDeleteCatalog
-	// Help contains member and administrator command guidance.
-	Help PanelHelpCatalog
-	// Error contains control-panel errors and refusals.
-	Error PanelErrorCatalog
+	AutoDelete       PanelAutoDeleteCatalog
+	Help             PanelHelpCatalog
+	Error            PanelErrorCatalog
+	Menu             PanelMenuCatalog
+	Settings         PanelSettingsCatalog
 }
 
-// PanelStateCatalog contains verification-state labels.
 type PanelStateCatalog struct {
-	// Enabled labels enabled verification.
-	Enabled Text
-	// Disabled labels disabled verification.
+	Enabled  Text
 	Disabled Text
 }
 
-// PanelStatusCatalog contains status and statistics messages.
 type PanelStatusCatalog struct {
-	// Ping formats the version, uptime, and verification state.
-	Ping Format
-	// Stats formats daily verification counts and runtime state.
+	Ping  Format
 	Stats Format
 }
 
-// PanelVerificationCatalog contains verification-setting confirmations.
 type PanelVerificationCatalog struct {
-	// Started confirms that join verification is enabled.
 	Started Text
-	// Stopped confirms that join verification is disabled.
 	Stopped Text
 }
 
-// PanelRichTextCatalog contains rich-text setting confirmations.
 type PanelRichTextCatalog struct {
-	// Enabled confirms rich-text output.
-	Enabled Text
-	// Disabled confirms plain-text output.
+	Enabled  Text
 	Disabled Text
 }
 
-// PanelNameSpoilerCatalog contains applicant-name hiding confirmations.
 type PanelNameSpoilerCatalog struct {
-	// Enabled confirms that applicant names are hidden.
-	Enabled Text
-	// Disabled confirms that applicant names are visible.
+	Enabled  Text
 	Disabled Text
 }
 
-// PanelVerificationModeCatalog contains verification-mode settings and guidance.
 type PanelVerificationModeCatalog struct {
-	// ConfigSource names the configuration-file source.
-	ConfigSource Text
-	// RuntimeSource names the runtime command source.
+	ConfigSource  Text
 	RuntimeSource Text
-	// Current formats the effective mode, source, and usage.
-	Current Format
-	// KernelSet confirms kernel-version verification.
-	KernelSet Text
-	// Set confirms an explicit verification mode.
-	Set Format
-	// AutoSet confirms restoration of the configured mode.
-	AutoSet Format
-	// Usage explains accepted mode arguments.
-	Usage Text
+	Current       Format
+	KernelSet     Text
+	Set           Format
+	AutoSet       Format
+	Usage         Text
 }
 
-// PanelAutoDeleteCatalog contains lookup cleanup settings and guidance.
 type PanelAutoDeleteCatalog struct {
-	// CurrentEnabled formats an enabled cleanup setting and usage.
-	CurrentEnabled Format
-	// CurrentDisabled reports a disabled cleanup setting and usage.
+	CurrentEnabled  Format
 	CurrentDisabled Text
-	// Disabled confirms that automatic cleanup is disabled.
-	Disabled Text
-	// Enabled formats confirmation that automatic cleanup is enabled.
-	Enabled Format
-	// Set formats confirmation of a new cleanup delay.
-	Set Format
-	// Usage explains accepted cleanup arguments and limits.
-	Usage Text
+	Disabled        Text
+	Enabled         Format
+	Set             Format
+	Usage           Text
 }
 
-// PanelHelpCatalog contains member and administrator command guidance.
 type PanelHelpCatalog struct {
-	// Member lists actionable member commands.
-	Member Text
-	// GroupState formats the invoking group's verification state.
-	GroupState Format
-	// Admin formats actionable administrator commands.
-	Admin Format
-	// DirectMessageNote formats direct-message limits and command scope.
+	Member            Text
+	GroupState        Format
+	Admin             Format
 	DirectMessageNote Format
 }
 
-// PanelErrorCatalog contains control-panel errors and refusals.
 type PanelErrorCatalog struct {
-	// SaveSettings reports a failed settings write.
 	SaveSettings Text
-	// AdminOnly refuses a settings command from a non-administrator.
-	AdminOnly Text
+	AdminOnly    Text
+}
+
+// PanelMenuCatalog contains command-menu labels owned by the panel subsystem.
+type PanelMenuCatalog struct {
+	Settings Text
+}
+
+// PanelSettingsCatalog contains every in-Telegram settings-panel surface.
+type PanelSettingsCatalog struct {
+	Launch PanelSettingsLaunchCatalog
+	Common PanelSettingsCommonCatalog
+	Source PanelSettingsSourceCatalog
+	Mode   PanelSettingsModeCatalog
+	Screen PanelSettingsScreenCatalog
+	Field  PanelSettingsFieldCatalog
+	Prompt PanelSettingsPromptCatalog
+	Error  PanelSettingsErrorCatalog
+	Value  PanelSettingsValueCatalog
+}
+
+type PanelSettingsLaunchCatalog struct {
+	Sent Text
+	Open Text
+}
+
+type PanelSettingsCommonCatalog struct {
+	Back    Text
+	Close   Text
+	Cancel  Text
+	Save    Text
+	Delete  Text
+	Confirm Text
+	Add     Text
+	Remove  Text
+	Prev    Text
+	Next    Text
+	Refresh Text
+	Edit    Text
+	Disable Text
+	On      Text
+	Off     Text
+	None    Text
+}
+
+type PanelSettingsSourceCatalog struct {
+	Runtime Text
+	Config  Text
+	Default Text
+}
+
+type PanelSettingsModeCatalog struct {
+	Kernel Text
+	Quiz   Text
+	Mixed  Text
+}
+
+type PanelSettingsScreenCatalog struct {
+	Groups         Format
+	NoGroups       Text
+	GroupHome      Format
+	Runtime        Format
+	Lists          Format
+	List           Format
+	Verification   Format
+	Content        Format
+	QuizBank       Format
+	QuizDetail     Format
+	FallbackBank   Format
+	FallbackDetail Format
+	Channel        Format
+	Confirm        Format
+	Input          Format
+}
+
+type PanelSettingsFieldCatalog struct {
+	Runtime                Text
+	Lists                  Text
+	VerificationParameters Text
+	Content                Text
+	ChangeGroup            Text
+	Verification           Text
+	ModeKernel             Text
+	ModeQuiz               Text
+	ModeMixed              Text
+	NameSpoiler            Text
+	BanDuration            Text
+	LookupDelete           Text
+	LookupTTL              Text
+	Language               Text
+	LanguageZH             Text
+	LanguageZHHant         Text
+	LanguageEN             Text
+	ChannelWhitelist       Text
+	TrustedGroups          Text
+	KnownChats             Text
+	ChatGroup              Text
+	ChatChannel            Text
+	Timeout                Text
+	MaxFails               Text
+	RetryCooldown          Text
+	PrivateRate            Text
+	QuizBank               Text
+	FallbackBank           Text
+	RequiredChannel        Text
+	EditQuestion           Text
+	AddOption              Text
+	AddAnswer              Text
+	CorrectOption          Text
+	ResetBuiltin           Text
+	SetChannel             Text
+	SetInvite              Text
+	ClearInvite            Text
+}
+
+type PanelSettingsPromptCatalog struct {
+	BanDuration      Text
+	LookupTTL        Text
+	Timeout          Text
+	MaxFails         Text
+	RetryCooldown    Text
+	PrivateRate      Text
+	QuizQuestion     Text
+	QuizOption       Text
+	FallbackQuestion Text
+	FallbackAnswer   Text
+	InviteURL        Text
+	ChannelWhitelist Text
+	TrustedGroup     Text
+	KnownChat        Text
+	RequiredChannel  Text
+}
+
+type PanelSettingsErrorCatalog struct {
+	Expired                   Text
+	AuthorizationLost         Text
+	AuthorizationCheckFailed  Text
+	ConcurrentChange          Text
+	SaveFailed                Text
+	InvalidInput              Text
+	InvalidNumber             Text
+	InvalidDuration           Text
+	InvalidURL                Text
+	InvalidChat               Text
+	StaleIndex                Text
+	QuestionNeedsOptions      Text
+	FallbackNeedsAnswer       Text
+	InputBlockedVerification  Text
+	InputCanceledVerification Text
+	ReplyToPrompt             Text
+	ControlGroupOnly          Text
+	PanelUnavailable          Text
+	WhitelistUnbanFailed      Text
+}
+
+type PanelSettingsValueCatalog struct {
+	Sourced          Format
+	GroupButton      Format
+	IDItem           Format
+	QuestionItem     Format
+	OptionItem       Format
+	AnswerItem       Format
+	Seconds          Format
+	Minutes          Format
+	Permanent        Text
+	Durable          Text
+	RuntimeOnly      Text
+	Unavailable      Text
+	Builtins         Text
+	Custom           Text
+	RequiredDisabled Text
+	InviteMissing    Text
 }

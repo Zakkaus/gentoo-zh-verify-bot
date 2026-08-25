@@ -37,5 +37,15 @@
   },
   "direct_message": {
     "auto_reply": "👋 這是 Gentoo 中文社群的加入群組驗證與 Gentoo/Linux 助手機器人。\n\n• 申請加入群組：請返回群組提出加入申請，再點選群組內機器人訊息中的「✅ 開始驗證」，並在此完成驗證。\n• 查詢指令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私訊中使用。私訊每分鐘最多 %[1]d 次，群組內不限次數。\n• 審核與管理指令僅可在群組內使用。"
+  },
+  "registration": {
+    "owner_claimed": "部署者身分已綁定。現在可以新增群組。",
+    "owner_claim_refused": "這個擁有者認領連結無效、已使用或已過期。",
+    "enrollment_owner_only": "只有機器人擁有者可以建立群組登記連結。",
+    "enrollment_link": "群組登記連結（%[1]d 分鐘內有效且只能使用一次）：\n%[2]s",
+    "enrollment_refused": "這個群組登記連結無效、已使用或已過期。機器人將退出該群組。",
+    "registration_pending": "已授權登記群組「%[1]s」。請將機器人提升為管理員並授予所需權限。提升後會自動完成登記。",
+    "group_registered": "已登記群組「%[1]s」。開啟設定：%[2]s",
+    "registration_save_failed": "無法持久儲存群組登記。機器人將退出該群組；請檢查服務狀態目錄。"
   }
 }

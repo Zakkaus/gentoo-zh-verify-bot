@@ -64,18 +64,48 @@ telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、�
 
 可选播报功能按 `feed` 或 `feeds` 中的目标轮询 Gentoo Bugzilla 和新闻，游标可跨重启保留。bug 状态变化时，机器人编辑原消息；确认状态可补发一次 `🔔` 通知，关闭后则将 `🐞` 改为 `✅` 或 `❌`。
 
+## 部署
+
+`BOT_TOKEN` 是唯一必填项。随附的 systemd unit 会创建私有状态目录；`config.json` 可省略。
+
+构建命令包，或将发布版二进制文件以 `gentoo-zh-verify-bot` 为名放在当前目录：
+
+```sh
+CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+```
+
+安装二进制文件，写入 token 环境文件，然后启动服务：
+
+```sh
+sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
+printf '%s\n' 'BOT_TOKEN=123456:ABC-DEF' | sudo install -Dm600 /dev/stdin /etc/gentoo-zh-verify-bot/bot.env
+sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service && sudo systemctl daemon-reload && sudo systemctl enable --now gentoo-zh-verify-bot
+```
+
+从 journal 读取仅可使用一次的私有所有者认领链接：
+
+```sh
+sudo journalctl -u gentoo-zh-verify-bot
+```
+
+在 Telegram 中打开该链接。第一个打开未过期链接的账号会成为所有者。将机器人添加到群组并提升为管理员，同时开启**邀请用户**、**封禁用户**和**删除消息**权限。机器人会将所有者授权的群组写入 `settings.json`，不会写入 `config.json`。
+
+需要委托登记时，所有者在私聊中向机器人发送 `/enroll`，再将生成的一次性群组链接交给群组管理员。链接有效期为十分钟。重复使用链接、使用过期链接，或未经所有者授权便提升机器人，都会使机器人退出未知群组。
+
+使用必需频道时，须将机器人设为频道管理员。普通频道成员无法读取其他用户的成员身份，因此不能执行成员身份门槛。启动时会为每个已登记群组生成一份合并报告，列出缺少的权限和修正方法。
+
 ## 配置
 
 `BOT_TOKEN` 必填且没有默认值。可选的 `GITHUB_TOKEN` 无需 scope，可将 overlay 请求的 GitHub API 限额从每小时 60 次提高到约 5,000 次。可选的 `TELEGRAM_API_URL` 使用自建 Bot API server，未设置时使用 Telegram 官方 Bot API。
 
-其它设置使用 JSON。将 [`config.example.json`](config.example.json) 复制到 `/etc/gentoo-zh-verify-bot/config.json`。当前版本中，除下表注明的命令覆盖项外，修改配置文件后需要重启服务。
+`config.json` 可省略。文件存在时，其内容作为经过验证的基线；JSON 格式错误或配置值无效仍会阻止启动。Telegram 中保存的稀疏运行时值优先于文件，文件值优先于内置默认值。修改文件后需要重启服务。
 
 ### 群组与验证
 | 键 | 作用 | 默认值和归一化规则 |
 | --- | --- | --- |
-| `groups` | 受管理群组及按群覆盖项：`id`、`required_channel_id`、`channel_display`、`channel_invite_url`、`trusted_member_group_ids`、`questions`、`verify_mode`。 | 默认 `[]`，但合并旧字段后至少需要一个群组。ID 必须非零且不得重复。空字段继承全局值；显式设置频道 ID `0` 或可信群组列表 `[]` 可对该群关闭相应门槛。 |
+| `groups` | 可选的启动时群组种子及按群覆盖项：`id`、`required_channel_id`、`channel_display`、`channel_invite_url`、`trusted_member_group_ids`、`questions`、`verify_mode`。 | 默认 `[]`；也可在运行时登记群组。配置文件中的 ID 必须非零且不得重复。空字段继承全局值；显式设置频道 ID `0` 或可信群组列表 `[]` 可对该群关闭相应门槛。 |
 | `group_ids` / `group_id` | 旧版群组列表和单个群组字段，加载时合并到 `groups`。 | `[]` / `0`；旧字段中的重复 ID 合并到已有群组。 |
-| `control_group_id` | 可执行进程级命令的群组。 | `0` 表示任一受管理群组的管理员均可执行；配置多个群组时会记录启动告警。非零 ID 不属于 `groups` 时配置无效。 |
+| `control_group_id` | 可执行进程级命令的群组。 | `0` 使用第一个有效群组。启动配置中的非零 ID 不属于已配置 `groups` 时，配置无效。 |
 | `required_channel_id` | 全局必需频道门槛。 | `0` 表示关闭。 |
 | `channel_display` | 全局频道名称或公开 `@handle`。 | 空。 |
 | `channel_invite_url` | 全局加入链接；私有频道没有 `@handle` 时必填。 | 空。 |
@@ -93,14 +123,14 @@ telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、�
 | 键 | 作用 | 默认值和归一化规则 |
 | --- | --- | --- |
 | `notify_ttl_seconds` | 多少秒后删除机器人发送的群消息。 | `0` 变为 60；负数保留消息；正数不变。 |
-| `lookup_ttl_seconds` | 同时删除查询命令和回复；`/autodel` 可覆盖到重启。 | 未设置变为 180；`0` 或负数关闭；正数不变。 |
+| `lookup_ttl_seconds` | 同时删除查询命令和回复；`/autodel` 将运行时覆盖值保存到 `settings.json`。 | 未设置变为 180；`0` 或负数关闭；正数不变。 |
 | `warn_limit` | `/warn` 达到多少次后自动移出群组。 | `<=0` 变为 3；无上限。 |
 | `private_query_per_min` | 每名用户每分钟可在私聊中执行的查询次数；受管理群组内不限次。 | `<=0` 变为 3；无上限。 |
-| `ban_seconds` | `/ban`、`/sb` 和验证自动封禁的默认时长；`/bantime` 可覆盖到重启。 | `<=0` 表示永久；1–29 变为 30；超过 366 天变为永久。 |
+| `ban_seconds` | `/ban`、`/sb` 和验证自动封禁的默认时长；`/bantime` 将运行时覆盖值保存到 `settings.json`。 | `<=0` 表示永久；1–29 变为 30；超过 366 天变为永久。 |
 | `mute_seconds` | `/mute` 默认时长；禁言始终限时。 | `<=0` 变为 3,600；1–29 变为 30；超过 366 天变为 366 天。 |
 | `admin_log_chat_id` | 接收管理操作和失败告警的专用聊天。 | `0` 表示关闭；不做归一化。 |
 | `stats_timezone` | `/stats` 每日重置所用 IANA 时区。 | 空值或无效值变为固定 UTC+8。 |
-| `rich_messages` | `/pkg` 和 `/use` 的初始富文本状态；`/rich` 可覆盖到重启。 | `false`。 |
+| `rich_messages` | `/pkg` 和 `/use` 的富文本基线；`/rich` 将运行时覆盖值保存到 `settings.json`。 | `false`。 |
 | `private_reply` | 验证流程外普通私聊的回复。 | 空值使用内置帮助文本。 |
 | `block_channel_senders` | `/bc` 的初始过滤状态；需要关闭隐私模式。 | `false`；持久化的 `antispam.json` 优先。 |
 | `channel_whitelist` | 允许发言的频道 ID 初始列表。 | `[]`；持久化的 `antispam.json` 优先。 |
@@ -124,28 +154,26 @@ telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、�
 
 未知 JSON 键会被忽略，并记录 `WARNING: config: unknown key ...`。出现该告警时应修正配置文件中的拼写。
 
+Telegram 设置界面不能修改播报目标、overlay 列表、新闻源、`stats_timezone` 或 `user_agent`。这些设置仍须写入 `config.json`，并在修改后重启服务。
+
 ## 运维
 
 ### Telegram 前置条件
 1. 通过 [@BotFather](https://t.me/BotFather) 创建机器人。
-2. 将机器人设为每个受管理**公开群组**的管理员，授予**批准新成员**、**封禁用户**和**删除消息**权限，并为群组启用入群申请。
-3. 使用必需频道时，将机器人设为该频道管理员，使 `getChatMember` 能可靠读取其它用户的成员状态。配置申请人可访问的 `@handle` 或 `channel_invite_url`。
-4. 除非 `/bc` 需要检查以频道身份发送的消息，否则 BotFather 隐私模式可保持开启。
-
-数字 chat ID 使用 `-100…` 形式。可将消息转发给 [@userinfobot](https://t.me/userinfobot) 或 [@JsonDumpBot](https://t.me/JsonDumpBot)，也可查看启动日志。
+2. 登记群组前，通过私有启动链接认领所有者身份。
+3. 在每个已登记群组中，将机器人提升为管理员并开启**邀请用户**、**封禁用户**和**删除消息**权限，同时为群组启用入群申请。
+4. 使用必需频道时，将机器人设为频道管理员；普通成员身份不足以读取其他成员。
+5. 除非 `/bc` 需要检查以频道身份发送的消息，否则 BotFather 隐私模式可保持开启。
 
 ### 构建与安装
 需要 **Go 1.26.7+**，与 `go.mod` 一致。[Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 提供静态链接的 `linux-amd64`、`arm64` 二进制文件和 `SHA256SUMS`。模块路径未使用 `/vN` 后缀，因此不支持 `go install …@v3.x`；请使用发布文件，或克隆仓库后构建。
 
 ```sh
-CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .
-sudo cp deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now gentoo-zh-verify-bot
-journalctl -fu gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 ```
 
-随附的 unit 读取 `/etc/gentoo-zh-verify-bot/bot.env` 和 `config.json`，通过 `DynamicUser=` 运行，并由 `StateDirectory=` 创建 `/var/lib/gentoo-zh-verify-bot`。长轮询只需要出站 HTTPS，不需要监听端口或反向代理。
+使用[部署](#部署)中的三条安装命令。随附的 unit 读取 `/etc/gentoo-zh-verify-bot/bot.env`，按需读取 `config.json`，通过 `DynamicUser=` 运行，并由 `StateDirectory=` 创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot`。长轮询只需要出站 HTTPS，不需要监听端口或反向代理。
+
 
 ### 状态与重启
 未设置 `$STATE_DIRECTORY` 时，所有状态只保存在内存中，机器人会记录告警。随附的 unit 已设置该变量。状态目录只能由服务用户访问。
@@ -156,22 +184,22 @@ journalctl -fu gentoo-zh-verify-bot
 | `warns.json` | 每名用户的 `/warn` 计数。 |
 | `antispam.json` | `/bc` 状态和频道白名单。 |
 | `verifyfail.json` | 验证失败计数和冷却状态。 |
-| `settings.json` | `/start`、`/stop`、`/spoiler` 和 `/vmode` 状态。 |
+| `settings.json` | 所有者身份、一次性登记凭据、运行时群组、控制群组选择和稀疏运行时设置覆盖值。 |
 | `heartbeat.json` | 最近一次成功连接 Telegram 的时间，用于重启恢复。 |
 | `agents.json` | AI 代答陷阱累计次数和对方声明的模型计数。 |
 | `feed-<chat_id>.json` | 播报游标和已跟踪 bug 的消息 ID。 |
 
-每日 `/stats`、`/rich`、`/autodel` 和 `/bantime` 覆盖值、限流窗口，以及查询、新闻和软件包缓存均在重启后重置。
+每日 `/stats`、限流窗口，以及查询、新闻和软件包缓存会在重启后重置。`settings.json` 中的运行时设置不会重置。
 
 ### 故障处理
 | 故障 | 机器人行为 | 管理员操作 |
 | --- | --- | --- |
-| 配置文件缺失或无效、未设置 `BOT_TOKEN`，或启动阶段的必要 Telegram 请求失败 | 进程以非零状态退出；systemd 按 `Restart=on-failure` 重试。 | 查看 journal 中第一条 fatal 日志，修正文件、token 或网络后重启。 |
+| 未设置 `BOT_TOKEN`、现有配置中包含无效值，或启动阶段的必要 Telegram 请求失败 | 进程以非零状态退出；systemd 按 `Restart=on-failure` 重试。配置文件缺失是有效状态，服务会以零群组启动。 | 查看 journal 中第一条 fatal 日志，修正 token、文件或网络后重启。 |
 | 运行期间 Telegram 无法访问 | 长轮询继续重试。验证超时会延后，不拒绝申请，也不增加失败计数；恢复后重新提供完整时限，并执行有上限的通知。 | 无需清理申请。heartbeat 告警持续出现时检查网络。 |
 | 出现 `ERROR state load <path>: ...; writes disabled until restart` | 使用该路径的核心状态转为内存运行，不再持久化；原文件保留以便恢复。 | 立即停止服务，检查或恢复文件，修正所有权和权限后重启。等待不会恢复写入。 |
 | 软件包或发行版数据源没有响应 | `/pkg`、`/use`、`/arm`、`/pkgs` 和 `/armpkgs` 会区分“未找到”和“数据源不可用”，并标记不完整结果。播报抓取失败时保留游标，留待下次轮询。 | 检查结果中标明的数据源，不要将不可用或不完整结果解释为不存在。 |
 | 无法读取必需频道成员状态 | 机器人通知管理员。申请人通过验证后，默认的 `required_channel_fail_open: true` 会批准；设置为 `false` 时拒绝并允许重试。 | 恢复机器人的频道管理员身份；默认策略不合适时应显式选择开放或关闭回退。 |
-| 启动日志出现 `bot is NOT admin`、`CANNOT read membership`，或后续操作报告权限不足 | 日志所列的验证、管理或频道检查未按预期执行。批准失败时保留申请以便重试；拒绝失败时留给管理员处理；封禁失败时需要手动操作。 | 恢复日志所列权限，并手动处理日志指出的申请。 |
+| 某个群组的启动检查报告显示设置未就绪 | 缺少一项或多项必要群组权限，或无法读取必需频道成员身份。 | 完成该群组唯一一份报告中的全部操作，再重启服务或使用设置界面的重新检查操作。 |
 | 播报目标无法访问或没有发帖权限 | 启动时记录告警；暂时性发送失败不会越过未发送项目。 | 修正 `chat_id`，加入机器人，并授予频道发帖权限。 |
 
 ## 许可证

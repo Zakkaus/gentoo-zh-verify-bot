@@ -282,7 +282,10 @@ func warnUnknownConfigKeys(data []byte) {
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
+		data = []byte("{}")
 	}
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
@@ -302,9 +305,6 @@ func LoadConfig(path string) (*Config, error) {
 	c.GroupIDs = make([]int64, 0, len(c.Groups))
 	for i := range c.Groups {
 		c.GroupIDs = append(c.GroupIDs, c.Groups[i].ID)
-	}
-	if len(c.Groups) == 0 {
-		return nil, fmt.Errorf("at least one group is required (groups, group_ids, or group_id)")
 	}
 	// Reject invalid or duplicate groups before handlers start.
 	seenGroup := map[int64]bool{}
@@ -381,6 +381,14 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		if c.RequiredChannel(g.ID) != 0 && c.ChannelInvite(g.ID) == "" && !strings.HasPrefix(c.ChannelDisplayFor(g.ID), "@") {
 			return nil, fmt.Errorf("group %d: required_channel_id is set but the channel has no reachable link (set channel_display to an @handle, or channel_invite_url for a private channel)", g.ID)
+		}
+	}
+	if len(c.Groups) == 0 {
+		if c.VerifyMode != "" && c.VerifyMode != ModeKernel && len(c.Questions) == 0 {
+			return nil, fmt.Errorf("default runtime group: no questions (add global questions or set verify_mode to %q)", ModeKernel)
+		}
+		if c.RequiredChannelID != 0 && c.ChannelInviteURL == "" && !strings.HasPrefix(c.ChannelDisplay, "@") {
+			return nil, fmt.Errorf("default runtime group: required_channel_id is set but the channel has no reachable link (set channel_display to an @handle, or channel_invite_url for a private channel)")
 		}
 	}
 	if c.TimeoutSeconds <= 0 {

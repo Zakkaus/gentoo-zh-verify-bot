@@ -37,5 +37,15 @@
   },
   "direct_message": {
     "auto_reply": "👋 This bot handles join verification for the Gentoo Chinese community and provides Gentoo/Linux lookup commands.\n\n• To join: submit a join request in the group, then select “✅ Start verification” in the bot's group message and complete verification here.\n• Lookup commands (/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs) also work in direct messages. Direct messages are limited to %[1]d queries per minute; group chats are not rate-limited.\n• Review and administration commands only work in the group."
+  },
+  "registration": {
+    "owner_claimed": "Deployer ownership is now bound to this account. You can add groups.",
+    "owner_claim_refused": "This owner-claim link is invalid, used, or expired.",
+    "enrollment_owner_only": "Only the bot owner can create group-enrollment links.",
+    "enrollment_link": "Group-enrollment link (valid for %[1]d minutes and one use):\n%[2]s",
+    "enrollment_refused": "This group-enrollment link is invalid, used, or expired. The bot will leave this group.",
+    "registration_pending": "Registration is authorized for group “%[1]s”. Promote the bot to administrator and grant the required permissions. Registration finishes automatically after promotion.",
+    "group_registered": "Registered group “%[1]s”. Open settings: %[2]s",
+    "registration_save_failed": "Could not persist group registration. The bot will leave this group; check the service state directory."
   }
 }

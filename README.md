@@ -64,18 +64,48 @@ Lookup commands also work in DM, limited by `private_query_per_min`.
 
 The optional feed polls Gentoo Bugzilla and news for each `feed` or `feeds` destination. Cursors survive restarts. Bug status changes edit the original post; confirmation can emit one `🔔` notice, and resolution changes `🐞` to `✅` or `❌`.
 
+## Deployment
+
+`BOT_TOKEN` is the only required setting. The supplied systemd unit creates a private state directory; `config.json` is optional.
+
+Build the command package, or place a release binary named `gentoo-zh-verify-bot` in the current directory:
+
+```sh
+CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+```
+
+Install the binary, write the token environment file, and start the service:
+
+```sh
+sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
+printf '%s\n' 'BOT_TOKEN=123456:ABC-DEF' | sudo install -Dm600 /dev/stdin /etc/gentoo-zh-verify-bot/bot.env
+sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service && sudo systemctl daemon-reload && sudo systemctl enable --now gentoo-zh-verify-bot
+```
+
+Read the private, one-use owner-claim link from the journal:
+
+```sh
+sudo journalctl -u gentoo-zh-verify-bot
+```
+
+Open that link in Telegram. The first account to open the unexpired link becomes the owner. Add the bot to a group, promote it to administrator, and enable **Invite users**, **Ban users**, and **Delete messages**. The owner-authorized group is written to `settings.json`; the bot never writes `config.json`.
+
+For delegated setup, the owner sends `/enroll` to the bot in a private chat and gives the resulting one-use, ten-minute group link to the group administrator. Reusing an enrollment link, using an expired link, or promoting the bot without owner authorization makes the bot leave the unknown group.
+
+For a required channel, make the bot a channel administrator. Plain channel membership cannot read other users' membership, so it cannot enforce the membership gate. Startup emits one combined, actionable setup report for each registered group.
+
 ## Configuration
 
 `BOT_TOKEN` is required and has no default. Optional `GITHUB_TOKEN` needs no scopes and raises the GitHub API allowance for overlay requests from 60/h to about 5,000/h. Optional `TELEGRAM_API_URL` selects a self-hosted Bot API server instead of Telegram's hosted API.
 
-All other settings are JSON. Copy [`config.example.json`](config.example.json) to `/etc/gentoo-zh-verify-bot/config.json`; changing that file currently requires a restart unless a command override is named below.
+`config.json` is optional. When present, it supplies a validated baseline; malformed JSON and invalid configured values still stop startup. Sparse values saved through Telegram take precedence over the file, and file values take precedence over built-in defaults. Changing the file requires a restart.
 
 ### Groups and verification
 | Key | Purpose | Default and normalization |
 | --- | --- | --- |
-| `groups` | Guarded groups and per-group overrides: `id`, `required_channel_id`, `channel_display`, `channel_invite_url`, `trusted_member_group_ids`, `questions`, `verify_mode`. | `[]`, but at least one group is required after legacy merging. IDs must be nonzero and unique. Empty fields inherit globals; explicit channel ID `0` or trusted list `[]` disables that gate for the group. |
+| `groups` | Optional startup seed for guarded groups and per-group overrides: `id`, `required_channel_id`, `channel_display`, `channel_invite_url`, `trusted_member_group_ids`, `questions`, `verify_mode`. | `[]`; groups may instead be registered at runtime. Configured IDs must be nonzero and unique. Empty fields inherit globals; explicit channel ID `0` or trusted list `[]` disables that gate for the group. |
 | `group_ids` / `group_id` | Legacy group-list and singular inputs merged into `groups`. | `[]` / `0`; duplicate legacy IDs merge with an existing group. |
-| `control_group_id` | Group allowed to run process-global commands. | `0`: admins in any guarded group may run them; multiple groups produce a startup warning. A nonzero ID outside `groups` is invalid. |
+| `control_group_id` | Group allowed to run process-global commands. | `0`: the first effective group is used. A nonzero startup value outside configured `groups` is invalid. |
 | `required_channel_id` | Global required-channel gate. | `0`: off. |
 | `channel_display` | Global channel label or public `@handle`. | Empty. |
 | `channel_invite_url` | Global join link, required for a private channel without an `@handle`. | Empty. |
@@ -93,14 +123,14 @@ All other settings are JSON. Copy [`config.example.json`](config.example.json) t
 | Key | Purpose | Default and normalization |
 | --- | --- | --- |
 | `notify_ttl_seconds` | Delete bot group messages after this many seconds. | `0` becomes 60; negative keeps messages; positive unchanged. |
-| `lookup_ttl_seconds` | Delete lookup commands and replies together. `/autodel` overrides until restart. | Unset becomes 180; `0` or negative disables; positive unchanged. |
+| `lookup_ttl_seconds` | Delete lookup commands and replies together. `/autodel` saves a runtime override in `settings.json`. | Unset becomes 180; `0` or negative disables; positive unchanged. |
 | `warn_limit` | `/warn` count before auto-kick. | `<=0` becomes 3; no maximum. |
 | `private_query_per_min` | Per-user DM lookup limit; guarded groups are unlimited. | `<=0` becomes 3; no maximum. |
-| `ban_seconds` | Default duration for `/ban`, `/sb`, and verification auto-ban. `/bantime` overrides until restart. | `<=0`: permanent; 1–29 becomes 30; more than 366 days becomes permanent. |
+| `ban_seconds` | Default duration for `/ban`, `/sb`, and verification auto-ban. `/bantime` saves a runtime override in `settings.json`. | `<=0`: permanent; 1–29 becomes 30; more than 366 days becomes permanent. |
 | `mute_seconds` | Default `/mute` duration; mute is always timed. | `<=0` becomes 3,600; 1–29 becomes 30; more than 366 days becomes 366 days. |
 | `admin_log_chat_id` | Dedicated moderation and failed-action log. | `0`: off; no normalization. |
 | `stats_timezone` | IANA timezone for daily `/stats` reset. | Empty or invalid becomes fixed UTC+8. |
-| `rich_messages` | Initial rich output for `/pkg` and `/use`; `/rich` overrides until restart. | `false`. |
+| `rich_messages` | Baseline rich output for `/pkg` and `/use`; `/rich` saves a runtime override in `settings.json`. | `false`. |
 | `private_reply` | Reply to ordinary non-command DMs outside verification. | Empty selects built-in help text. |
 | `block_channel_senders` | Initial `/bc` filter state; requires privacy mode off. | `false`; persisted `antispam.json` takes precedence. |
 | `channel_whitelist` | Initial channel-sender whitelist. | `[]`; persisted `antispam.json` takes precedence. |
@@ -124,28 +154,26 @@ All other settings are JSON. Copy [`config.example.json`](config.example.json) t
 
 Unknown JSON keys are ignored but logged as `WARNING: config: unknown key ...`. Treat that warning as a spelling error and correct the file.
 
+The Telegram settings surface does not edit feed destinations, the overlay list, the news source, `stats_timezone`, or `user_agent`. These remain `config.json` settings and require a service restart.
+
 ## Operations
 
 ### Telegram prerequisites
 1. Create the bot with [@BotFather](https://t.me/BotFather).
-2. Add it as an administrator to every guarded **public** group. Enable **Approve new members**, **Ban users**, and **Delete messages**, and enable join requests for the group.
-3. For a required channel, add the bot there as an administrator so `getChatMember` can reliably read other users' membership. Configure an `@handle` or `channel_invite_url` that applicants can open.
-4. BotFather privacy mode may remain on unless `/bc` must inspect channel-identity posts.
-
-A numeric chat ID uses the `-100…` form. Forward a message to [@userinfobot](https://t.me/userinfobot) or [@JsonDumpBot](https://t.me/JsonDumpBot), or read the startup log.
+2. Claim ownership from the private startup link before registering a group.
+3. In each registered group, promote the bot and enable **Invite users**, **Ban users**, and **Delete messages**. Enable join requests for the group.
+4. For a required channel, make the bot an administrator; being a member is insufficient for membership reads.
+5. BotFather privacy mode may remain on unless `/bc` must inspect channel-identity posts.
 
 ### Build and install
 Requires **Go 1.26.7+**, matching `go.mod`. Prebuilt static `linux-amd64` and `arm64` binaries plus `SHA256SUMS` are available from [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases). `go install …@v3.x` is not supported because the module path intentionally has no `/vN` suffix; use a release binary or clone and build.
 
 ```sh
-CGO_ENABLED=0 go build -o /usr/local/bin/gentoo-zh-verify-bot .
-sudo cp deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now gentoo-zh-verify-bot
-journalctl -fu gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 ```
 
-The supplied unit reads `/etc/gentoo-zh-verify-bot/bot.env` and `config.json`, runs with `DynamicUser=`, and creates `/var/lib/gentoo-zh-verify-bot` through `StateDirectory=`. Long polling needs outbound HTTPS only; no listener or reverse proxy is required.
+Use the three installation commands in [Deployment](#deployment). The supplied unit reads `/etc/gentoo-zh-verify-bot/bot.env`, optionally reads `config.json`, runs with `DynamicUser=`, and creates `/var/lib/gentoo-zh-verify-bot` with mode `0700` through `StateDirectory=`. Long polling needs outbound HTTPS only; no listener or reverse proxy is required.
+
 
 ### State and restarts
 When `$STATE_DIRECTORY` is unset, all state is memory-only and the bot logs a warning. The supplied unit sets it. Keep the directory private to the service user.
@@ -156,22 +184,22 @@ When `$STATE_DIRECTORY` is unset, all state is memory-only and the bot logs a wa
 | `warns.json` | Per-user `/warn` counts. |
 | `antispam.json` | `/bc` state and channel whitelist. |
 | `verifyfail.json` | Verification strikes and cooldowns. |
-| `settings.json` | `/start`/`stop`, `/spoiler`, and `/vmode` state. |
+| `settings.json` | Owner identity, one-use registration capabilities, runtime groups, control-group selection, and sparse runtime setting overrides. |
 | `heartbeat.json` | Last successful Telegram contact for restart recovery. |
 | `agents.json` | Lifetime tripwire total and self-declared model counts. |
 | `feed-<chat_id>.json` | Feed cursors and tracked bug message IDs. |
 
-Daily `/stats`, `/rich`, `/autodel`, and `/bantime` overrides, rate-limit windows, and lookup/news/package caches reset on restart.
+Daily `/stats`, rate-limit windows, and lookup/news/package caches reset on restart. Runtime settings stored in `settings.json` do not.
 
 ### Failure behavior
 | Failure | Bot behavior | Operator action |
 | --- | --- | --- |
-| Missing or invalid config, missing `BOT_TOKEN`, or Telegram unreachable during mandatory startup calls | Startup exits nonzero; systemd retries under `Restart=on-failure`. | Read the first fatal journal line, fix the file/token/network, then restart. |
+| Missing `BOT_TOKEN`, invalid values in an existing config, or Telegram unreachable during mandatory startup calls | Startup exits nonzero; systemd retries under `Restart=on-failure`. A missing config file is valid and starts with zero groups. | Read the first fatal journal line, fix the token, file, or network, then restart. |
 | Telegram becomes unreachable while running | Long polling retries. Verification expiries are deferred without declines or strikes; recovery grants fresh windows and bounded re-notification. | No applicant cleanup is required. Investigate the network if heartbeat warnings continue. |
 | `ERROR state load <path>: ...; writes disabled until restart` | Core state using that path remains in memory and does not persist. The file is left for recovery. | Stop the service immediately, inspect or restore the file, fix ownership and permissions, then restart. Waiting does not re-enable writes. |
 | A package or distribution source does not answer | `/pkg`, `/use`, `/arm`, `/pkgs`, and `/armpkgs` distinguish “not found” from unavailable data and label partial results. Feed fetch failures leave cursors unchanged for the next poll. | Check the named source; do not interpret unavailable or partial output as absence. |
 | Required-channel membership cannot be read | The bot alerts admins. After a passed challenge, default `required_channel_fail_open: true` approves; `false` declines for retry. | Restore the bot as channel administrator; choose fail-open or fail-closed explicitly if the default is unsuitable. |
-| Startup reports `bot is NOT admin`, `CANNOT read membership`, or a later action reports missing permission | The named verification, moderation, or channel check did not run as intended. Failed approval is kept retryable; failed decline remains for manual review; failed ban requires manual action. | Restore the permission named in the log and manually resolve any request identified there. |
+| A per-group startup report says the setup is not ready | One or more required group rights are missing, or required-channel membership is unreadable. | Apply every action in that group's single report, then restart or run the panel's recheck action. |
 | Feed target is unreachable or lacks post rights | Startup warns; transient send failures do not advance past an undelivered item. | Correct `chat_id`, add the bot, and grant channel post rights. |
 
 ## License

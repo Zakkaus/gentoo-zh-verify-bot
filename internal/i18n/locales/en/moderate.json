@@ -53,6 +53,17 @@
     "unmuted": "🔊 Unmuted %[1]s (ID %[2]d). Operator: %[3]s.",
     "usage": "Usage: /mute (default duration: %[1]s), or send /mute 30m, /mute 2h, or /mute 12h to set a duration. Permanent mutes are not supported."
   },
+  "setup": {
+    "ready": "Group “%[1]s” (%[2]d) is ready: all required moderation permissions and membership checks are available.",
+    "missing_header": "Group “%[1]s” (%[2]d) is not ready:",
+    "group_access": "Confirm that the bot can still access this group.",
+    "group_admin": "Promote the bot to group administrator.",
+    "approve_join_requests": "Enable Invite users so the bot can approve join requests.",
+    "ban_users": "Enable Ban users so the bot can ban or restrict users.",
+    "delete_messages": "Enable Delete messages so the bot can clean up messages.",
+    "channel_admin": "Make the bot an administrator of required channel “%[1]s” (%[2]d); plain membership cannot read other users' membership.",
+    "recheck": "After fixing these items, restart the service or select Recheck in Settings."
+  },
   "warning": {
     "cleared": "✅ Cleared %[1]s's warnings (previous count: %[2]d). Operator: %[3]s.",
     "issued": "⚠️ Warned %[1]s (%[2]d/%[3]d). At %[4]d warnings, the user will be removed from the group automatically. Operator: %[5]s.",

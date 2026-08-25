@@ -5,10 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/gentoo-zh-verify-bot --config /etc/gentoo-zh-verify-bot/config.json
+ExecStart=/usr/bin/env -- /usr/local/bin/gentoo-zh-verify-bot --config /etc/gentoo-zh-verify-bot/config.json
 EnvironmentFile=/etc/gentoo-zh-verify-bot/bot.env
 # persistent state dir (/var/lib/gentoo-zh-verify-bot) so in-progress verifications survive restarts
 StateDirectory=gentoo-zh-verify-bot
+StateDirectoryMode=0700
 Restart=on-failure
 RestartSec=5
 

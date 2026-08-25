@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
@@ -150,6 +153,7 @@ type RegistrationState struct {
 	Revision             uint64
 	OwnerID              int64
 	OwnerClaimNonce      string
+	OwnerClaimExpiresAt  int64
 	ControlGroupID       int64
 	RegisteredGroups     []RegisteredGroup
 	EnrollmentNonces     []EnrollmentNonce
@@ -181,6 +185,12 @@ var ErrSettingsNotDurable = errors.New("settings persistence is not durable")
 
 // ErrUnknownGroup identifies a group outside the configured and registered effective list.
 var ErrUnknownGroup = errors.New("unknown settings group")
+
+// ErrOwnerClaimInvalid identifies a claim token that is absent, used, mismatched, or expired.
+var ErrOwnerClaimInvalid = errors.New("owner claim is invalid")
+
+// ErrRegistrationOwnerOnly identifies an enrollment request made by a non-owner.
+var ErrRegistrationOwnerOnly = errors.New("registration owner authorization required")
 
 // ConflictError carries the expected and current revision for a refused write.
 type ConflictError struct {
@@ -223,6 +233,7 @@ type settingsFile struct {
 	RegistrationRevision uint64                `json:"registration_revision"`
 	OwnerID              int64                 `json:"owner_id"`
 	OwnerClaimNonce      string                `json:"owner_claim_nonce"`
+	OwnerClaimExpiresAt  int64                 `json:"owner_claim_expires_at"`
 	ControlGroupID       int64                 `json:"control_group_id"`
 	RegisteredGroups     []RegisteredGroup     `json:"registered_groups"`
 	EnrollmentNonces     []EnrollmentNonce     `json:"enrollment_nonces"`
@@ -406,6 +417,34 @@ func (s *Settings) IsGroup(groupID int64) bool {
 	return ok
 }
 
+// IsKnownChat reports whether an ID is an effective group, required channel, trusted group, or allowlisted support chat.
+func (s *Settings) IsKnownChat(chatID int64) bool {
+	if chatID == 0 {
+		return false
+	}
+	snapshot := s.snapshot.Load()
+	if _, ok := snapshot.groups[chatID]; ok {
+		return true
+	}
+	for _, groupID := range snapshot.groupIDs {
+		group := snapshot.groups[groupID]
+		if group.requiredChannelID.Value == chatID {
+			return true
+		}
+		for _, knownID := range group.knownChatIDs.Value {
+			if knownID == chatID {
+				return true
+			}
+		}
+		for _, trustedID := range group.trustedMemberGroupIDs.Value {
+			if trustedID == chatID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // GroupIDs returns the effective configured-then-registered group order.
 func (s *Settings) GroupIDs() []int64 {
 	return append([]int64(nil), s.snapshot.Load().groupIDs...)
@@ -531,6 +570,7 @@ func (s *Settings) CommitRegistrations(expectedRevision uint64, next Registratio
 	candidate.RegistrationRevision = current.Revision + 1
 	candidate.OwnerID = next.OwnerID
 	candidate.OwnerClaimNonce = next.OwnerClaimNonce
+	candidate.OwnerClaimExpiresAt = next.OwnerClaimExpiresAt
 	candidate.ControlGroupID = next.ControlGroupID
 	candidate.RegisteredGroups = append([]RegisteredGroup(nil), next.RegisteredGroups...)
 	candidate.EnrollmentNonces = append([]EnrollmentNonce(nil), next.EnrollmentNonces...)
@@ -562,6 +602,88 @@ func (s *Settings) CommitRegistrations(expectedRevision uint64, next Registratio
 	return CommitResult{Revision: candidate.RegistrationRevision, Durable: true}, nil
 }
 
+// EnsureOwnerClaim returns the current unexpired claim nonce or durably creates a replacement.
+func (s *Settings) EnsureOwnerClaim(now time.Time, lifetime time.Duration) (nonce string, created bool, err error) {
+	if lifetime <= 0 {
+		return "", false, fmt.Errorf("owner claim lifetime must be positive")
+	}
+	for {
+		current := s.Registrations()
+		if current.OwnerID != 0 {
+			return "", false, nil
+		}
+		if current.OwnerClaimNonce != "" && now.Unix() < current.OwnerClaimExpiresAt {
+			return current.OwnerClaimNonce, false, nil
+		}
+		nonce, err = randomRegistrationNonce()
+		if err != nil {
+			return "", false, err
+		}
+		next := cloneRegistrationState(current)
+		next.OwnerClaimNonce = nonce
+		next.OwnerClaimExpiresAt = now.Add(lifetime).Unix()
+		if _, err = s.CommitRegistrations(current.Revision, next); errors.Is(err, ErrSettingsConflict) {
+			continue
+		}
+		return nonce, err == nil, err
+	}
+}
+
+// ClaimOwner atomically consumes one unexpired owner claim and binds the first owner.
+func (s *Settings) ClaimOwner(userID int64, nonce string, now time.Time) error {
+	if userID <= 0 {
+		return ErrOwnerClaimInvalid
+	}
+	for {
+		current := s.Registrations()
+		if current.OwnerID != 0 || current.OwnerClaimNonce == "" ||
+			current.OwnerClaimNonce != nonce || !now.Before(time.Unix(current.OwnerClaimExpiresAt, 0)) {
+			return ErrOwnerClaimInvalid
+		}
+		next := cloneRegistrationState(current)
+		next.OwnerID = userID
+		next.OwnerClaimNonce = ""
+		next.OwnerClaimExpiresAt = 0
+		if _, err := s.CommitRegistrations(current.Revision, next); errors.Is(err, ErrSettingsConflict) {
+			continue
+		} else {
+			return err
+		}
+	}
+}
+
+// IssueEnrollmentNonce durably creates one owner-authorized, single-use registration capability.
+func (s *Settings) IssueEnrollmentNonce(ownerID int64, now time.Time, lifetime time.Duration) (EnrollmentNonce, error) {
+	if lifetime <= 0 {
+		return EnrollmentNonce{}, fmt.Errorf("enrollment lifetime must be positive")
+	}
+	for {
+		current := s.Registrations()
+		if current.OwnerID == 0 || current.OwnerID != ownerID {
+			return EnrollmentNonce{}, ErrRegistrationOwnerOnly
+		}
+		nonce, err := randomRegistrationNonce()
+		if err != nil {
+			return EnrollmentNonce{}, err
+		}
+		issued := EnrollmentNonce{Nonce: nonce, IssuedBy: ownerID, ExpiresAt: now.Add(lifetime).Unix()}
+		next := cloneRegistrationState(current)
+		next.EnrollmentNonces = next.EnrollmentNonces[:0]
+		for _, existing := range current.EnrollmentNonces {
+			if now.Unix() < existing.ExpiresAt {
+				next.EnrollmentNonces = append(next.EnrollmentNonces, existing)
+			}
+		}
+		next.EnrollmentNonces = append(next.EnrollmentNonces, issued)
+		if _, err = s.CommitRegistrations(current.Revision, next); errors.Is(err, ErrSettingsConflict) {
+			continue
+		} else if err != nil {
+			return EnrollmentNonce{}, err
+		}
+		return issued, nil
+	}
+}
+
 func (v GroupView) ID() int64                   { return v.group.id }
 func (v GroupView) Revision() uint64            { return v.group.revision }
 func (v GroupView) RuntimeRegistered() bool     { return v.group.registered }
@@ -583,6 +705,7 @@ func (v GroupView) ChannelDisplay() Setting[string]   { return v.group.channelDi
 func (v GroupView) ChannelInviteURL() Setting[string] { return v.group.channelInviteURL }
 func (v GroupView) FallbackBuiltin() Setting[bool]    { return v.group.fallbackBuiltin }
 func (v GroupView) Lang() Setting[string]             { return v.group.lang }
+func (v GroupView) RequiredChannelID() Setting[int64] { return v.group.requiredChannelID }
 
 // Baseline returns a detached copy of the configured/default group baseline.
 func (v GroupView) Baseline() GroupBaseline { return cloneGroupBaseline(v.group.baseline) }
@@ -709,6 +832,7 @@ func (s *Settings) buildSnapshot(state settingsFile) (*settingsSnapshot, error) 
 		Revision:             state.RegistrationRevision,
 		OwnerID:              state.OwnerID,
 		OwnerClaimNonce:      state.OwnerClaimNonce,
+		OwnerClaimExpiresAt:  state.OwnerClaimExpiresAt,
 		ControlGroupID:       state.ControlGroupID,
 		RegisteredGroups:     append([]RegisteredGroup(nil), state.RegisteredGroups...),
 		EnrollmentNonces:     append([]EnrollmentNonce(nil), state.EnrollmentNonces...),
@@ -826,8 +950,11 @@ func normalizeBaselineLanguages(baseline *SettingsBaseline) {
 }
 
 func validateBaseline(baseline SettingsBaseline) error {
-	if len(baseline.Groups) == 0 {
-		return fmt.Errorf("settings baseline requires at least one group")
+	if err := validateBaselineSources(baseline.DefaultGroup); err != nil {
+		return fmt.Errorf("default group: %w", err)
+	}
+	if err := validateEffectiveGroup(buildEffectiveGroup(baseline.DefaultGroup, groupRecord{}, false)); err != nil {
+		return fmt.Errorf("default group: %w", err)
 	}
 	seen := make(map[int64]bool, len(baseline.Groups))
 	for _, group := range baseline.Groups {
@@ -970,6 +1097,18 @@ func validateIDs(name string, ids []int64) error {
 }
 
 func (s *Settings) validateRegistrations(state RegistrationState) error {
+	if state.OwnerID < 0 {
+		return fmt.Errorf("owner ID must not be negative")
+	}
+	if (state.OwnerClaimNonce == "") != (state.OwnerClaimExpiresAt == 0) {
+		return fmt.Errorf("owner claim nonce and expiry must be set together")
+	}
+	if state.OwnerClaimNonce != "" && state.OwnerClaimExpiresAt <= 0 {
+		return fmt.Errorf("owner claim expiry must be positive")
+	}
+	if state.OwnerID != 0 && state.OwnerClaimNonce != "" {
+		return fmt.Errorf("owner claim must be cleared after ownership is claimed")
+	}
 	seenGroups := make(map[int64]bool, len(s.baseline.Groups)+len(state.RegisteredGroups))
 	for _, group := range s.baseline.Groups {
 		seenGroups[group.ID] = true
@@ -977,6 +1116,9 @@ func (s *Settings) validateRegistrations(state RegistrationState) error {
 	for _, group := range state.RegisteredGroups {
 		if group.ID == 0 {
 			return fmt.Errorf("registered group ID 0 is invalid")
+		}
+		if group.RegisteredBy <= 0 {
+			return fmt.Errorf("registered group %d has no valid actor", group.ID)
 		}
 		if seenGroups[group.ID] {
 			return fmt.Errorf("duplicate registered group %d", group.ID)
@@ -988,12 +1130,18 @@ func (s *Settings) validateRegistrations(state RegistrationState) error {
 		if nonce.Nonce == "" || seenNonces[nonce.Nonce] {
 			return fmt.Errorf("enrollment nonce is empty or duplicated")
 		}
+		if nonce.IssuedBy == 0 || nonce.ExpiresAt <= 0 {
+			return fmt.Errorf("enrollment nonce issuer and expiry are required")
+		}
 		seenNonces[nonce.Nonce] = true
 	}
 	seenPending := make(map[int64]bool, len(state.PendingRegistrations))
 	for _, pending := range state.PendingRegistrations {
 		if pending.GroupID == 0 || seenPending[pending.GroupID] {
 			return fmt.Errorf("pending registration group is zero or duplicated")
+		}
+		if pending.RegisteredBy == 0 || pending.ExpiresAt <= 0 {
+			return fmt.Errorf("pending registration actor and expiry are required")
 		}
 		seenPending[pending.GroupID] = true
 	}
@@ -1013,16 +1161,19 @@ func (s *Settings) writeState(state *settingsFile) error {
 		return err
 	}
 	groupID := candidate.ControlGroupID
-	if groupID == 0 {
-		if len(snap.groupIDs) == 0 {
-			return fmt.Errorf("settings has no effective group for legacy mirrors")
-		}
+	if groupID == 0 && len(snap.groupIDs) > 0 {
 		groupID = snap.groupIDs[0]
 	}
-	group := snap.groups[groupID]
-	candidate.Enabled = boolPtr(group.enabled.Value)
-	candidate.NameSpoiler = boolPtr(group.nameSpoiler.Value)
-	candidate.VerifyMode = group.verifyMode.Value
+	if groupID == 0 {
+		candidate.Enabled = nil
+		candidate.NameSpoiler = nil
+		candidate.VerifyMode = ""
+	} else {
+		group := snap.groups[groupID]
+		candidate.Enabled = boolPtr(group.enabled.Value)
+		candidate.NameSpoiler = boolPtr(group.nameSpoiler.Value)
+		candidate.VerifyMode = group.verifyMode.Value
+	}
 	candidate.Version = SettingsSchemaVersion
 	if err := Write(s.path, candidate); err != nil {
 		return err
@@ -1255,3 +1406,11 @@ func emptyGroupOverrides(value GroupOverrides) bool {
 
 func boolPtr(value bool) *bool       { return &value }
 func stringPtr(value string) *string { return &value }
+
+func randomRegistrationNonce() (string, error) {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate registration nonce: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
+}

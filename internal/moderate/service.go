@@ -3,15 +3,14 @@ package moderate
 import (
 	"context"
 	"fmt"
-	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
-	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -35,9 +34,11 @@ type Telegram interface {
 	UnbanSenderChat(ctx context.Context, chatID, senderChatID int64) error
 }
 
-// MemberLookup reads full Telegram membership records for startup permission diagnostics.
+// MemberLookup reads Telegram chat and membership records for startup permission diagnostics.
 type MemberLookup interface {
+	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
 	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 }
 
 // Service owns moderation handlers, policy, and warning state.
@@ -60,25 +61,118 @@ func New(settings *store.Settings, telegram Telegram, cfg *config.Config, stateD
 	return s
 }
 
-// LogGroupAdmin reports whether the bot has the permissions required for moderation.
-func (s *Service) LogGroupAdmin(ctx context.Context, bot MemberLookup, selfID int64) {
-	for _, groupID := range s.settings.GroupIDs() {
-		switch ok, err := s.telegram.CachedAdmin(ctx, groupID, selfID); {
-		case err != nil:
-			log.Printf("group %d: cannot read bot membership yet (%v) — verification stays inactive until the bot is added as admin", groupID, err)
-		case ok:
-			log.Printf("group %d: bot is admin ✓", groupID)
-			member, memberErr := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(groupID), UserID: selfID})
-			if memberErr != nil {
-				log.Printf("group %d: bot is admin but couldn't read its exact rights (%v)", groupID, memberErr)
-				continue
+// SetupReport is one complete startup permission result for a guarded group.
+type SetupReport struct {
+	GroupID int64
+	Ready   bool
+	Text    string
+}
+
+// CheckGroupSetup checks every Telegram capability required by one guarded group.
+func (s *Service) CheckGroupSetup(ctx context.Context, bot MemberLookup, selfID, groupID int64) SetupReport {
+	l := s.groupLanguage(groupID)
+	messages := i18n.Messages.Moderate.Setup
+	title := strconv.FormatInt(groupID, 10)
+	var missing []string
+	if chat, err := bot.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(groupID)}); err != nil || chat == nil {
+		missing = append(missing, messages.GroupAccess.For(l))
+	} else if chat.Title != "" {
+		title = chat.Title
+	}
+
+	missingAllGroupRights := func() {
+		missing = append(missing,
+			messages.GroupAdmin.For(l),
+			messages.ApproveJoinRequests.For(l),
+			messages.BanUsers.For(l),
+			messages.DeleteMessages.For(l),
+		)
+	}
+	member, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(groupID), UserID: selfID})
+	if err != nil {
+		missingAllGroupRights()
+	} else {
+		switch typed := member.(type) {
+		case *telego.ChatMemberOwner:
+		case *telego.ChatMemberAdministrator:
+			if !typed.CanInviteUsers {
+				missing = append(missing, messages.ApproveJoinRequests.For(l))
 			}
-			if missing := tg.MissingModRights(member); len(missing) > 0 {
-				log.Printf("group %d: WARNING bot is admin but MISSING rights: %s — those actions will fail until granted", groupID, strings.Join(missing, ", "))
+			if !typed.CanRestrictMembers {
+				missing = append(missing, messages.BanUsers.For(l))
+			}
+			if !typed.CanDeleteMessages {
+				missing = append(missing, messages.DeleteMessages.For(l))
 			}
 		default:
-			log.Printf("group %d: bot is NOT admin — join verification inactive until it's granted admin (approve members / ban / delete)", groupID)
+			missingAllGroupRights()
 		}
+	}
+
+	group, ok := s.settings.Group(groupID)
+	if ok {
+		channelID := group.RequiredChannelID().Value
+		if channelID != 0 {
+			channelTitle := strconv.FormatInt(channelID, 10)
+			if channel, channelErr := bot.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(channelID)}); channelErr == nil && channel != nil && channel.Title != "" {
+				channelTitle = channel.Title
+			}
+			channelMember, channelErr := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(channelID), UserID: selfID})
+			status := ""
+			if channelMember != nil {
+				status = channelMember.MemberStatus()
+			}
+			if channelErr != nil || (status != telego.MemberStatusCreator && status != telego.MemberStatusAdministrator) {
+				missing = append(missing, messages.ChannelAdmin.Render(l, channelTitle, channelID))
+			}
+		}
+	}
+
+	if len(missing) == 0 {
+		return SetupReport{GroupID: groupID, Ready: true, Text: messages.Ready.Render(l, title, groupID)}
+	}
+	text := messages.MissingHeader.Render(l, title, groupID) + "\n- " +
+		strings.Join(missing, "\n- ") + "\n" + messages.Recheck.For(l)
+	return SetupReport{GroupID: groupID, Text: text}
+}
+
+// LogGroupSetup emits and delivers one actionable setup report for a guarded group.
+func (s *Service) LogGroupSetup(ctx context.Context, bot MemberLookup, selfID, groupID int64) {
+	report := s.CheckGroupSetup(ctx, bot, selfID, groupID)
+	deliveredTo := int64(0)
+	var deliveryErr error
+	if !report.Ready {
+		registrantID := int64(0)
+		for _, group := range s.settings.Registrations().RegisteredGroups {
+			if group.ID == groupID {
+				registrantID = group.RegisteredBy
+				break
+			}
+		}
+		targets := []int64{registrantID, s.cfg.AdminLogChatID, groupID}
+		seen := make(map[int64]bool, len(targets))
+		for _, target := range targets {
+			if target == 0 || seen[target] {
+				continue
+			}
+			seen[target] = true
+			if _, err := bot.SendMessage(ctx, tu.Message(tu.ID(target), report.Text)); err == nil {
+				deliveredTo = target
+				deliveryErr = nil
+				break
+			} else {
+				deliveryErr = err
+			}
+		}
+	}
+	log.Printf("group setup: group=%d ready=%t delivered_to=%d delivery_error=%v report=%q",
+		groupID, report.Ready, deliveredTo, deliveryErr, report.Text)
+}
+
+// LogGroupAdmin emits and delivers exactly one actionable setup report per guarded group.
+func (s *Service) LogGroupAdmin(ctx context.Context, bot MemberLookup, selfID int64) {
+	for _, groupID := range s.settings.GroupIDs() {
+		s.LogGroupSetup(ctx, bot, selfID, groupID)
 	}
 }
 

@@ -29,6 +29,30 @@ func writeConfig(t *testing.T, c map[string]any) string {
 
 var sampleQ = []map[string]any{{"q": "x", "options": []string{"a", "b"}, "answer": 0}}
 
+func TestLoadConfigMissingAndEmptyAllowNoGroups(t *testing.T) {
+	paths := []string{
+		filepath.Join(t.TempDir(), "missing.json"),
+		writeConfig(t, map[string]any{}),
+	}
+	for _, path := range paths {
+		loaded, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("LoadConfig(%q): %v", path, err)
+		}
+		if len(loaded.Groups) != 0 || len(loaded.GroupIDs) != 0 {
+			t.Fatalf("LoadConfig(%q) groups = %v / %v, want none", path, loaded.Groups, loaded.GroupIDs)
+		}
+		if loaded.TimeoutSeconds != 240 || loaded.WarnLimit != 3 || loaded.PrivateQueryPerMin != 3 {
+			t.Fatalf("LoadConfig(%q) defaults = timeout %d, warn %d, private rate %d",
+				path, loaded.TimeoutSeconds, loaded.WarnLimit, loaded.PrivateQueryPerMin)
+		}
+	}
+
+	if _, err := LoadConfig(t.TempDir()); err == nil {
+		t.Fatal("an existing unreadable config path was treated as missing")
+	}
+}
+
 func TestLoadConfigLegacy(t *testing.T) {
 	c, err := LoadConfig(writeConfig(t, map[string]any{
 		"group_ids":           []int{-100, -200},
@@ -80,6 +104,16 @@ func TestLoadConfigValidation(t *testing.T) {
 		"questions": sampleQ,
 	})); err == nil {
 		t.Errorf("expected error for required channel with no reachable link")
+	}
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"verify_mode": ModeQuiz,
+	})); err == nil {
+		t.Errorf("expected error for a quiz-mode runtime-group baseline with no questions")
+	}
+	if _, err := LoadConfig(writeConfig(t, map[string]any{
+		"required_channel_id": -400,
+	})); err == nil {
+		t.Errorf("expected error for a runtime-group channel baseline with no reachable link")
 	}
 	if _, err := LoadConfig(writeConfig(t, map[string]any{
 		"group_ids":   []int{-100},

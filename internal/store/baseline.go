@@ -15,6 +15,9 @@ type configPresence struct {
 func readConfigPresence(path string) (configPresence, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return configPresence{top: map[string]json.RawMessage{}}, nil
+		}
 		return configPresence{}, fmt.Errorf("read settings baseline: %w", err)
 	}
 	var top map[string]json.RawMessage

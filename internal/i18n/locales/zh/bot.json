@@ -37,5 +37,15 @@
   },
   "direct_message": {
     "auto_reply": "👋 这是 Gentoo 中文社区的入群验证和 Gentoo/Linux 助手机器人。\n\n• 申请入群：请返回群组发起加入申请，再点击群组内机器人消息中的「✅ 开始验证」，在这里完成验证。\n• 查询命令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私聊中使用。私聊每分钟最多 %[1]d 次，群组内不限次数。\n• 审核和管理命令仅可在群组内使用。"
+  },
+  "registration": {
+    "owner_claimed": "部署者身份已绑定。现在可以添加群组。",
+    "owner_claim_refused": "此所有者认领链接无效、已使用或已过期。",
+    "enrollment_owner_only": "只有机器人所有者可以创建群组登记链接。",
+    "enrollment_link": "群组登记链接（%[1]d 分钟内有效且只能使用一次）：\n%[2]s",
+    "enrollment_refused": "此群组登记链接无效、已使用或已过期。机器人将离开该群组。",
+    "registration_pending": "已授权登记群组“%[1]s”。请将机器人提升为管理员并授予所需权限。提升后会自动完成登记。",
+    "group_registered": "已登记群组“%[1]s”。打开设置：%[2]s",
+    "registration_save_failed": "无法持久保存群组登记。机器人将离开该群组；请检查服务状态目录。"
   }
 }

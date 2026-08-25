@@ -23,6 +23,7 @@ type Verification interface {
 	AgentStatsText(l i18n.Lang) string
 	ControlGroupID() int64
 	DMOrGroup(msg *telego.Message) bool
+	KernelAnswerDM(ctx context.Context, update telego.Update) bool
 	EffectiveMode(groupID int64) string
 	IsEnabled(groupID int64) bool
 	SendDMChallenge(ctx context.Context, bot *telego.Bot, userID int64)
@@ -54,6 +55,7 @@ type Panel struct {
 	lookups    Lookup
 	version    string
 	startedAt  time.Time
+	panelState *settingsPanelState
 }
 
 // New constructs the existing administration surface from explicit dependencies.
@@ -77,6 +79,7 @@ func New(
 		lookups:    lookups,
 		version:    version,
 		startedAt:  startedAt,
+		panelState: newSettingsPanelState(),
 	}
 }
 
@@ -94,7 +97,7 @@ func (v *Panel) groupLanguage(groupID int64) i18n.Lang {
 
 func (v *Panel) requesterLanguage(msg *telego.Message) i18n.Lang {
 	fallback := i18n.LangEN
-	if v.cfg.IsGroup(msg.Chat.ID) {
+	if v.settings != nil && v.settings.IsGroup(msg.Chat.ID) {
 		fallback = v.groupLanguage(msg.Chat.ID)
 	}
 	return i18n.FromRequester(msg.From.LanguageCode, fallback)
@@ -114,10 +117,13 @@ func (v *Panel) OnPing(ctx *th.Context, update telego.Update) error {
 	})
 }
 
-// OnStart opens verification in DMs and enables verification in groups.
+// OnStart routes settings deep links before the existing verification branch.
 func (v *Panel) OnStart(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg != nil && msg.Chat.Type == "private" {
+		if v.openSettingsStart(ctx, msg, panelStartToken(msg.Text)) {
+			return nil
+		}
 		if msg.From != nil {
 			v.verifier.SendDMChallenge(ctx.Context(), ctx.Bot(), msg.From.ID)
 		}
