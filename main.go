@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/feed"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
@@ -63,13 +65,6 @@ func main() {
 	}
 	cfg = configWithEffectiveGroups(cfg, runtimeSettings)
 
-	configurePkg(cfg)
-	configureNews(cfg)
-	githubToken = os.Getenv("GITHUB_TOKEN") // optional: lifts GitHub API rate limit for /pkg
-	if githubToken != "" {
-		log.Printf("GITHUB_TOKEN set — GitHub API rate limit raised (~5000/h)")
-	}
-
 	// TELEGRAM_API_URL selects a lower-latency self-hosted Bot API server.
 	var botOpts []telego.BotOption
 	if apiURL := strings.TrimSpace(os.Getenv("TELEGRAM_API_URL")); apiURL != "" {
@@ -81,6 +76,11 @@ func main() {
 		log.Fatalf("create bot: %v", err)
 	}
 	telegram := tg.New(bot)
+	githubToken := os.Getenv("GITHUB_TOKEN")
+	lookups := lookup.New(runtimeSettings, telegram, cfg, githubToken)
+	if githubToken != "" {
+		log.Printf("GITHUB_TOKEN set — GitHub API rate limit raised (~5000/h)")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -131,7 +131,7 @@ func main() {
 		moderation.LogGroupAdmin(ctx, bot, me.ID)
 		v.logVerificationAccess(ctx, bot, me.ID)
 	}()
-	v.register(bh, moderation)
+	v.register(bh, moderation, lookups)
 	setupCommands(ctx, bot, cfg.WarnLimit)
 
 	var feeds []*config.FeedConfig // one shared poller fans new bugs + news out to all configured feeds
@@ -144,14 +144,15 @@ func main() {
 	}
 	var feedDone chan struct{}
 	if len(feeds) > 0 {
+		feedService := feed.New(bot, feeds, sd)
 		feedDone = make(chan struct{})
 		go func() {
 			defer close(feedDone)
-			runFeeds(ctx, bot, feeds, sd)
+			feedService.Run(ctx)
 		}()
 	}
 
-	go pkgC.refresh(ctx)        // warm the package-search cache in the background (cancelled on shutdown)
+	go lookups.Warm(ctx)        // warm the package-search cache in the background (cancelled on shutdown)
 	go v.runHeartbeat(ctx, bot) // liveness probe: pause verification timeouts during a Telegram/network outage and refresh on recovery
 
 	if err := bh.Start(); err != nil {

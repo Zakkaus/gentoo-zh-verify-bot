@@ -1,4 +1,4 @@
-package main
+package lookup
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 )
 
 func TestHTTPStatusCode(t *testing.T) {
@@ -79,5 +81,21 @@ func TestAcquireHTTPSlotBusy(t *testing.T) {
 	var busy *httpBusyError
 	if !errors.As(err, &busy) {
 		t.Fatalf("acquireHTTPSlot() error = %v, want *httpBusyError", err)
+	}
+}
+
+func TestPrivateQueryRate(t *testing.T) {
+	service := New(nil, nil, &config.Config{PrivateQueryPerMin: 3}, "")
+	pass := 0
+	for range 5 {
+		if service.queryRateOK(7) {
+			pass++
+		}
+	}
+	if pass != 3 {
+		t.Errorf("user 7: %d/5 allowed, want 3", pass)
+	}
+	if !service.queryRateOK(8) {
+		t.Error("user 8 should be allowed")
 	}
 }

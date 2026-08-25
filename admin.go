@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -100,7 +101,7 @@ func (v *Verifier) onSpoiler(ctx *th.Context, update telego.Update) error {
 // /vmode changes the invoking group's verification mode.
 func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
 	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
-		arg := strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text)))
+		arg := strings.ToLower(strings.TrimSpace(adminCommandArg(update.Message.Text)))
 		switch arg {
 		case "":
 			source := "配置文件"
@@ -127,6 +128,14 @@ func (v *Verifier) onVMode(ctx *th.Context, update telego.Update) error {
 	})
 }
 
+func adminCommandArg(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(fields[1:], " "))
+}
+
 func parseAutoDelArg(arg string) (action string, ttl time.Duration) {
 	switch arg {
 	case "":
@@ -142,35 +151,37 @@ func parseAutoDelArg(arg string) (action string, ttl time.Duration) {
 	return "", 0
 }
 
-func (v *Verifier) onAutoDel(ctx *th.Context, update telego.Update) error {
-	return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
-		action, ttl := parseAutoDelArg(strings.ToLower(strings.TrimSpace(commandArg(update.Message.Text))))
-		switch action {
-		case "show":
-			if current, enabled := v.lookupAutoDelete(groupID); enabled {
-				return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(current/time.Minute)), nil
+func (v *Verifier) onAutoDel(lookups *lookup.Service) func(*th.Context, telego.Update) error {
+	return func(ctx *th.Context, update telego.Update) error {
+		return v.settingsAdminCmd(ctx, update, func(groupID int64) (string, error) {
+			action, ttl := parseAutoDelArg(strings.ToLower(strings.TrimSpace(adminCommandArg(update.Message.Text))))
+			switch action {
+			case "show":
+				if current, enabled := lookups.AutoDelete(groupID); enabled {
+					return fmt.Sprintf("🧹 查询结果自动删除:已开启,%d 分钟后连同提问一起删除。\n用法:/autodel off 关闭;/autodel <分钟> 调整时间。", int(current/time.Minute)), nil
+				}
+				return "查询结果自动删除:已关闭。\n用法:/autodel on 开启;/autodel <分钟> 设定时间并开启。", nil
+			case "off":
+				if err := v.setAutoDelete(groupID, 0, false); err != nil {
+					return "", err
+				}
+				return "已关闭查询结果自动删除(查询命令 /pkg、/use、/bug、/news、/wiki、/bbs、/pkgs、/arm、/armpkgs 的回复将保留)。", nil
+			case "on":
+				if err := v.setAutoDelete(groupID, 0, true); err != nil {
+					return "", err
+				}
+				current, _ := lookups.AutoDelete(groupID)
+				return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(current/time.Minute)), nil
+			case "set":
+				if err := v.setAutoDelete(groupID, ttl, true); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute)), nil
+			default:
+				return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。", nil
 			}
-			return "查询结果自动删除:已关闭。\n用法:/autodel on 开启;/autodel <分钟> 设定时间并开启。", nil
-		case "off":
-			if err := v.setLookupAutoDelete(groupID, 0, false); err != nil {
-				return "", err
-			}
-			return "已关闭查询结果自动删除(查询命令 /pkg、/use、/bug、/news、/wiki、/bbs、/pkgs、/arm、/armpkgs 的回复将保留)。", nil
-		case "on":
-			if err := v.setLookupAutoDelete(groupID, 0, true); err != nil {
-				return "", err
-			}
-			current, _ := v.lookupAutoDelete(groupID)
-			return fmt.Sprintf("🧹 已开启:查询结果 %d 分钟后连同提问一起删除。", int(current/time.Minute)), nil
-		case "set":
-			if err := v.setLookupAutoDelete(groupID, ttl, true); err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("🧹 已设定:查询结果 %d 分钟后连同提问一起删除。", int(ttl/time.Minute)), nil
-		default:
-			return "用法:/autodel on|off,或 /autodel <分钟数>(1–1440)。", nil
-		}
-	})
+		})
+	}
 }
 
 func memberHelpText() string {

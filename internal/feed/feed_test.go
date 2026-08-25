@@ -1,4 +1,4 @@
-package main
+package feed
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
 )
@@ -78,12 +79,12 @@ func TestNewsCursorMonotonic(t *testing.T) {
 	oldPause := feedSendPause
 	feedSendPause = 0
 	t.Cleanup(func() { feedSendPause = oldPause })
-	news := []newsItem{
-		{url: "https://example.test/u5", title: "u5", date: "2026-05-05"},
-		{url: "https://example.test/u4", title: "u4", date: "2026-05-04"},
-		{url: "https://example.test/u3", title: "u3", date: "2026-05-03"},
-		{url: "https://example.test/u2", title: "u2", date: "2026-05-02"},
-		{url: "https://example.test/u1", title: "u1", date: "2026-05-01"},
+	news := []lookup.NewsItem{
+		{URL: "https://example.test/u5", Title: "u5", Date: "2026-05-05"},
+		{URL: "https://example.test/u4", Title: "u4", Date: "2026-05-04"},
+		{URL: "https://example.test/u3", Title: "u3", Date: "2026-05-03"},
+		{URL: "https://example.test/u2", Title: "u2", Date: "2026-05-02"},
+		{URL: "https://example.test/u1", Title: "u1", Date: "2026-05-01"},
 	}
 	newsOn, bugsOff := true, false
 	feed := &config.FeedConfig{ChatID: -100, Lang: "en", News: &newsOn, Bugs: &bugsOff}
@@ -93,9 +94,9 @@ func TestNewsCursorMonotonic(t *testing.T) {
 		wantCursor string
 		wantURLs   []string
 	}{
-		{name: "cursor missing", cursor: "https://example.test/gone", wantCursor: news[0].url},
-		{name: "cursor in window", cursor: news[2].url, wantCursor: news[0].url, wantURLs: []string{news[1].url, news[0].url}},
-		{name: "cursor already newest", cursor: news[0].url, wantCursor: news[0].url},
+		{name: "cursor missing", cursor: "https://example.test/gone", wantCursor: news[0].URL},
+		{name: "cursor in window", cursor: news[2].URL, wantCursor: news[0].URL, wantURLs: []string{news[1].URL, news[0].URL}},
+		{name: "cursor already newest", cursor: news[0].URL, wantCursor: news[0].URL},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -312,8 +313,50 @@ func (b *fakeFeedBot) SendMessage(_ context.Context, p *telego.SendMessageParams
 	return &telego.Message{MessageID: 100 + b.sends}, nil
 }
 
-// Call adapts fakeFeedBot to telego's transport hook so postFeedItems itself can be exercised even
-// though its public entry point still accepts a concrete *telego.Bot.
+func fakeTelegramResponse(value any, err error) (*ta.Response, error) {
+	if err != nil {
+		return nil, err
+	}
+	if value == nil {
+		return &ta.Response{Ok: true}, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return &ta.Response{Ok: true, Result: raw}, nil
+}
+
+func fakeSendMessageParams(raw []byte) (*telego.SendMessageParams, error) {
+	var wire struct {
+		ChatID              int64                   `json:"chat_id"`
+		Text                string                  `json:"text"`
+		ParseMode           string                  `json:"parse_mode"`
+		DisableNotification bool                    `json:"disable_notification"`
+		ReplyParameters     *telego.ReplyParameters `json:"reply_parameters"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, err
+	}
+	return &telego.SendMessageParams{
+		ChatID:              telego.ChatID{ID: wire.ChatID},
+		Text:                wire.Text,
+		ParseMode:           wire.ParseMode,
+		DisableNotification: wire.DisableNotification,
+		ReplyParameters:     wire.ReplyParameters,
+	}, nil
+}
+
+func newAPITestBot(t *testing.T, caller ta.Caller) *telego.Bot {
+	t.Helper()
+	bot, err := telego.NewBot("1:"+strings.Repeat("a", 35), telego.WithAPICaller(caller), telego.WithDiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bot
+}
+
+// Call adapts fakeFeedBot to telego's transport hook so postFeedItems exercises real bot request encoding.
 func (b *fakeFeedBot) Call(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
 	method := url[strings.LastIndexByte(url, '/')+1:]
 	switch method {

@@ -1,4 +1,4 @@
-package main
+package lookup
 
 import (
 	"strings"
@@ -18,11 +18,11 @@ func TestParseNewsFixture(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("expected 2 deduped news items, got %d: %+v", len(items), items)
 	}
-	if items[0].date != "2026-05-23" || !strings.Contains(items[0].title, "KDE PIM") {
+	if items[0].Date != "2026-05-23" || !strings.Contains(items[0].Title, "KDE PIM") {
 		t.Errorf("first item parsed wrong: %+v", items[0])
 	}
-	if !strings.HasSuffix(items[0].url, "/support/news-items/2026-05-23-kdepim-sql-backend-change.html") {
-		t.Errorf("url not built from newsBase + path: %q", items[0].url)
+	if !strings.HasSuffix(items[0].URL, "/support/news-items/2026-05-23-kdepim-sql-backend-change.html") {
+		t.Errorf("url not built from newsBase + path: %q", items[0].URL)
 	}
 	if got := parseNews([]byte("<html>no news links</html>")); len(got) != 0 {
 		t.Errorf("a non-matching page must parse 0 items, got %d", len(got))

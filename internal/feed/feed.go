@@ -1,4 +1,4 @@
-package main
+package feed
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
@@ -57,6 +58,18 @@ const maxConfirmTries = 10
 type feedBot interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
+}
+
+// Service polls configured Bugzilla and news feeds and persists their per-chat cursors.
+type Service struct {
+	bot      *telego.Bot
+	feeds    []*config.FeedConfig
+	stateDir string
+}
+
+// New constructs a feed service from its Telegram bot, destination configs, and state directory.
+func New(bot *telego.Bot, feeds []*config.FeedConfig, stateDir string) *Service {
+	return &Service{bot: bot, feeds: feeds, stateDir: stateDir}
 }
 
 // feedSendPause throttles bursts of feed sends (catch-up after downtime). Package variables let
@@ -209,7 +222,15 @@ const bugFields = "id,summary,status,resolution,product,component,priority,sever
 
 type recentBugBatchFetcher func(context.Context, int) ([]recentBug, error)
 
+type feedJSONFetcher func(context.Context, string, any) error
+
 func fetchRecentBugs(ctx context.Context, afterID int) ([]recentBug, bool) {
+	return fetchRecentBugsWith(ctx, afterID, func(ctx context.Context, url string, dst any) error {
+		return lookup.GetJSON(ctx, url, nil, dst)
+	})
+}
+
+func fetchRecentBugsWith(ctx context.Context, afterID int, getJSON feedJSONFetcher) ([]recentBug, bool) {
 	return collectRecentBugs(ctx, afterID, func(ctx context.Context, afterID int) ([]recentBug, error) {
 		u := "https://bugs.gentoo.org/rest/bug?include_fields=" + bugFields
 		if afterID == 0 {
@@ -221,7 +242,7 @@ func fetchRecentBugs(ctx context.Context, afterID int) ([]recentBug, bool) {
 		var br struct {
 			Bugs *[]recentBug `json:"bugs"`
 		}
-		if err := httpGetJSON(ctx, u, nil, &br); err != nil {
+		if err := getJSON(ctx, u, &br); err != nil {
 			return nil, err
 		}
 		if br.Bugs == nil {
@@ -265,6 +286,12 @@ func collectRecentBugs(ctx context.Context, afterID int, fetch recentBugBatchFet
 // resolved/reopened, so its message can be edited). Each chunk gets a fresh deadline, so one hung
 // Bugzilla request cannot consume the budget of every chunk that follows.
 func fetchBugsByID(ctx context.Context, ids []int) (bugs []recentBug, allOK bool) {
+	return fetchBugsByIDWith(ctx, ids, func(ctx context.Context, url string, dst any) error {
+		return lookup.GetJSON(ctx, url, nil, dst)
+	})
+}
+
+func fetchBugsByIDWith(ctx context.Context, ids []int, getJSON feedJSONFetcher) (bugs []recentBug, allOK bool) {
 	const chunkSize = 50
 	allOK = true
 	for i := 0; i < len(ids); i += chunkSize {
@@ -284,7 +311,7 @@ func fetchBugsByID(ctx context.Context, ids []int) (bugs []recentBug, allOK bool
 			Bugs *[]recentBug `json:"bugs"`
 		}
 		chunkCtx, cancel := context.WithTimeout(ctx, feedFetchTimeout)
-		err := httpGetJSON(chunkCtx, u, nil, &br)
+		err := getJSON(chunkCtx, u, &br)
 		cancel()
 		if err != nil {
 			log.Printf("feed: tracked-bug refetch chunk [%d:%d]: %v", i, end, err)
@@ -344,7 +371,7 @@ func saveFeedState(path string, st feedState) {
 // context; the feed loop's parent context intentionally remains long-lived.
 // replyTo (0 = none) ties a confirmation notice to the original bug message.
 func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silent bool, replyTo int) (id int, ok, rateLimited, permanent bool) {
-	m := htmlMessage(chatID, text)
+	m := tg.HTMLMessage(chatID, text)
 	if silent {
 		m = m.WithDisableNotification()
 	}
@@ -359,7 +386,7 @@ func postFeed(ctx context.Context, bot feedBot, chatID int64, text string, silen
 		return 0, false, tg.IsRateLimited(err), tg.PermanentPostError(err)
 	}
 	tg.Pace(ctx, feedSendPause)
-	return msgID(sent), true, false, false
+	return tg.MessageID(sent), true, false, false
 }
 
 // dateOnly turns "2026-02-26T04:42:47Z" into "2026-02-26".
@@ -424,9 +451,9 @@ func formatBugMarked(b recentBug, lang, marker string) string {
 	}
 
 	zh := !en // zh feed: translate the enum values too (en feed keeps them English)
-	status := zhVal(bugStatusZH, b.Status, zh)
+	status := lookup.TranslateBugValue(b.Status, zh)
 	if b.Resolution != "" {
-		status += " / " + zhVal(bugResolutionZH, b.Resolution, zh)
+		status += " / " + lookup.TranslateBugValue(b.Resolution, zh)
 	}
 	line(pick("状态", "Status"), status)
 
@@ -435,8 +462,8 @@ func formatBugMarked(b recentBug, lang, marker string) string {
 		comp += " › " + b.Component
 	}
 	line(pick("组件", "Component"), comp)
-	line(pick("优先级", "Priority"), zhVal(bugPriorityZH, b.Priority, zh))
-	line(pick("严重性", "Severity"), zhVal(bugSeverityZH, b.Severity, zh))
+	line(pick("优先级", "Priority"), lookup.TranslateBugValue(b.Priority, zh))
+	line(pick("严重性", "Severity"), lookup.TranslateBugValue(b.Severity, zh))
 	if len(b.Keywords) > 0 {
 		line(pick("关键词", "Keywords"), capRunes(strings.Join(b.Keywords, ", "), 400))
 	}
@@ -532,7 +559,7 @@ refresh:
 		if bugResolved(b) {
 			text = formatBugResolved(b, f.Lang) // 🐞 -> ✅/❌
 		}
-		edit := htmlMessage(f.ChatID, text)
+		edit := tg.HTMLMessage(f.ChatID, text)
 		opCtx, cancel := context.WithTimeout(ctx, feedTelegramTimeout)
 		_, eerr := bot.EditMessageText(opCtx, &telego.EditMessageTextParams{
 			ChatID:             tu.ID(f.ChatID),
@@ -592,21 +619,21 @@ refresh:
 	}
 }
 
-func formatNews(n newsItem) string {
+func formatNews(n lookup.NewsItem) string {
 	const prefix = "📰 "
-	label := n.date + " — " + html.UnescapeString(n.title)
+	label := n.Date + " — " + html.UnescapeString(n.Title)
 	label = tg.CapText(label, tg.MessageLimit-tg.TextUnits(prefix))
 	return fmt.Sprintf("%s<a href=\"%s\">%s</a>", prefix,
-		html.EscapeString(n.url), html.EscapeString(label))
+		html.EscapeString(n.URL), html.EscapeString(label))
 }
 
 // confirmNotice is the brief, non-silent message sent when a previously-UNCONFIRMED bug (which was
 // posted silently) leaves UNCONFIRMED — the notification the silent original never produced. It
-// names the bug's ACTUAL new status (CONFIRMED, IN_PROGRESS, …), localized by zhVal, rather than
+// names the bug's ACTUAL new status (CONFIRMED, IN_PROGRESS, …), localized by lookup.TranslateBugValue, rather than
 // always "confirmed", since the trigger is any move out of UNCONFIRMED. 🔔 (not ✅, which marks
 // resolution) signals a live status update; rendered in the feed's own language.
 func confirmNotice(b recentBug, lang string) string {
-	status := zhVal(bugStatusZH, b.Status, !strings.EqualFold(lang, "en")) // Chinese label unless lang is en
+	status := lookup.TranslateBugValue(b.Status, !strings.EqualFold(lang, "en")) // Chinese label unless lang is en
 	return fmt.Sprintf("🔔 <a href=\"https://bugs.gentoo.org/%d\"><b>Bug %d</b></a> → %s\n%s",
 		b.ID, b.ID, html.EscapeString(status), html.EscapeString(capRunes(b.Summary, 600)))
 }
@@ -640,7 +667,7 @@ func feedStatePath(dir string, chatID int64) string {
 }
 
 // postFeedItems posts the bugs/news that are new to this feed (filtered, localized, deduped).
-func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *feedState, bugs []recentBug, news []newsItem) {
+func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *feedState, bugs []recentBug, news []lookup.NewsItem) {
 	if f.BugsOn() && len(bugs) > 0 {
 		if st.LastBugID == 0 {
 			latest := bugs[0].ID
@@ -679,13 +706,13 @@ func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *f
 	}
 	if f.NewsOn() && len(news) > 0 {
 		if st.LastNewsURL == "" {
-			st.LastNewsURL = news[0].url // first run: baseline only
+			st.LastNewsURL = news[0].URL // first run: baseline only
 			log.Printf("feed: %d baselining news cursor (no prior news state — first run or reset)", f.ChatID)
 		} else {
 			found := false
-			var nn []newsItem
+			var nn []lookup.NewsItem
 			for _, n := range news {
-				if n.url == st.LastNewsURL {
+				if n.URL == st.LastNewsURL {
 					found = true
 					break
 				}
@@ -696,20 +723,20 @@ func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *f
 				// window. Re-baseline rather than broadcasting the archive; a durable seen set is
 				// intentionally left for a persisted-state redesign.
 				log.Printf("feed: WARNING %d: news cursor %s not on the fetched page — re-baselining (any items newer than it are skipped, not re-posted)", f.ChatID, st.LastNewsURL)
-				st.LastNewsURL = news[0].url
+				st.LastNewsURL = news[0].URL
 				nn = nil
 			}
 			for i := len(nn) - 1; i >= 0; i-- { // oldest first
 				_, ok, _, permanent := postFeed(ctx, bot, f.ChatID, formatNews(nn[i]), false, 0)
 				if !ok {
 					if permanent {
-						log.Printf("feed: skip permanently rejected news item %s in %d", nn[i].url, f.ChatID)
-						st.LastNewsURL = nn[i].url
+						log.Printf("feed: skip permanently rejected news item %s in %d", nn[i].URL, f.ChatID)
+						st.LastNewsURL = nn[i].URL
 						continue
 					}
 					break
 				}
-				st.LastNewsURL = nn[i].url
+				st.LastNewsURL = nn[i].URL
 			}
 		}
 	}
@@ -718,13 +745,13 @@ func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, st *f
 // feedSources keeps poll orchestration testable without replacing process-wide network globals.
 type feedSources struct {
 	recent  func(context.Context, int) ([]recentBug, bool)
-	news    func(context.Context) ([]newsItem, error)
+	news    func(context.Context) ([]lookup.NewsItem, error)
 	tracked func(context.Context, []int) ([]recentBug, bool)
 }
 
 var defaultFeedSources = feedSources{
 	recent:  fetchRecentBugs,
-	news:    fetchNews,
+	news:    lookup.FetchNews,
 	tracked: fetchBugsByID,
 }
 
@@ -779,7 +806,7 @@ func pollAllWithSources(ctx context.Context, bot feedBot, feeds []*config.FeedCo
 		}
 	}
 
-	var news []newsItem
+	var news []lookup.NewsItem
 	if needNews {
 		fctx, cancel := context.WithTimeout(ctx, feedFetchTimeout)
 		var err error
@@ -885,20 +912,17 @@ func feedPostBlocked(chatType string, m telego.ChatMember) string {
 	}
 }
 
-// runFeeds drives the feeds: it ticks at the smallest configured interval (so the fastest feed
-// is timely) but each feed only posts when its OWN interval has elapsed (per-feed nextDue). The
-// shared bug/news fetch happens once per due cycle. The first poll records a baseline per feed.
-// The poll loop is wrapped in a recover so a feed panic can never take down verification.
-func runFeeds(ctx context.Context, bot *telego.Bot, feeds []*config.FeedConfig, stateDir string) {
-	tick := feeds[0].Interval()
-	for _, f := range feeds {
+// Run polls every configured feed until ctx is canceled, then flushes all feed state.
+func (s *Service) Run(ctx context.Context) {
+	tick := s.feeds[0].Interval()
+	for _, f := range s.feeds {
 		if d := f.Interval(); d < tick {
 			tick = d
 		}
 	}
 	states := map[int64]*feedState{}
-	for _, f := range feeds {
-		st := loadFeedState(feedStatePath(stateDir, f.ChatID))
+	for _, f := range s.feeds {
+		st := loadFeedState(feedStatePath(s.stateDir, f.ChatID))
 		states[f.ChatID] = &st
 	}
 	nextDue := map[int64]time.Time{} // zero => every feed is due on the first poll
@@ -908,10 +932,10 @@ func runFeeds(ctx context.Context, bot *telego.Bot, feeds []*config.FeedConfig, 
 				log.Printf("feed: poll panicked (recovered, feeds continue): %v", r)
 			}
 		}()
-		pollAll(ctx, bot, feeds, states, stateDir, time.Now(), nextDue)
+		pollAll(ctx, s.bot, s.feeds, states, s.stateDir, time.Now(), nextDue)
 	}
-	log.Printf("feed: %d destination(s), tick %s, per-feed interval honoured (shared fetch)", len(feeds), tick)
-	probeFeedPerms(ctx, bot, feeds)
+	log.Printf("feed: %d destination(s), tick %s, per-feed interval honoured (shared fetch)", len(s.feeds), tick)
+	probeFeedPerms(ctx, s.bot, s.feeds)
 	safePoll()
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -921,8 +945,8 @@ func runFeeds(ctx context.Context, bot *telego.Bot, feeds []*config.FeedConfig, 
 			// Final flush so the latest cursor/tracking is persisted before exit (best-effort;
 			// store.Write is atomic and fsynced). Each cycle already saves, so this only captures
 			// state changed since the last save.
-			for _, f := range feeds {
-				saveFeedState(feedStatePath(stateDir, f.ChatID), *states[f.ChatID])
+			for _, f := range s.feeds {
+				saveFeedState(feedStatePath(s.stateDir, f.ChatID), *states[f.ChatID])
 			}
 			return
 		case <-t.C:

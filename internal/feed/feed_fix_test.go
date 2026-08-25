@@ -1,12 +1,11 @@
-package main
+package feed
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	htmlstd "html"
-	"io"
-	"net/http"
 	neturl "net/url"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoapi"
@@ -61,10 +61,6 @@ func (b *scriptedFeedBot) EditMessageText(ctx context.Context, p *telego.EditMes
 	return b.fakeFeedBot.EditMessageText(ctx, p)
 }
 
-type feedRoundTripper func(*http.Request) (*http.Response, error)
-
-func (f feedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
-
 func setFeedTestTiming(t *testing.T, telegramTimeout, fetchTimeout time.Duration) {
 	t.Helper()
 	oldPause, oldTelegram, oldFetch := feedSendPause, feedTelegramTimeout, feedFetchTimeout
@@ -72,13 +68,6 @@ func setFeedTestTiming(t *testing.T, telegramTimeout, fetchTimeout time.Duration
 	t.Cleanup(func() {
 		feedSendPause, feedTelegramTimeout, feedFetchTimeout = oldPause, oldTelegram, oldFetch
 	})
-}
-
-func setFeedHTTPClient(t *testing.T, transport http.RoundTripper) {
-	t.Helper()
-	old := httpClient
-	httpClient = &http.Client{Transport: transport}
-	t.Cleanup(func() { httpClient = old })
 }
 
 // TestBugBacklogPaginationAcrossCycles proves a 250-item gap drains through three one-request
@@ -148,6 +137,34 @@ func TestBugBacklogPaginationAcrossCycles(t *testing.T) {
 	}
 }
 
+// TestBugCursorStopsAtUndeliveredItem proves a failed post leaves the cursor on the delivered prefix.
+func TestBugCursorStopsAtUndeliveredItem(t *testing.T) {
+	setFeedTestTiming(t, time.Second, time.Second)
+	st := &feedState{LastBugID: 1000}
+	base := &fakeFeedBot{}
+	bot := &scriptedFeedBot{
+		fakeFeedBot: base,
+		sendErrs:    []error{nil, errors.New("connection reset by peer"), nil},
+	}
+	bugs := []recentBug{
+		{ID: 1003, Summary: "third", Status: "CONFIRMED"},
+		{ID: 1001, Summary: "first", Status: "CONFIRMED"},
+		{ID: 1002, Summary: "second", Status: "CONFIRMED"},
+	}
+
+	postFeedItems(context.Background(), bot, &config.FeedConfig{ChatID: -100, Lang: "en"}, st, bugs, nil)
+
+	if st.LastBugID != 1001 {
+		t.Fatalf("cursor = %d, want delivered prefix boundary 1001", st.LastBugID)
+	}
+	if base.sends != 2 {
+		t.Fatalf("send attempts = %d, want 2; the cycle must stop at the failed item", base.sends)
+	}
+	if st.Tracked["1001"] == nil || st.Tracked["1002"] != nil || st.Tracked["1003"] != nil {
+		t.Fatalf("tracked bugs = %#v, want only delivered bug 1001", st.Tracked)
+	}
+}
+
 func TestFetchRecentBugsUsesCursorBoundedQuery(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -163,11 +180,14 @@ func TestFetchRecentBugsUsesCursorBoundedQuery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var query neturl.Values
-			setFeedHTTPClient(t, feedRoundTripper(func(req *http.Request) (*http.Response, error) {
-				query = req.URL.Query()
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tt.body))}, nil
-			}))
-			got, ok := fetchRecentBugs(context.Background(), tt.afterID)
+			got, ok := fetchRecentBugsWith(context.Background(), tt.afterID, func(_ context.Context, rawURL string, dst any) error {
+				u, err := neturl.Parse(rawURL)
+				if err != nil {
+					return err
+				}
+				query = u.Query()
+				return json.Unmarshal([]byte(tt.body), dst)
+			})
 			if !ok {
 				t.Fatal("fetchRecentBugs() failed")
 			}
@@ -221,7 +241,7 @@ func TestPollAllUsesPerCursorBugBatches(t *testing.T) {
 						{ID: 1002, Summary: "bug 1002", Status: "CONFIRMED"},
 					}, true
 				},
-				news:    func(context.Context) ([]newsItem, error) { return nil, nil },
+				news:    func(context.Context) ([]lookup.NewsItem, error) { return nil, nil },
 				tracked: func(context.Context, []int) ([]recentBug, bool) { return nil, true },
 			}
 			bot := &fakeFeedBot{}
@@ -296,9 +316,9 @@ func TestPollFetchPhaseDeadlines(t *testing.T) {
 						<-ctx.Done()
 						return nil, false
 					},
-					news: func(ctx context.Context) ([]newsItem, error) {
+					news: func(ctx context.Context) ([]lookup.NewsItem, error) {
 						*nextRan = ctx.Err() == nil
-						return []newsItem{{date: "2026-08-23", title: "new", url: "new"}, {url: "old"}}, nil
+						return []lookup.NewsItem{{Date: "2026-08-23", Title: "new", URL: "new"}, {URL: "old"}}, nil
 					},
 					tracked: func(context.Context, []int) ([]recentBug, bool) { return nil, true },
 				}
@@ -310,7 +330,7 @@ func TestPollFetchPhaseDeadlines(t *testing.T) {
 				st.Tracked = map[string]*trackedBug{"42": {MsgID: 1, State: "CONFIRMED|"}}
 				return feedSources{
 					recent: func(context.Context, int) ([]recentBug, bool) { return nil, true },
-					news: func(ctx context.Context) ([]newsItem, error) {
+					news: func(ctx context.Context) ([]lookup.NewsItem, error) {
 						<-ctx.Done()
 						return nil, ctx.Err()
 					},
@@ -356,20 +376,20 @@ func TestTrackedBugChunksGetIndependentDeadlines(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setFeedTestTiming(t, time.Second, 10*time.Millisecond)
 			calls := 0
-			setFeedHTTPClient(t, feedRoundTripper(func(req *http.Request) (*http.Response, error) {
+			getJSON := func(ctx context.Context, _ string, dst any) error {
 				calls++
 				if calls <= tt.blockedCalls {
-					<-req.Context().Done()
-					return nil, req.Context().Err()
+					<-ctx.Done()
+					return ctx.Err()
 				}
 				body := fmt.Sprintf(`{"bugs":[{"id":%d,"status":"IN_PROGRESS"}]}`, tt.wantID)
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
-			}))
+				return json.Unmarshal([]byte(body), dst)
+			}
 			ids := make([]int, tt.ids)
 			for i := range ids {
 				ids[i] = i + 1
 			}
-			bugs, ok := fetchBugsByID(context.Background(), ids)
+			bugs, ok := fetchBugsByIDWith(context.Background(), ids, getJSON)
 			if ok {
 				t.Fatal("timed-out chunks must make the aggregate fetch incomplete")
 			}
@@ -405,10 +425,9 @@ func TestTrackedBugSchemaValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setFeedTestTiming(t, time.Second, time.Second)
-			setFeedHTTPClient(t, feedRoundTripper(func(*http.Request) (*http.Response, error) {
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(tt.body))}, nil
-			}))
-			bugs, ok := fetchBugsByID(context.Background(), []int{77})
+			bugs, ok := fetchBugsByIDWith(context.Background(), []int{77}, func(_ context.Context, _ string, dst any) error {
+				return json.Unmarshal([]byte(tt.body), dst)
+			})
 			if ok != tt.wantOK {
 				t.Fatalf("fetchOK = %v, want %v", ok, tt.wantOK)
 			}
@@ -470,7 +489,7 @@ func TestFormatNewsTelegramLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatNews(newsItem{date: "2026-08-23", title: tt.title, url: "https://www.gentoo.org/news"})
+			got := formatNews(lookup.NewsItem{Date: "2026-08-23", Title: tt.title, URL: "https://www.gentoo.org/news"})
 			start, end := strings.Index(got, ">"), strings.LastIndex(got, "</a>")
 			if start < 0 || end <= start {
 				t.Fatalf("invalid rendered anchor: %q", got)
@@ -519,10 +538,10 @@ func TestPermanentNewsRejectionAdvancesCursor(t *testing.T) {
 			base := &fakeFeedBot{}
 			bot := &scriptedFeedBot{fakeFeedBot: base, sendErrs: []error{tt.firstErr, nil}}
 			st := &feedState{LastNewsURL: "old"}
-			news := []newsItem{
-				{date: "2026-08-23", title: "Newest", url: "newest"},
-				{date: "2026-08-22", title: "Older new", url: "older-new"},
-				{date: "2026-08-21", title: "Old", url: "old"},
+			news := []lookup.NewsItem{
+				{Date: "2026-08-23", Title: "Newest", URL: "newest"},
+				{Date: "2026-08-22", Title: "Older new", URL: "older-new"},
+				{Date: "2026-08-21", Title: "Old", URL: "old"},
 			}
 			postFeedItems(context.Background(), bot, &config.FeedConfig{ChatID: -100}, st, nil, news)
 			if st.LastNewsURL != tt.wantCursor {

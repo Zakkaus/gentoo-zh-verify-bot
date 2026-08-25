@@ -14,6 +14,7 @@ import (
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
@@ -164,23 +165,22 @@ type Verifier struct {
 	statDate          string
 	approved          int
 	declined          int
-	chanAlert         map[int64]time.Time   // required-channel -> last "bot can't access" alert (throttle), guarded by mu
-	pendingCapAlertAt time.Time             // last queue-cap alert; one global throttle prevents a join flood from flooding the admin log
-	dmLast            map[int64]time.Time   // user -> last DM auto-reply time (throttle), guarded by mu
-	challengeAt       map[int64]time.Time   // user -> last verification prompt sent (resend throttle), guarded by mu
-	queryHits         map[int64][]time.Time // user -> recent private-query times (rate limit), guarded by mu
-	vfail             map[pkey]*vfailRec    // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
-	vfailPath         string                // persistence path for vfail
-	agentMu           sync.Mutex            // guards agents; separate from mu so the tally's file write never blocks the verification hot paths
-	agents            agentTally            // tripped automated agents, counted per claimed model
-	agentPath         string                // persistence path for the automated-agent tally
-	settings          *store.Settings       // authoritative runtime-settings transaction
-	tgMu              sync.Mutex            // guards telegramBot and telegramClient
-	telegramBot       *telego.Bot           // concrete handler bot wrapped by telegramClient
-	telegramClient    *tg.Client            // shared transport client; owns admin cache and cleanup timer counts
-	lastOnline        time.Time             // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
-	hbPath            string                // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
-	probe             liveProbe             // liveness prober (the bot) for reachable(); nil in tests => assume reachable
+	chanAlert         map[int64]time.Time // required-channel -> last "bot can't access" alert (throttle), guarded by mu
+	pendingCapAlertAt time.Time           // last queue-cap alert; one global throttle prevents a join flood from flooding the admin log
+	dmLast            map[int64]time.Time // user -> last DM auto-reply time (throttle), guarded by mu
+	challengeAt       map[int64]time.Time // user -> last verification prompt sent (resend throttle), guarded by mu
+	vfail             map[pkey]*vfailRec  // group+user -> failed-verification strikes + last-fail time (anti-spam), guarded by mu
+	vfailPath         string              // persistence path for vfail
+	agentMu           sync.Mutex          // guards agents; separate from mu so the tally's file write never blocks the verification hot paths
+	agents            agentTally          // tripped automated agents, counted per claimed model
+	agentPath         string              // persistence path for the automated-agent tally
+	settings          *store.Settings     // authoritative runtime-settings transaction
+	tgMu              sync.Mutex          // guards telegramBot and telegramClient
+	telegramBot       *telego.Bot         // concrete handler bot wrapped by telegramClient
+	telegramClient    *tg.Client          // shared transport client; owns admin cache and cleanup timer counts
+	lastOnline        time.Time           // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
+	hbPath            string              // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
+	probe             liveProbe           // liveness prober (the bot) for reachable(); nil in tests => assume reachable
 }
 
 func loadStatsLoc(name string) *time.Location {
@@ -195,11 +195,6 @@ func loadStatsLoc(name string) *time.Location {
 // Standard outbound HTML disables link previews.
 func htmlMessage(chatID int64, text string) *telego.SendMessageParams {
 	return tg.HTMLMessage(chatID, text)
-}
-
-// Reply binding disambiguates concurrent slow lookups; zero means no binding.
-func replyParams(msgID int) *telego.ReplyParameters {
-	return tg.ReplyParameters(msgID)
 }
 
 // NewVerifier seeds runtime defaults and bounds mutable maps.
@@ -217,7 +212,6 @@ func newVerifier(cfg *config.Config, settings *store.Settings) *Verifier {
 		chanAlert:   map[int64]time.Time{},
 		dmLast:      map[int64]time.Time{},
 		challengeAt: map[int64]time.Time{},
-		queryHits:   map[int64][]time.Time{},
 		vfail:       map[pkey]*vfailRec{},
 		lastOnline:  time.Now(), // begin online; the heartbeat only flips us offline after missed contact
 	}
@@ -253,15 +247,7 @@ func (v *Verifier) adminTransport(bot modBot) adminTransport {
 	return v.telegram(bot.(*telego.Bot))
 }
 
-func (v *Verifier) lookupAutoDelete(groupID int64) (time.Duration, bool) {
-	if group, ok := v.groupSettings(groupID); ok {
-		return time.Duration(group.LookupTTLSeconds().Value) * time.Second, group.LookupAutoDeleteEnabled().Value
-	}
-	fallback := v.fallbackGroupSettings(groupID)
-	return time.Duration(fallback.LookupTTLSeconds.Value) * time.Second, fallback.LookupAutoDeleteEnabled.Value
-}
-
-func (v *Verifier) setLookupAutoDelete(groupID int64, ttl time.Duration, on bool) error {
+func (v *Verifier) setAutoDelete(groupID int64, ttl time.Duration, on bool) error {
 	return v.updateGroupSettings(groupID, func(group store.GroupView, overrides *store.GroupOverrides) {
 		if ttl <= 0 && on && group.LookupTTLSeconds().Value <= 0 {
 			ttl = 3 * time.Minute
@@ -274,95 +260,13 @@ func (v *Verifier) setLookupAutoDelete(groupID int64, ttl time.Duration, on bool
 	})
 }
 
-func (v *Verifier) lookupSettingsGroupID(chatID int64) int64 {
-	if v.settings != nil && v.settings.IsGroup(chatID) {
-		return chatID
-	}
-	return v.controlGroupID()
-}
-
-// Delete group lookup commands and answers together using a fresh timer context.
-func (v *Verifier) scheduleLookupCleanup(bot *telego.Bot, chatID int64, cmdMsgID, respMsgID int) {
-	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
-	if !on {
-		ttl = 0
-	}
-	v.telegram(bot).ScheduleCleanup(chatID, cmdMsgID, respMsgID, ttl)
-}
-
 func msgID(m *telego.Message) int {
 	return tg.MessageID(m)
-}
-
-// Plain text preserves angle-bracket placeholders and still follows reply/cleanup semantics.
-func (v *Verifier) replyLookupPlain(c context.Context, bot *telego.Bot, chatID int64, replyTo int, text string) {
-	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
-	if !on {
-		ttl = 0
-	}
-	v.telegram(bot).ReplyPlain(c, chatID, replyTo, text, ttl)
-}
-
-// HTML lookup replies require callers to escape dynamic content.
-func (v *Verifier) replyLookupHTML(c context.Context, bot *telego.Bot, chatID int64, replyTo int, htmlText string) *telego.Message {
-	ttl, on := v.lookupAutoDelete(v.lookupSettingsGroupID(chatID))
-	if !on {
-		ttl = 0
-	}
-	return v.telegram(bot).ReplyHTML(c, chatID, replyTo, htmlText, ttl)
-}
-
-const privateQueryWindow = time.Minute
-
-// Sliding-window limits apply only to private-chat lookups.
-func (v *Verifier) queryRateOK(userID int64) bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	now := time.Now()
-	cutoff := now.Add(-privateQueryWindow)
-	kept := v.queryHits[userID][:0]
-	for _, t := range v.queryHits[userID] {
-		if t.After(cutoff) {
-			kept = append(kept, t)
-		}
-	}
-	if len(kept) >= v.privateQueryPerMin() {
-		v.queryHits[userID] = kept
-		return false
-	}
-	v.queryHits[userID] = append(kept, now)
-	if len(v.queryHits) > dmMapMax { // bound the map: drop fully-expired users
-		for u, ts := range v.queryHits {
-			if len(ts) == 0 || !ts[len(ts)-1].After(cutoff) {
-				delete(v.queryHits, u)
-			}
-		}
-		if len(v.queryHits) > dmMapMax { // still over (all live) — hard-clear like dmLast
-			v.queryHits = map[int64][]time.Time{}
-		}
-	}
-	return true
 }
 
 // Cheap informational commands are unrestricted in guarded groups and DMs.
 func (v *Verifier) dmOrGroup(msg *telego.Message) bool {
 	return v.cfg.IsGroup(msg.Chat.ID) || msg.Chat.Type == "private"
-}
-
-// External lookups are unlimited in guarded groups and rate-limited in DMs.
-func (v *Verifier) queryAllowed(ctx *th.Context, msg *telego.Message) bool {
-	if v.cfg.IsGroup(msg.Chat.ID) {
-		return true
-	}
-	if msg.Chat.Type == "private" && msg.From != nil {
-		if v.queryRateOK(msg.From.ID) {
-			return true
-		}
-		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(msg.Chat.ID),
-			fmt.Sprintf("⏳ 查询太频繁:私聊每分钟最多 %d 次,请稍后再试(在群里不限次)。", v.privateQueryPerMin())))
-		return false
-	}
-	return false
 }
 
 func (v *Verifier) isEnabled(groupID int64) bool {
@@ -378,13 +282,6 @@ func (v *Verifier) setEnabled(groupID int64, enabled bool) error {
 	})
 }
 
-func (v *Verifier) isRichEnabled() bool {
-	if v.settings != nil {
-		return v.settings.Global().RichMessages().Value
-	}
-	return settingsBaselineFromConfig(v.cfg, configPresence{}).Global.RichMessages.Value
-}
-
 func (v *Verifier) toggleRich() (bool, error) {
 	var enabled bool
 	err := v.updateGlobalSettings(func(global store.GlobalView, overrides *store.GlobalOverrides) {
@@ -392,13 +289,6 @@ func (v *Verifier) toggleRich() (bool, error) {
 		overrides.RichMessages = &enabled
 	})
 	return enabled, err
-}
-
-func (v *Verifier) privateQueryPerMin() int {
-	if v.settings != nil {
-		return v.settings.Global().PrivateQueryPerMin().Value
-	}
-	return settingsBaselineFromConfig(v.cfg, configPresence{}).Global.PrivateQueryPerMin.Value
 }
 
 func (v *Verifier) nameSpoilerOn(groupID int64) bool {
@@ -714,7 +604,7 @@ func (v *Verifier) load(bot verifyBot) {
 	}
 }
 
-func (v *Verifier) register(bh *th.BotHandler, moderation *moderate.Service) {
+func (v *Verifier) register(bh *th.BotHandler, moderation *moderate.Service, lookups *lookup.Service) {
 	// One malformed update must not terminate the bot.
 	bh.Use(th.PanicRecoveryHandler(func(recovered any) error {
 		log.Printf("recovered from handler panic: %v", recovered)
@@ -740,20 +630,20 @@ func (v *Verifier) register(bh *th.BotHandler, moderation *moderate.Service) {
 	bh.Handle(v.onStart, th.CommandEqual("start"))
 	bh.Handle(v.onStop, th.CommandEqual("stop"))
 	bh.Handle(v.onStats, th.CommandEqual("stats"))
-	bh.Handle(v.onPkg, th.CommandEqual("pkg"))
-	bh.Handle(v.onUse, th.CommandEqual("use"))
-	bh.Handle(v.onBug, th.CommandEqual("bug"))
-	bh.Handle(v.onNews, th.CommandEqual("news"))
-	bh.Handle(v.onWiki, th.CommandEqual("wiki"))
-	bh.Handle(v.onBbs, th.CommandEqual("bbs"))
-	bh.Handle(v.onPkgs, th.CommandEqual("pkgs"))
-	bh.Handle(v.onPkgs, th.CommandEqual("distro")) // /distro kept as an alias
-	bh.Handle(v.onArm, th.CommandEqual("arm"))
-	bh.Handle(v.onArmpkgs, th.CommandEqual("armpkgs"))
+	bh.Handle(lookups.OnPkg, th.CommandEqual("pkg"))
+	bh.Handle(lookups.OnUse, th.CommandEqual("use"))
+	bh.Handle(lookups.OnBug, th.CommandEqual("bug"))
+	bh.Handle(lookups.OnNews, th.CommandEqual("news"))
+	bh.Handle(lookups.OnWiki, th.CommandEqual("wiki"))
+	bh.Handle(lookups.OnBbs, th.CommandEqual("bbs"))
+	bh.Handle(lookups.OnPkgs, th.CommandEqual("pkgs"))
+	bh.Handle(lookups.OnPkgs, th.CommandEqual("distro")) // /distro kept as an alias
+	bh.Handle(lookups.OnArm, th.CommandEqual("arm"))
+	bh.Handle(lookups.OnArmpkgs, th.CommandEqual("armpkgs"))
 	bh.Handle(v.onRich, th.CommandEqual("rich"))
 	bh.Handle(v.onSpoiler, th.CommandEqual("spoiler"))
 	bh.Handle(v.onVMode, th.CommandEqual("vmode"))
-	bh.Handle(v.onAutoDel, th.CommandEqual("autodel"))
+	bh.Handle(v.onAutoDel(lookups), th.CommandEqual("autodel"))
 	bh.Handle(moderation.OnBanTime, th.CommandEqual("bantime"))
 	bh.Handle(moderation.OnMute, th.CommandEqual("mute"))
 	bh.Handle(moderation.OnUnmute, th.CommandEqual("unmute"))

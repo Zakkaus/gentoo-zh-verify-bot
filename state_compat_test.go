@@ -16,11 +16,8 @@ import (
 )
 
 const (
-	stateCompatGroupA   int64 = -1001234500001
-	stateCompatGroupB   int64 = -1001234500002
-	stateCompatFeedChat int64 = -1009876543210
-
-	stateCompatFeedFixture = "feed--1009876543210.json"
+	stateCompatGroupA int64 = -1001234500001
+	stateCompatGroupB int64 = -1001234500002
 )
 
 var (
@@ -51,26 +48,6 @@ type stateCompatPendingWant struct {
 	nonce           string
 	name            string
 	deadline        time.Time
-}
-
-type stateCompatTrackedWant struct {
-	msgID        int
-	state        string
-	misses       int
-	editFails    int
-	confirmTries int
-	status       string
-}
-
-type stateCompatLegacyFeedState struct {
-	LastBugID   int                                 `json:"last_bug_id"`
-	LastNewsURL string                              `json:"last_news_url"`
-	Tracked     map[string]stateCompatLegacyTracked `json:"tracked"`
-}
-
-type stateCompatLegacyTracked struct {
-	MsgID  int    `json:"msg_id"`
-	Status string `json:"status"`
 }
 
 func stateCompatConfig() *config.Config {
@@ -126,41 +103,6 @@ func TestStateCompatGenerateFixtures(t *testing.T) {
 		"model=gemini-2.5-pro",
 	} {
 		agentV.recordAgent(claim)
-	}
-
-	saveFeedState(feedStatePath(dir, stateCompatFeedChat), feedState{
-		LastBugID:   980004,
-		LastNewsURL: "https://www.gentoo.org/support/news-items/2026-08-24-state-compat.html",
-		Tracked: map[string]*trackedBug{
-			"980001": {MsgID: 6001, State: "UNCONFIRMED|", Misses: 2, ConfirmTries: 1},
-			"980002": {MsgID: 6002, State: "CONFIRMED|", EditFails: 3, ConfirmTries: 2},
-			"980003": {MsgID: 6003, State: "RESOLVED|FIXED", Misses: 4, EditFails: 5, ConfirmTries: 6},
-			"980004": {MsgID: 6004, State: "RESOLVED|INVALID"},
-		},
-	})
-
-	legacyPendingV := NewVerifier(stateCompatConfig())
-	legacyPendingV.statePath = filepath.Join(dir, "pending-legacy-no-mode.json")
-	legacyPendingV.pend[pkey{stateCompatGroupA, 7301}] = &pending{
-		groupMsgID: 503,
-		qText:      "Legacy quiz question",
-		qOpts:      []string{"Portage", "apt"},
-		correctIdx: 0,
-		nonce:      "legacy-quiz-nonce",
-		name:       "Legacy Applicant",
-		deadline:   stateCompatLegacyDeadline,
-	}
-	legacyPendingV.save()
-
-	if err := store.Write(filepath.Join(dir, "feed-legacy-status.json"), stateCompatLegacyFeedState{
-		LastBugID:   880002,
-		LastNewsURL: "https://www.gentoo.org/support/news-items/legacy.html",
-		Tracked: map[string]stateCompatLegacyTracked{
-			"880001": {MsgID: 4001, Status: "UNCONFIRMED"},
-			"880002": {MsgID: 4002, Status: "IN_PROGRESS"},
-		},
-	}); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -433,74 +375,6 @@ func TestStateCompatAgentTally(t *testing.T) {
 	}
 }
 
-func TestStateCompatFeed(t *testing.T) {
-	fixture := stateCompatFixture(t, stateCompatFeedFixture)
-	currentTracked := map[string]stateCompatTrackedWant{
-		"980001": {msgID: 6001, state: "UNCONFIRMED|", misses: 2, confirmTries: 1},
-		"980002": {msgID: 6002, state: "CONFIRMED|", editFails: 3, confirmTries: 2},
-		"980003": {msgID: 6003, state: "RESOLVED|FIXED", misses: 4, editFails: 5, confirmTries: 6},
-		"980004": {msgID: 6004, state: "RESOLVED|INVALID"},
-	}
-	legacy := stateCompatFixture(t, "feed-legacy-status.json")
-	legacyTracked := map[string]stateCompatTrackedWant{
-		"880001": {msgID: 4001, state: "UNCONFIRMED|"},
-		"880002": {msgID: 4002, state: "IN_PROGRESS|"},
-	}
-	tests := []struct {
-		name        string
-		data        []byte
-		lastBugID   int
-		lastNewsURL string
-		tracked     map[string]stateCompatTrackedWant
-		roundTrip   bool
-		legacy      bool
-	}{
-		{
-			name: "current", data: fixture, lastBugID: 980004,
-			lastNewsURL: "https://www.gentoo.org/support/news-items/2026-08-24-state-compat.html",
-			tracked:     currentTracked, roundTrip: true,
-		},
-		{
-			name: "unknown top-level key", data: stateCompatWithUnknown(t, fixture), lastBugID: 980004,
-			lastNewsURL: "https://www.gentoo.org/support/news-items/2026-08-24-state-compat.html",
-			tracked:     currentTracked,
-		},
-		{
-			name: "legacy tracked status", data: legacy, lastBugID: 880002,
-			lastNewsURL: "https://www.gentoo.org/support/news-items/legacy.html",
-			tracked:     legacyTracked, legacy: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := stateCompatTempFile(t, stateCompatFeedFixture, tt.data)
-			got := loadFeedState(path)
-			stateCompatAssertFeed(t, got, tt.lastBugID, tt.lastNewsURL, tt.tracked)
-			if tt.roundTrip {
-				out := filepath.Join(t.TempDir(), stateCompatFeedFixture)
-				saveFeedState(out, got)
-				stateCompatAssertStableJSON(t, "feed", fixture, stateCompatRead(t, out))
-			}
-			if tt.legacy {
-				out := filepath.Join(t.TempDir(), "feed-legacy-migrated.json")
-				saveFeedState(out, got)
-				var migrated map[string]any
-				stateCompatDecode(t, stateCompatRead(t, out), &migrated)
-				tracked := migrated["tracked"].(map[string]any)
-				for id, want := range legacyTracked {
-					rec := tracked[id].(map[string]any)
-					if rec["state"] != want.state {
-						t.Errorf("migrated feed bug %s state = %v, want %q", id, rec["state"], want.state)
-					}
-					if _, exists := rec["status"]; exists {
-						t.Errorf("migrated feed bug %s retained legacy status: %#v", id, rec)
-					}
-				}
-			}
-		})
-	}
-}
-
 func stateCompatAssertPending(t *testing.T, v *Verifier, want []stateCompatPendingWant) {
 	t.Helper()
 	v.mu.Lock()
@@ -525,24 +399,6 @@ func stateCompatAssertPending(t *testing.T, v *Verifier, want []stateCompatPendi
 		}
 		if expected.lang == "" && got.lang != i18n.LangZH {
 			t.Errorf("legacy pending language fallback = %s, want Simplified Chinese", got.lang)
-		}
-	}
-}
-
-func stateCompatAssertFeed(t *testing.T, got feedState, lastBugID int, lastNewsURL string, want map[string]stateCompatTrackedWant) {
-	t.Helper()
-	if got.LastBugID != lastBugID || got.LastNewsURL != lastNewsURL || len(got.Tracked) != len(want) {
-		t.Fatalf("loaded feed header/tracked count = %+v, want last_bug_id=%d last_news_url=%q tracked=%d", got, lastBugID, lastNewsURL, len(want))
-	}
-	for id, expected := range want {
-		rec := got.Tracked[id]
-		if rec == nil {
-			t.Errorf("missing tracked feed bug %s", id)
-			continue
-		}
-		if rec.MsgID != expected.msgID || rec.State != expected.state || rec.Misses != expected.misses ||
-			rec.EditFails != expected.editFails || rec.ConfirmTries != expected.confirmTries || rec.Status != expected.status {
-			t.Errorf("loaded tracked feed bug %s = %+v, want %+v", id, rec, expected)
 		}
 	}
 }

@@ -199,7 +199,7 @@ func TestUntouchedGroupUsesConfigAndDefaults(t *testing.T) {
 	if !v.isEnabled(groupB) || v.timeout(groupB) != 420*time.Second || untouched.BanSeconds().Value != 7200 {
 		t.Fatalf("untouched scalar behavior = enabled:%v timeout:%v ban:%d", v.isEnabled(groupB), v.timeout(groupB), untouched.BanSeconds().Value)
 	}
-	if ttl, enabled := v.lookupAutoDelete(groupB); ttl != 10*time.Minute || !enabled {
+	if ttl, enabled := testLookupService(v).AutoDelete(groupB); ttl != 10*time.Minute || !enabled {
 		t.Fatalf("untouched lookup cleanup = (%v, %v), want (10m, true)", ttl, enabled)
 	}
 	if v.verifyMaxFails(groupB) != 5 || v.verifyRetrySeconds(groupB) != 90 || !untouched.AntispamEnabled().Value {
@@ -292,10 +292,10 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 		groupAView.BanSeconds().Value != 3600 || groupBView.BanSeconds().Value != 0 {
 		t.Fatal("timeout or ban duration leaked between groups")
 	}
-	if ttl, on := v.lookupAutoDelete(groupA); ttl != 5*time.Minute || on {
+	if ttl, on := testLookupService(v).AutoDelete(groupA); ttl != 5*time.Minute || on {
 		t.Fatalf("group A lookup cleanup = (%v, %v)", ttl, on)
 	}
-	if ttl, on := v.lookupAutoDelete(groupB); ttl != 3*time.Minute || !on {
+	if ttl, on := testLookupService(v).AutoDelete(groupB); ttl != 3*time.Minute || !on {
 		t.Fatalf("group B lookup cleanup = (%v, %v)", ttl, on)
 	}
 	if count, ban := v.recordVerifyFail(groupA, 7); count != 1 || !ban {

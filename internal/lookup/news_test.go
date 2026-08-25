@@ -1,4 +1,4 @@
-package main
+package lookup
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func TestGetNewsAvailability(t *testing.T) {
 		name          string
 		status        int
 		body          string
-		seed          []newsItem
+		seed          []NewsItem
 		wantAvailable bool
 		wantItems     int
 	}{
@@ -44,7 +44,7 @@ func TestGetNewsAvailability(t *testing.T) {
 		{
 			name:      "HTTP failure with stale data",
 			status:    http.StatusServiceUnavailable,
-			seed:      []newsItem{{date: "2026-08-23", title: "Cached", url: "https://example.test/cached"}},
+			seed:      []NewsItem{{Date: "2026-08-23", Title: "Cached", URL: "https://example.test/cached"}},
 			wantItems: 1,
 		},
 		{
@@ -66,23 +66,23 @@ func TestGetNewsAvailability(t *testing.T) {
 			newsC.items, newsC.fetched, newsC.loading = tt.seed, time.Time{}, false
 			newsC.mu.Unlock()
 
-			items, available := getNews(context.Background())
+			items, available := GetNews(context.Background())
 			if available != tt.wantAvailable {
-				t.Errorf("getNews() availability = %v, want %v", available, tt.wantAvailable)
+				t.Errorf("GetNews() availability = %v, want %v", available, tt.wantAvailable)
 			}
 			if len(items) != tt.wantItems {
-				t.Errorf("getNews() returned %d items, want %d", len(items), tt.wantItems)
+				t.Errorf("GetNews() returned %d items, want %d", len(items), tt.wantItems)
 			}
 		})
 	}
 }
 
 func TestRenderNewsAvailability(t *testing.T) {
-	item := newsItem{date: "2026-08-24", title: "Kernel update", url: "https://example.test/kernel"}
+	item := NewsItem{Date: "2026-08-24", Title: "Kernel update", URL: "https://example.test/kernel"}
 	tests := []struct {
 		name      string
 		arg       string
-		items     []newsItem
+		items     []NewsItem
 		available bool
 		want      []string
 		notWant   string
@@ -103,14 +103,14 @@ func TestRenderNewsAvailability(t *testing.T) {
 		{
 			name:      "available filtered miss",
 			arg:       "missing",
-			items:     []newsItem{item},
+			items:     []NewsItem{item},
 			available: true,
 			want:      []string{"没找到匹配的新闻。"},
 		},
 		{
 			name:    "stale hit is incomplete",
 			arg:     "kernel",
-			items:   []newsItem{item},
+			items:   []NewsItem{item},
 			want:    []string{"Kernel update", "以上结果可能不完整", "请稍后重试"},
 			notWant: "没找到匹配的新闻",
 		},
