@@ -32,9 +32,9 @@ The administrator opening that link in the target group must be a current human 
 
 The stored owner can also register directly by adding/promoting the bot. If no effective group existed, the first registered group becomes the durable registration control group. Invalid, expired, or replayed enrollment; a bot/non-admin actor; unreadable membership; ineligible bot status; unauthorized promotion; or persistence failure causes a refusal and an attempted leave. Once an owner exists, an unknown member-only group can wait up to ten minutes for a valid enrollment payload, then the bot leaves. Without an owner it is refused immediately. Leave failures are logged and the bot remains until another event/operator action.
 
-Registration writes the group to `settings.json` immediately. Moderation, `/settings`, and the registration-triggered permission report use the settings store and can see it in the same process. Join verification and several slash-command guards use the effective `config.Config` snapshot built only at startup, and command menus are also installed only at startup. Restart after registration before relying on join verification or the full command surface.
+Registration writes the group to `settings.json` immediately and takes effect in the running process. Join verification, moderation, `/settings`, the slash-command guards, and the registration-triggered permission report all read the settings store, and the command menus are reinstalled from the registration callback. No restart is required.
 
-After registration, `registrationCompleted` sends `?start=configure_<group_id>`. The settings-panel parser accepts only `panel_<token>` links. No `configure_` handler exists; the generic DM `/start` path attempts applicant challenge delivery instead. The intended behavior of that completion link is therefore unclear in code. Use `/settings` in the registered group to launch the actual panel.
+The completion message names the registered group and tells the administrator to run `/settings` there. The settings panel is reached only through that command, which issues a `panel_<token>` link bound to the requesting administrator.
 
 ## Permission self-check
 
