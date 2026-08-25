@@ -10,9 +10,9 @@
 
 ## 验证流程
 
-1. Telegram 发来入群申请后，机器人保持申请待审，并在公开群组中发送带有 `✅ 完成验证` 按钮的深层链接。
-2. 申请人通过链接私聊机器人。可信群组成员可免验证；管理员也可配置批准前必须加入的频道。同一申请人在多个群组中待验证且必需频道不同时，私聊使用第一项待处理申请对应的频道。
-3. 申请人完成指定验证后，机器人批准申请。答错或超时会被拒绝；管理员也可在群消息中选择 `👮 直接通过` 或 `🚫 拒绝并封禁`。
+1. Telegram 发来入群申请后，机器人保持申请待审，并默认立即尝试通过私聊发送该群组的验证题。只有申请人以前启动过此机器人时，Telegram 才允许机器人主动私聊。私聊送达后，机器人不会再发送群内提示。
+2. Telegram 表示机器人不能主动发起会话时，机器人改为在群内发送带有按群 `verify_<groupID>` 深层链接的提示。申请人点击后，会在私聊中打开该群组的对应申请。管理员可以在 `/settings` 中按群停用优先私聊验证。
+3. 可信群组成员可免验证；管理员也可配置批准前必须加入的频道。申请人完成指定验证后，机器人批准申请。答错或超时会被拒绝；管理员也可在群内回退消息中选择 `👮 直接通过` 或 `🚫 拒绝并封禁`。
 
 | 模式 | 申请人操作 | 说明 |
 | --- | --- | --- |
@@ -20,7 +20,7 @@
 | `quiz` | 点击 `questions` 中随机打乱后的正确选项 | 适用于不要求申请人使用 Linux 的群组。 |
 | `mixed` | 完成随机选中的一种验证 | 每项待验证申请独立选择。 |
 
-申请人看到的验证文案按 Telegram `language_code` 使用简体中文、繁体中文或英文。管理端输出仍为简体中文，配置中的 `questions` 按原文显示，不会自动翻译。
+申请人看到的验证文案按 Telegram `language_code` 使用简体中文、繁体中文或英文。群组和管理员输出使用该群组的有效 `lang`：全局值是基线，`groups[].lang` 可以覆盖全局值，设置面板还能保存按群运行时覆盖值。配置中的 `questions` 按原文显示，不会自动翻译。
 
 验证失败后进入 `verify_retry_seconds` 冷却期。在失败计数有效期内达到 `verify_max_fails` 次会自动封禁；验证成功后清除该申请人的失败计数。待验证状态最多保留 2,000 项，每个群组最多 500 项。达到任一上限后，新申请留给管理员手动审核，管理告警每 10 分钟最多发送一次。
 
@@ -28,11 +28,12 @@
 
 telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、管理及 Gentoo 语义均由本仓库基于标准库实现；外部数据仍来自所列的上游服务。链接文件是审查或修改对应行为的入口。
 
-- **内核版本验证**：[`kernel.go`](kernel.go) 可解析单独的版本号、常见英文说明、中文说明、WSL 输出，以及粘贴的 `uname -a` 或 `/proc/version` 形式输出。ASCII 上下文采用有限白名单，因此 `model=GPT-5.2` 等无关版本标识无法通过。1.x 仅接受 1.0–1.3，2.x 仅接受 2.0–2.6；3.x–30.x 均在预留范围内，不受当前内核主版本限制。
-- **AI 代答陷阱**：[`kernel.go`](kernel.go)、[`verify.go`](verify.go) 和 [`agents.go`](agents.go) 根据待验证申请的 nonce 生成 `AGENT-… model=…` 回复 token，因此不存在可供所有申请共用的固定 token。完全匹配时，机器人拒绝申请，将对方声明的模型写入 `agents.json`，并在 `/stats` 中显示。模型名称仅用于统计，不构成证据；该机制用于威慑，不是安全边界。
-- **中断恢复**：[`verify.go`](verify.go) 定期检测 Telegram 连通性，并在计时器到期时再次探测。Telegram 无法访问时，机器人不会拒绝申请或增加失败计数，而是重新提供完整验证时限。持续中断恢复后，所有进行中的申请都会获得新截止时间；机器人还会重新发送私聊通知和群验证消息，每次恢复最多通知 30 人，并抑制网络反复波动产生的重复通知。
-- **状态写入**：[`verify.go`](verify.go) 将快照创建和提交串行化，先写入同目录临时文件，执行 `fsync`，再原子重命名并同步目录。JSON 格式损坏时，原文件先移至 `<name>.corrupt`，然后才创建新状态。`pending.json`、`warns.json`、`antispam.json`、`verifyfail.json`、`settings.json` 和 `heartbeat.json` 无法读取时，对应路径会停止写入，避免覆盖仍可恢复的数据。
-- **Gentoo 语义**：[`pkg.go`](pkg.go) 按数值比较 revision 和 Gentoo 后缀，例如 `-r10` 高于 `-r2`，并遵循 `_alpha < _beta < _pre < _rc < release < _p`。[`use.go`](use.go) 区分本地、全局 USE 标志和 USE_EXPAND 组，还会解析 overlay 中的 `IUSE` 与 `metadata.xml`。[`arm.go`](arm.go) 区分稳定 `arm64`、测试 `~arm64`、无 keyword 和数据源不可用。[`pkgs.go`](pkgs.go) 分开处理 RHEL 兼容发行版、CentOS Stream 与 EPEL；[`releaseinfo.go`](releaseinfo.go) 根据实时发行版元数据解析 Debian 和 Ubuntu 的稳定版、测试版、LTS 及 EOL 状态，不写死版本号。
+- **内核版本验证**：[`internal/verify/kernel.go`](internal/verify/kernel.go) 可解析单独的版本号、常见英文说明、中文说明、WSL 输出，以及粘贴的 `uname -a` 或 `/proc/version` 形式输出。ASCII 上下文采用有限白名单，因此 `model=GPT-5.2` 等无关版本标识无法通过。1.x 仅接受 1.0–1.3，2.x 仅接受 2.0–2.6；3.x–30.x 均在预留范围内，不受当前内核主版本限制。
+- **AI 代答陷阱**：[`internal/verify/kernel.go`](internal/verify/kernel.go) 生成并检查与 nonce 绑定的 `AGENT-… model=…` 回复，[`internal/verify/state.go`](internal/verify/state.go) 则将统计写入 `agents.json`，并为 `/stats` 生成输出。因此，不存在可供所有申请共用的固定 token。完全匹配时，机器人会拒绝申请。对方声明的模型仅用于统计，不构成证据；该机制用于威慑，不是安全边界。
+- **中断恢复**：[`internal/verify/state.go`](internal/verify/state.go) 负责 Telegram heartbeat、到期探测、重新设置完整时限和有上限的通知。Telegram 无法访问时，机器人不会拒绝申请或增加失败计数，而是重新提供完整验证时限。持续中断恢复后，所有进行中的申请都会获得新截止时间；机器人还会重新发送私聊通知和群验证消息，每次恢复最多通知 30 人，并抑制网络反复波动产生的重复通知。
+- **状态写入**：[`internal/store/json.go`](internal/store/json.go) 将快照创建和提交串行化，先写入同目录临时文件，执行 `fsync`，再原子重命名并同步目录；[`internal/verify/state.go`](internal/verify/state.go) 等子系统加载器在无法安全读取状态后停止写入。JSON 格式损坏时，原文件先移至 `<name>.corrupt`，然后才创建新状态。`pending.json`、`warns.json`、`antispam.json`、`verifyfail.json`、`settings.json` 和 `heartbeat.json` 无法读取时，对应路径会停止写入，避免覆盖仍可恢复的数据。
+- **Gentoo 语义**：[`internal/lookup/packages.go`](internal/lookup/packages.go) 负责 `/pkg`、`/use` 和 `/arm`。该文件按数值比较 revision 和 Gentoo 后缀，例如 `-r10` 高于 `-r2`，并遵循 `_alpha < _beta < _pre < _rc < release < _p`。USE 输出区分本地、全局 USE flag 和 USE_EXPAND 组，并从 overlay 读取 `IUSE` 与 `metadata.xml`。arm64 结果区分稳定、测试、无 keyword 和数据源不可用。[`internal/lookup/distros.go`](internal/lookup/distros.go) 负责 `/pkgs`、`/distro` 和 `/armpkgs`，分开处理 RHEL 兼容发行版、CentOS Stream 与 EPEL，并根据实时发行版元数据解析 Debian 和 Ubuntu 的发行版状态，不写死版本号。
+
 ## 群组管理
 管理员须以个人身份发送命令，并回复目标消息。
 
@@ -45,7 +46,7 @@ telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、�
 | `/bantime` | 设置 `0` 表示永久，也可使用 `7d`、`12h` 或 `30m`；1–29 秒按 30 秒处理，超过 366 天按永久封禁处理。 |
 | `/bc` | 拦截以频道身份发送的消息并管理白名单。需要关闭 BotFather 隐私模式；状态会持久化。 |
 
-`/start`、`/stop`、`/vmode`、`/rich`、`/spoiler`、`/autodel`、`/bantime` 和 `/bc` 修改进程级状态。可用 `control_group_id` 将这些命令限制到一个受管理群组。`/ping`、`/stats` 和 `/help` 显示运行状态；`/stats` 除每日批准和拒绝人数外，还显示 AI 代答陷阱的累计统计。
+`/start` 和 `/stop` 修改当前群组是否启用验证；`/vmode` 修改该群组的验证模式；`/spoiler` 修改该群组是否隐藏申请人名称；`/autodel` 修改该群组的查询结果清理策略；`/bantime` 修改该群组的封禁时长；`/bc` 修改该群组的频道身份发言过滤器和白名单。这些命令都提交稀疏的按群覆盖值。只有 `/rich` 修改机器人级富文本输出，也是唯一受 `control_group_id` 限制的命令。`/ping`、`/stats` 和 `/help` 只显示运行状态；`/stats` 除每日批准和拒绝人数外，还显示 AI 代答陷阱的累计统计。
 
 ## Gentoo 与 Linux 查询
 查询命令也可在私聊中使用，每分钟限制为 `private_query_per_min` 次。
@@ -68,18 +69,43 @@ telego 只提供 Bot API 传输和类型。以下验证、恢复、持久化、�
 
 `BOT_TOKEN` 是唯一必填项。随附的 systemd unit 会创建私有状态目录；`config.json` 可省略。
 
-构建命令包，或将发布版二进制文件以 `gentoo-zh-verify-bot` 为名放在当前目录：
+### 从源代码构建
+
+从源代码构建需要 Go 1.26.7 或更高版本。构建二进制文件，并将 unit 复制到当前目录：
 
 ```sh
-CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+cp deploy/gentoo-zh-verify-bot.service .
 ```
 
-安装二进制文件，写入 token 环境文件，然后启动服务：
+### 安装预构建发布文件
+
+发布文件的名称固定为 `gentoo-zh-verify-bot-linux-amd64`、`gentoo-zh-verify-bot-linux-arm64` 和 `SHA256SUMS`。将 `version` 设为发布 tag，将 `arch` 设为本机架构，然后下载并校验二进制文件。unit 不在发布文件中，须从同一个 tag 获取：
+
+```sh
+version=v3.12.0
+arch=amd64 # 64 位 Arm 使用 arm64
+release_url="https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/download/${version}"
+curl --fail --location --remote-name "${release_url}/gentoo-zh-verify-bot-linux-${arch}"
+curl --fail --location --remote-name "${release_url}/SHA256SUMS"
+sha256sum --ignore-missing --strict --check SHA256SUMS
+mv "gentoo-zh-verify-bot-linux-${arch}" gentoo-zh-verify-bot
+curl --fail --location \
+  "https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/${version}/deploy/gentoo-zh-verify-bot.service" \
+  --output gentoo-zh-verify-bot.service
+```
+
+### 安装并启动服务
+
+安装二进制文件和 unit。先创建权限模式为 `0600` 的空 token 文件，再通过编辑器写入 `BOT_TOKEN=<your-token>`；token 不会出现在 shell 参数或 shell 历史记录中。
 
 ```sh
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
-printf '%s\n' 'BOT_TOKEN=123456:ABC-DEF' | sudo install -Dm600 /dev/stdin /etc/gentoo-zh-verify-bot/bot.env
-sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service && sudo systemctl daemon-reload && sudo systemctl enable --now gentoo-zh-verify-bot
+sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
+sudoedit /etc/gentoo-zh-verify-bot/bot.env
+sudo install -Dm644 gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now gentoo-zh-verify-bot
 ```
 
 从 journal 读取仅可使用一次的私有所有者认领链接：
@@ -109,9 +135,10 @@ sudo journalctl -u gentoo-zh-verify-bot
 ### 群组与验证
 | 键 | 作用 | 默认值和归一化规则 |
 | --- | --- | --- |
-| `groups` | 可选的启动时群组种子及按群覆盖项：`id`、`required_channel_id`、`channel_display`、`channel_invite_url`、`trusted_member_group_ids`、`questions`、`verify_mode`。 | 默认 `[]`；也可在运行时登记群组。配置文件中的 ID 必须非零且不得重复。空字段继承全局值；显式设置频道 ID `0` 或可信群组列表 `[]` 可对该群关闭相应门槛。 |
+| `groups` | 可选的启动时群组种子及按群覆盖项：`id`、`required_channel_id`、`channel_display`、`channel_invite_url`、`trusted_member_group_ids`、`questions`、`verify_mode`、`lang`。 | 默认 `[]`；也可在运行时登记群组。配置文件中的 ID 必须非零且不得重复。空字段继承全局值；显式设置频道 ID `0` 或可信群组列表 `[]` 可对该群关闭相应门槛。 |
 | `group_ids` / `group_id` | 旧版群组列表和单个群组字段，加载时合并到 `groups`。 | `[]` / `0`；旧字段中的重复 ID 合并到已有群组。 |
-| `control_group_id` | 可执行进程级命令的群组。 | `0` 使用第一个有效群组。启动配置中的非零 ID 不属于已配置 `groups` 时，配置无效。 |
+| `control_group_id` | 可执行 `/rich` 的受管理群组；`/rich` 是命令入口中唯一的机器人级设置。 | `0` 表示每个受管理群组的管理员都可执行。启动配置中的非零 ID 不属于已配置 `groups` 时，配置无效。 |
+| `lang` | 群组和管理员输出的语言基线；`groups[].lang` 和设置面板可按群覆盖。 | 空值使用 `zh`。只接受 `zh`、`zh-Hant` 和 `en`；其它值会阻止启动。 |
 | `required_channel_id` | 全局必需频道门槛。 | `0` 表示关闭。 |
 | `channel_display` | 全局频道名称或公开 `@handle`。 | 空。 |
 | `channel_invite_url` | 全局加入链接；私有频道没有 `@handle` 时必填。 | 空。 |
@@ -154,7 +181,7 @@ sudo journalctl -u gentoo-zh-verify-bot
 | 播报键 | 作用 | 默认值和归一化规则 |
 | --- | --- | --- |
 | `chat_id` | 目标频道或群组；机器人须有发帖权限。 | `0` 表示关闭。 |
-| `lang` | bug 字段标签。 | `en` 使用英文；空值或其它值使用中文。 |
+| `lang` | bug 字段标签和新闻播报的语言。 | `zh`、`zh-Hant` 和 `en` 有效，空值按 `zh` 处理；无法识别的值会阻止启动。 |
 | `interval_seconds` | 轮询间隔。 | `<=0` 变为 300；1–59 变为 60；无上限。 |
 | `bugs` / `news` | 分别启用新 Bugzilla 工单和新闻播报。 | 未设置变为 `true`。 |
 | `bug_product` / `bug_component` | 可选 Bugzilla 过滤条件。 | 空值匹配全部。 |
@@ -173,14 +200,10 @@ Telegram 设置界面不能修改播报目标、overlay 列表、新闻源、`st
 4. 使用必需频道时，将机器人设为频道管理员；普通成员身份不足以读取其他成员。
 5. 除非 `/bc` 需要检查以频道身份发送的消息，否则 BotFather 隐私模式可保持开启。
 
-### 构建与安装
-需要 **Go 1.26.7+**，与 `go.mod` 一致。[Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 提供静态链接的 `linux-amd64`、`arm64` 二进制文件和 `SHA256SUMS`。模块路径未使用 `/vN` 后缀，因此不支持 `go install …@v3.x`；请使用发布文件，或克隆仓库后构建。
+### 安装说明
+从源代码构建需要 **Go 1.26.7+**，与 `go.mod` 一致。[Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 只包含两个静态链接的 Linux 二进制文件和 `SHA256SUMS`；须按[安装预构建发布文件](#安装预构建发布文件)中的步骤单独获取对应 tag 的 unit。模块路径未使用 `/vN` 后缀，因此不支持 `go install …@v3.x`。
 
-```sh
-CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
-```
-
-使用[部署](#部署)中的三条安装命令。随附的 unit 读取 `/etc/gentoo-zh-verify-bot/bot.env`，按需读取 `config.json`，通过 `DynamicUser=` 运行，并由 `StateDirectory=` 创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot`。长轮询只需要出站 HTTPS，不需要监听端口或反向代理。
+随附的 unit 读取 `/etc/gentoo-zh-verify-bot/bot.env`，按需读取 `config.json`，通过 `DynamicUser=` 运行，并由 `StateDirectory=` 创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot`。长轮询只需要出站 HTTPS，不需要监听端口或反向代理。
 
 
 ### 状态与重启
@@ -207,8 +230,21 @@ CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 | 出现 `ERROR state load <path>: ...; writes disabled until restart` | 使用该路径的核心状态转为内存运行，不再持久化；原文件保留以便恢复。 | 立即停止服务，检查或恢复文件，修正所有权和权限后重启。等待不会恢复写入。 |
 | 软件包或发行版数据源没有响应 | `/pkg`、`/use`、`/arm`、`/pkgs` 和 `/armpkgs` 会区分“未找到”和“数据源不可用”，并标记不完整结果。播报抓取失败时保留游标，留待下次轮询。 | 检查结果中标明的数据源，不要将不可用或不完整结果解释为不存在。 |
 | 无法读取必需频道成员状态 | 机器人通知管理员。申请人通过验证后，默认的 `required_channel_fail_open: true` 会批准；设置为 `false` 时拒绝并允许重试。 | 恢复机器人的频道管理员身份；默认策略不合适时应显式选择开放或关闭回退。 |
-| 某个群组的启动检查报告显示设置未就绪 | 缺少一项或多项必要群组权限，或无法读取必需频道成员身份。 | 完成该群组唯一一份报告中的全部操作，再重启服务或使用设置界面的重新检查操作。 |
+| 某个群组的启动检查报告显示设置未就绪 | 缺少一项或多项必要群组权限，或无法读取必需频道成员身份。 | 完成该群组唯一一份报告中的全部操作，再重启服务以重新执行检查。 |
 | 播报目标无法访问或没有发帖权限 | 启动时记录告警；暂时性发送失败不会越过未发送项目。 | 修正 `chat_id`，加入机器人，并授予频道发帖权限。 |
+
+## 为其它社区创建 fork
+
+配置可以修改 Telegram 群组登记、验证题库和备用题库、overlay、Gentoo 新闻索引、播报目标，以及消息和运行策略。全局和按群语言可以在三个现有 locale 中选择。应优先使用 `groups` 或运行时登记、`questions`、`fallback_questions`、`lang`、`overlays` 和 `news_url`；这些修改不需要 fork 专用代码。
+
+完整的社区 fork 仍须逐项修改代码和文档：
+
+- 修改 `go.mod` 中的 module path 和所有 Go import。重命名 `cmd/gentoo-zh-verify-bot`、`deploy/` 和 `.github/workflows/release.yml` 中的命令目录、二进制文件和发布文件、默认 `/etc` 配置路径、`/var/lib` 状态目录、环境文件及 systemd unit。
+- 更新 `internal/i18n/catalog.go`、`internal/config/config.go`、`internal/bot/commands.go`、`internal/panel/codec.go` 和 `internal/panel/settings_panel.go` 中的 locale 注册和选择分支。如果 `zh` 不再是默认 locale，还须单独修改简体中文默认值。
+- 如果不会始终配置 `fallback_questions`，请替换 `internal/i18n/locales/*/verification.json` 中的内置备用题库。
+- 如果不会始终配置 `overlays`，请替换 `internal/lookup/packages.go` 中默认的 gentoo-zh 和 GURU overlay。
+- 检查 `internal/lookup/content.go` 和 `internal/feed/feed.go` 中的 Gentoo Bugzilla 与播报端点；检查 `internal/lookup/content.go`、`internal/lookup/packages.go` 和 `internal/lookup/distros.go` 中的 Gentoo 新闻、wiki、软件包端点和发行版元数据；还要修改 `internal/bot/bot.go`、`internal/bot/commands.go`、所有 locale catalogue 及公开命令表中的查询命令集。
+- 替换文档和发布 workflow 中的上游仓库、raw 文件、release、安全报告及 changelog URL。
 
 ## 许可证
 MIT — 见 [LICENSE](LICENSE)。

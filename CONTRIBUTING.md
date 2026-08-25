@@ -45,20 +45,59 @@ responsibilities are split across focused internal packages:
 Tests sit beside the code they cover. `state_compat_test.go` and `testdata/state/` define
 the persisted-format compatibility contract. A persisted-format change must preserve
 intentional backward compatibility and update the affected fixtures deliberately. Never
-regenerate them as an unrelated cleanup. When a format change requires new fixtures, run
-`UPDATE_STATE_COMPAT_FIXTURES=1 go test -run TestStateCompatGenerateFixtures`, review every
-fixture diff, then run the full test gate.
+regenerate them as an unrelated cleanup. Run only the package-qualified generator for the
+format being changed:
+
+```sh
+UPDATE_STATE_COMPAT_FIXTURES=1 go test ./internal/verify -run '^TestStateCompatGenerateFixtures$'
+UPDATE_STATE_COMPAT_FIXTURES=1 go test ./internal/feed -run '^TestStateCompatGenerateFeedFixtures$'
+UPDATE_STATE_COMPAT_FIXTURES=1 go test ./internal/moderate -run '^TestGenerateWarningFixture$'
+```
+
+Review every fixture diff, then run the full test gate. `settings.json` fixtures have no generator;
+update them deliberately by hand when the store compatibility tests require it.
 
 See the [documentation index](docs/README.md) for architecture, operations, and flow-specific
 guides.
+
+## Adding a lookup command
+
+1. Implement the handler in `internal/lookup` and add its route to
+   `(*Service).handlerRoutes` in `internal/bot/bot.go`.
+2. Insert the route name at the exact matching position in the `want` ordering list in
+   `internal/bot/bot_test.go`; handler order is a tested first-match contract.
+3. Add the command to the appropriate Telegram menus in `internal/bot/commands.go`.
+4. Add typed catalogue fields and values in every locale for the command menu, `/help`, usage,
+   errors, and results.
+5. Update the public command tables in `README.md`, `README.zh-CN.md`, and any command table in
+   `docs/` that covers the changed surface.
+6. Add package-level behavior tests and update menu, handler-order, and localization tests that
+   cover the observable command.
+
+## Adding a panel setting
+
+1. Add and validate the `config.Config` source value, then project it into a provenance-aware
+   baseline in `internal/store/baseline.go`.
+2. Add the effective setting and sparse override to `internal/store/settings.go`. Preserve
+   optimistic revision checks, validate candidates before publishing, and omit an override when
+   it equals the baseline.
+3. Extend the callback grammar in `internal/panel/codec.go`. Use the existing compact field/value
+   encoding and keep encoded callback data within Telegram's 64-byte limit.
+4. Add rendering and callback dispatch in `internal/panel/settings_panel.go`; add ForceReply or
+   chat-picker input dispatch in `internal/panel/settings_input.go` when the value cannot be
+   selected directly.
+5. Add typed catalogue entries and every locale value.
+6. Cover config normalization, baseline provenance, sparse persistence and revision conflicts,
+   codec validation, rendering, input dispatch, authorization, and settings integration as
+   applicable.
 
 ## Localisation
 
 - Put every user-visible string in the typed catalogue under `internal/i18n/`, with one JSON
   file per subsystem and locale.
 - To add a key, add its typed `Text` or `Format` field and the matching JSON key in every
-  locale. To add a locale, provide all subsystem files and register its `Lang` and
-  `localeDefinitions` entry.
+  locale. Adding a locale also requires every selection path listed in
+  `internal/i18n/README.md`; a `Lang` constant and `localeDefinitions` entry alone are insufficient.
 - `TestProductionCodeContainsNoChineseStringLiterals` rejects Chinese literals outside the
   catalogue. `TestLocaleFilesLoad` rejects missing files, malformed JSON, unknown keys, and
   invalid value shapes. The other `internal/i18n` tests enforce completeness, placeholder
@@ -75,6 +114,8 @@ translation workflow.
   existing package services and transport or storage helpers instead of duplicating them.
 - Keep it simple and readable; match the surrounding style. `gofmt` decides formatting.
 - Keep user-visible text in the localisation catalogue; do not hard-code it in production.
+- Write all repository code comments in English. The localization invariants reject Chinese
+  production literals, including comments; do not discover this rule only after the test fails.
 - Make config values configurable (with a sensible default in `LoadConfig`) instead of
   hard-coding them.
 

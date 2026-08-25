@@ -10,9 +10,9 @@ The bot is one static Go binary, uses long polling, opens no inbound port, and h
 
 ## Verification
 
-1. Telegram sends a join request. The bot leaves it pending and posts a `✅ 完成验证` deep link in the public group.
-2. The applicant opens the bot in DM. A trusted-group membership may bypass the challenge; an optional required-channel gate may be applied before approval. If the same applicant is pending in groups with different required channels, the DM uses the first pending group's channel.
-3. The applicant completes the configured challenge. Only then does the bot approve the request. A wrong answer or timeout declines it; admins can instead use `👮 直接通过` or `🚫 拒绝并封禁` on the group message.
+1. Telegram sends a join request. The bot leaves it pending and, by default, tries to send that group's challenge in DM immediately. Telegram allows this only if the applicant has started the bot before. A confirmed DM is the only challenge message.
+2. If Telegram reports that the bot cannot initiate the conversation, the bot instead posts a group challenge with a group-scoped `verify_<groupID>` deep link. The applicant taps it to open that exact request in DM. Administrators can disable DM-first delivery per group in `/settings`.
+3. A trusted-group membership may bypass the challenge; an optional required-channel gate may be applied before approval. The applicant completes the configured challenge, then the bot approves the request. A wrong answer or timeout declines it; admins can instead use `👮 直接通过` or `🚫 拒绝并封禁` on the group fallback.
 
 | Mode | Applicant action | Notes |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ The bot is one static Go binary, uses long polling, opens no inbound port, and h
 | `quiz` | Tap the correct shuffled option from `questions` | Retained for groups whose applicants are not expected to have Linux. |
 | `mixed` | Complete one of the two modes, selected at random | Selected independently for each pending request. |
 
-Applicant-facing verification text follows Telegram `language_code`: Simplified Chinese, Traditional Chinese, or English. Admin output remains Simplified Chinese, and configured `questions` are used verbatim rather than translated.
+Applicant-facing verification text follows Telegram `language_code`: Simplified Chinese, Traditional Chinese, or English. Group and administrator output uses the effective group `lang`: the global value is the baseline, a `groups[].lang` value overrides it, and the settings panel can save a per-group runtime override. Configured `questions` are used verbatim rather than translated.
 
 Failed verification starts the `verify_retry_seconds` cooldown. Reaching `verify_max_fails` within the strike window triggers an automatic ban; success clears the applicant's strikes. Pending state is bounded at 2,000 requests process-wide and 500 per group. At either cap, new requests remain for manual review and the admin alert is limited to once per 10 minutes.
 
@@ -28,11 +28,12 @@ Failed verification starts the `verify_retry_seconds` cooldown. Reaching `verify
 
 The Bot API transport and types come from telego. The challenge, recovery, persistence, moderation, and Gentoo-specific interpretation below are repository code built on the standard library; external data still comes from the named upstream services. The linked files are the starting points for audit or patches.
 
-- **Kernel challenge** — [`kernel.go`](kernel.go) parses a bare release, known English lead-ins, Chinese lead-ins, WSL output, and pasted `uname -a` or `/proc/version`-style output. Its narrow ASCII context whitelist rejects unrelated dotted identifiers such as `model=GPT-5.2`. Historical bounds accept 1.0–1.3 and 2.0–2.6; the forward range accepts 3.x through 30.x, so it is not pinned to today's kernel major.
-- **AI tripwire** — [`kernel.go`](kernel.go), [`verify.go`](verify.go), and [`agents.go`](agents.go) derive the required `AGENT-… model=…` reply token from the pending request's nonce. There is no fixed token for an operator to hard-code. An exact match is declined; its self-declared model is persisted in `agents.json` and included in `/stats`. The declaration is a usage tally, not evidence, and the tripwire is deterrence rather than a security boundary.
-- **Outage recovery** — [`verify.go`](verify.go) runs a Telegram heartbeat and probes again when a timer expires. An unreachable expiry receives a new full window without a decline or strike. After a sustained outage, every live request gets a fresh deadline; recovery also re-sends the DM notice and group challenge for up to 30 applicants, with duplicate notices suppressed during flapping.
-- **State writes** — [`verify.go`](verify.go) serializes snapshot creation and commit, writes a same-directory temporary file, calls `fsync`, renames atomically, then syncs the directory. Malformed JSON is moved to `<name>.corrupt` before fresh state is created. For `pending.json`, `warns.json`, `antispam.json`, `verifyfail.json`, `settings.json`, and `heartbeat.json`, an unreadable file disables writes to that path instead of overwriting recoverable data.
-- **Gentoo semantics** — [`pkg.go`](pkg.go) compares numeric revisions and Gentoo suffixes (`-r10` sorts above `-r2`; `_alpha < _beta < _pre < _rc < release < _p`). [`use.go`](use.go) separates local/global USE flags and USE_EXPAND groups, and parses overlay `IUSE` plus `metadata.xml`. [`arm.go`](arm.go) distinguishes stable `arm64`, testing `~arm64`, no keyword, and an unavailable source. [`pkgs.go`](pkgs.go) keeps RHEL rebuilds, CentOS Stream, and EPEL separate, while [`releaseinfo.go`](releaseinfo.go) resolves Debian and Ubuntu release roles from live distro metadata rather than hard-coded release numbers.
+- **Kernel challenge** — [`internal/verify/kernel.go`](internal/verify/kernel.go) parses a bare release, known English lead-ins, Chinese lead-ins, WSL output, and pasted `uname -a` or `/proc/version`-style output. Its narrow ASCII context whitelist rejects unrelated dotted identifiers such as `model=GPT-5.2`. Historical bounds accept 1.0–1.3 and 2.0–2.6; the forward range accepts 3.x through 30.x, so it is not pinned to today's kernel major.
+- **AI tripwire** — [`internal/verify/kernel.go`](internal/verify/kernel.go) derives and grades the nonce-bound `AGENT-… model=…` reply, while [`internal/verify/state.go`](internal/verify/state.go) persists the tally in `agents.json` and renders it for `/stats`. There is no fixed token for an operator to hard-code. An exact match is declined. The self-declared model is a usage tally, not evidence, and the tripwire is deterrence rather than a security boundary.
+- **Outage recovery** — [`internal/verify/state.go`](internal/verify/state.go) owns the Telegram heartbeat, expiry probes, fresh deadlines, and bounded re-notification. An unreachable expiry receives a new full window without a decline or strike. After a sustained outage, every live request gets a fresh deadline; recovery also re-sends the DM notice and group challenge for up to 30 applicants, with duplicate notices suppressed during flapping.
+- **State writes** — [`internal/store/json.go`](internal/store/json.go) serializes snapshot creation and commit, writes a same-directory temporary file, calls `fsync`, renames atomically, then syncs the directory; subsystem loaders such as [`internal/verify/state.go`](internal/verify/state.go) disable writes after an unsafe read failure. Malformed JSON is moved to `<name>.corrupt` before fresh state is created. For `pending.json`, `warns.json`, `antispam.json`, `verifyfail.json`, `settings.json`, and `heartbeat.json`, an unreadable file disables writes to that path instead of overwriting recoverable data.
+- **Gentoo semantics** — [`internal/lookup/packages.go`](internal/lookup/packages.go) owns `/pkg`, `/use`, and `/arm`: numeric revisions and Gentoo suffixes sort correctly (`-r10` above `-r2`; `_alpha < _beta < _pre < _rc < release < _p`), USE output separates local/global flags and USE_EXPAND groups, overlay metadata includes `IUSE` and `metadata.xml`, and arm64 results distinguish stable, testing, absent, and unavailable. [`internal/lookup/distros.go`](internal/lookup/distros.go) owns `/pkgs`, `/distro`, and `/armpkgs`; it keeps RHEL rebuilds, CentOS Stream, and EPEL separate and resolves Debian and Ubuntu release roles from live distro metadata rather than hard-coded release numbers.
+
 ## Moderation
 Run these as a non-anonymous group administrator, replying to the target message.
 
@@ -45,7 +46,7 @@ Run these as a non-anonymous group administrator, replying to the target message
 | `/bantime` | Set `0` for permanent or a duration such as `7d`, `12h`, or `30m`; 1–29 s becomes 30 s and more than 366 days becomes permanent. |
 | `/bc` | Block channel-identity posts and manage the whitelist. Requires BotFather privacy mode off; state persists. |
 
-`/start`, `/stop`, `/vmode`, `/rich`, `/spoiler`, `/autodel`, `/bantime`, and `/bc` change process-global state. Set `control_group_id` to restrict them to one guarded group. `/ping`, `/stats`, and `/help` report runtime state; `/stats` includes the lifetime AI-tripwire tally alongside daily approvals and declines.
+`/start` and `/stop` change whether verification is enabled for the invoking group; `/vmode` changes that group's challenge mode; `/spoiler` changes that group's applicant-name hiding; `/autodel` changes that group's lookup cleanup policy; `/bantime` changes that group's ban duration; and `/bc` changes that group's sender-channel filter and whitelist. Each command commits a sparse per-group override. `/rich` alone changes bot-wide rich output and is the only command gated by `control_group_id`. `/ping`, `/stats`, and `/help` only report runtime state; `/stats` includes the lifetime AI-tripwire tally alongside daily approvals and declines.
 
 ## Gentoo and Linux lookups
 Lookup commands also work in DM, limited by `private_query_per_min`.
@@ -68,18 +69,43 @@ The optional feed polls Gentoo Bugzilla and news for each `feed` or `feeds` dest
 
 `BOT_TOKEN` is the only required setting. The supplied systemd unit creates a private state directory; `config.json` is optional.
 
-Build the command package, or place a release binary named `gentoo-zh-verify-bot` in the current directory:
+### Build from source
+
+Source builds require Go 1.26.7 or later. Build the binary and copy the unit into the current directory:
 
 ```sh
-CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+cp deploy/gentoo-zh-verify-bot.service .
 ```
 
-Install the binary, write the token environment file, and start the service:
+### Install a prebuilt release
+
+Release assets are named exactly `gentoo-zh-verify-bot-linux-amd64`, `gentoo-zh-verify-bot-linux-arm64`, and `SHA256SUMS`. Set `version` to the release tag and `arch` to the machine architecture, then download and verify the binary. The unit is not a release asset, so fetch it from the same tag:
+
+```sh
+version=v3.12.0
+arch=amd64 # use arm64 on 64-bit Arm
+release_url="https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/download/${version}"
+curl --fail --location --remote-name "${release_url}/gentoo-zh-verify-bot-linux-${arch}"
+curl --fail --location --remote-name "${release_url}/SHA256SUMS"
+sha256sum --ignore-missing --strict --check SHA256SUMS
+mv "gentoo-zh-verify-bot-linux-${arch}" gentoo-zh-verify-bot
+curl --fail --location \
+  "https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/${version}/deploy/gentoo-zh-verify-bot.service" \
+  --output gentoo-zh-verify-bot.service
+```
+
+### Install and start the service
+
+Install the binary and unit. Create the token file empty with mode `0600`, then enter `BOT_TOKEN=<your-token>` through an editor; the token never appears in a shell argument or shell history.
 
 ```sh
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
-printf '%s\n' 'BOT_TOKEN=123456:ABC-DEF' | sudo install -Dm600 /dev/stdin /etc/gentoo-zh-verify-bot/bot.env
-sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service && sudo systemctl daemon-reload && sudo systemctl enable --now gentoo-zh-verify-bot
+sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
+sudoedit /etc/gentoo-zh-verify-bot/bot.env
+sudo install -Dm644 gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now gentoo-zh-verify-bot
 ```
 
 Read the private, one-use owner-claim link from the journal:
@@ -109,9 +135,10 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 ### Groups and verification
 | Key | Purpose | Default and normalization |
 | --- | --- | --- |
-| `groups` | Optional startup seed for guarded groups and per-group overrides: `id`, `required_channel_id`, `channel_display`, `channel_invite_url`, `trusted_member_group_ids`, `questions`, `verify_mode`. | `[]`; groups may instead be registered at runtime. Configured IDs must be nonzero and unique. Empty fields inherit globals; explicit channel ID `0` or trusted list `[]` disables that gate for the group. |
+| `groups` | Optional startup seed for guarded groups and per-group overrides: `id`, `required_channel_id`, `channel_display`, `channel_invite_url`, `trusted_member_group_ids`, `questions`, `verify_mode`, `lang`. | `[]`; groups may instead be registered at runtime. Configured IDs must be nonzero and unique. Empty fields inherit globals; explicit channel ID `0` or trusted list `[]` disables that gate for the group. |
 | `group_ids` / `group_id` | Legacy group-list and singular inputs merged into `groups`. | `[]` / `0`; duplicate legacy IDs merge with an existing group. |
-| `control_group_id` | Group allowed to run process-global commands. | `0`: the first effective group is used. A nonzero startup value outside configured `groups` is invalid. |
+| `control_group_id` | Guarded group allowed to run `/rich`, the command-path bot-wide setting. | `0`: administrators of every guarded group may run it. A nonzero startup value outside configured `groups` is invalid. |
+| `lang` | Baseline language for group and administrator output; `groups[].lang` and the settings panel may override it per group. | Empty selects `zh`. Accepted values are `zh`, `zh-Hant`, and `en`; any other value stops startup. |
 | `required_channel_id` | Global required-channel gate. | `0`: off. |
 | `channel_display` | Global channel label or public `@handle`. | Empty. |
 | `channel_invite_url` | Global join link, required for a private channel without an `@handle`. | Empty. |
@@ -154,7 +181,7 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 | Feed key | Purpose | Default and normalization |
 | --- | --- | --- |
 | `chat_id` | Destination channel or group; the bot needs permission to post. | `0`: disabled. |
-| `lang` | Bug field labels. | `en` selects English; empty or any other value selects Chinese. |
+| `lang` | Language for bug field labels and news posts. | Empty selects `zh`. Accepted values are `zh`, `zh-Hant`, and `en`; any other value stops startup. |
 | `interval_seconds` | Poll interval. | `<=0` becomes 300; 1–59 becomes 60; no maximum. |
 | `bugs` / `news` | Enable new Bugzilla issues and news items independently. | Unset becomes `true`. |
 | `bug_product` / `bug_component` | Optional Bugzilla filters. | Empty matches all. |
@@ -173,14 +200,10 @@ The Telegram settings surface does not edit feed destinations, the overlay list,
 4. For a required channel, make the bot an administrator; being a member is insufficient for membership reads.
 5. BotFather privacy mode may remain on unless `/bc` must inspect channel-identity posts.
 
-### Build and install
-Requires **Go 1.26.7+**, matching `go.mod`. Prebuilt static `linux-amd64` and `arm64` binaries plus `SHA256SUMS` are available from [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases). `go install …@v3.x` is not supported because the module path intentionally has no `/vN` suffix; use a release binary or clone and build.
+### Installation details
+Requires **Go 1.26.7+** for source builds, matching `go.mod`. [Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) contain only the two static Linux binaries and `SHA256SUMS`; the tagged unit must be fetched separately as shown in [Install a prebuilt release](#install-a-prebuilt-release). `go install …@v3.x` is not supported because the module path intentionally has no `/vN` suffix.
 
-```sh
-CGO_ENABLED=0 go build -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
-```
-
-Use the three installation commands in [Deployment](#deployment). The supplied unit reads `/etc/gentoo-zh-verify-bot/bot.env`, optionally reads `config.json`, runs with `DynamicUser=`, and creates `/var/lib/gentoo-zh-verify-bot` with mode `0700` through `StateDirectory=`. Long polling needs outbound HTTPS only; no listener or reverse proxy is required.
+The supplied unit reads `/etc/gentoo-zh-verify-bot/bot.env`, optionally reads `config.json`, runs with `DynamicUser=`, and creates `/var/lib/gentoo-zh-verify-bot` with mode `0700` through `StateDirectory=`. Long polling needs outbound HTTPS only; no listener or reverse proxy is required.
 
 
 ### State and restarts
@@ -207,8 +230,21 @@ Daily `/stats`, rate-limit windows, and lookup/news/package caches reset on rest
 | `ERROR state load <path>: ...; writes disabled until restart` | Core state using that path remains in memory and does not persist. The file is left for recovery. | Stop the service immediately, inspect or restore the file, fix ownership and permissions, then restart. Waiting does not re-enable writes. |
 | A package or distribution source does not answer | `/pkg`, `/use`, `/arm`, `/pkgs`, and `/armpkgs` distinguish “not found” from unavailable data and label partial results. Feed fetch failures leave cursors unchanged for the next poll. | Check the named source; do not interpret unavailable or partial output as absence. |
 | Required-channel membership cannot be read | The bot alerts admins. After a passed challenge, default `required_channel_fail_open: true` approves; `false` declines for retry. | Restore the bot as channel administrator; choose fail-open or fail-closed explicitly if the default is unsuitable. |
-| A per-group startup report says the setup is not ready | One or more required group rights are missing, or required-channel membership is unreadable. | Apply every action in that group's single report, then restart or run the panel's recheck action. |
+| A per-group startup report says the setup is not ready | One or more required group rights are missing, or required-channel membership is unreadable. | Apply every action in that group's single report, then restart the service to rerun the check. |
 | Feed target is unreachable or lacks post rights | Startup warns; transient send failures do not advance past an undelivered item. | Correct `chat_id`, add the bot, and grant channel post rights. |
+
+## Forking for another community
+
+Configuration can change Telegram group registration, verification and fallback question banks, the global or per-group language among the three existing locales, overlays, the Gentoo news index, feed destinations, and message/runtime policies. Prefer `groups` or runtime registration, `questions`, `fallback_questions`, `lang`, `overlays`, and `news_url` for those changes; they require no fork-specific code.
+
+A complete community fork still requires a deliberate code and documentation cutover:
+
+- Change the module path in `go.mod` and every Go import. Rename the command directory, binary and release assets, default `/etc` config path, `/var/lib` state directory, environment file, and systemd unit in `cmd/gentoo-zh-verify-bot`, `deploy/`, and `.github/workflows/release.yml`.
+- Update the supported-locale registry and selection branches in `internal/i18n/catalog.go`, `internal/config/config.go`, `internal/bot/commands.go`, `internal/panel/codec.go`, and `internal/panel/settings_panel.go`. Change the Simplified-Chinese default separately if `zh` should not remain the fallback.
+- Replace the built-in fallback question bank in `internal/i18n/locales/*/verification.json` if `fallback_questions` will not always be supplied.
+- Replace the default gentoo-zh and GURU overlays in `internal/lookup/packages.go` if an `overlays` configuration will not always be supplied.
+- Audit the Gentoo Bugzilla and feed endpoints in `internal/lookup/content.go` and `internal/feed/feed.go`; the Gentoo news, wiki, and package endpoints and release metadata in `internal/lookup/content.go`, `internal/lookup/packages.go`, and `internal/lookup/distros.go`; and the lookup command set in `internal/bot/bot.go`, `internal/bot/commands.go`, every locale catalogue, and the public command tables.
+- Replace upstream repository, raw-file, release, security-reporting, and changelog URLs throughout the documentation and release workflow.
 
 ## License
 MIT — see [LICENSE](LICENSE).

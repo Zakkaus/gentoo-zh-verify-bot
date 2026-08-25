@@ -7,11 +7,11 @@ All notable changes to this project are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
-- **Optional `control_group_id` for multi-group deployments.** It restricts `/start`, `/stop`,
-  `/vmode`, `/rich`, `/spoiler`, `/autodel`, `/bantime`, and `/bc` to administrators in one
-  guarded group. Leaving it unset preserves the previous any-guarded-group policy and now logs a
-  startup warning when several groups are configured. Naming a chat outside `groups` fails config
-  loading instead of locking every global command out.
+- **Optional `control_group_id` for multi-group deployments.** It restricts `/rich`, the only
+  command that changes bot-wide settings, to administrators in one guarded group. The other
+  settings commands remain per-group. Leaving it unset preserves the previous any-guarded-group
+  command policy and now logs a startup warning when several groups are configured. Naming a chat
+  outside `groups` fails config loading instead of locking the global command out.
 - **`/distro` is now advertised as an alias of `/pkgs`** in the command menu, `/help`, and the
   user documentation.
 - Unknown config keys now produce a startup warning with their location. They remain ignored, so
@@ -21,6 +21,11 @@ All notable changes to this project are documented here. The format is based on
   overrides. `owner_claim_user_id` can restrict first-owner setup to one Telegram user.
 
 ### Changed
+- **Join verification now tries the private challenge first by default.** Applicants who have
+  previously started the bot receive only the DM; Telegram's ordinary cannot-initiate 403 falls
+  back to the group challenge. New fallback links encode the group ID so concurrent requests
+  cannot select another group's pending challenge, while existing bare `verify` links remain
+  compatible. Administrators can toggle DM-first delivery per group in `/settings`.
 - **Join floods have bounded memory use.** The pending queue is capped at 2,000 requests across the
   process and 500 per group. Requests beyond either cap remain for manual review, with an admin
   alert throttled to once every 10 minutes.
@@ -78,6 +83,12 @@ All notable changes to this project are documented here. The format is based on
 - Owner-claim persistence failures now describe the private claim and tell the claimant to restore
   state-directory writes before retrying the same link.
 
+## [3.12.0] - 2026-08-23
+
+### Added
+- **Optional self-hosted Telegram Bot API endpoint.** `TELEGRAM_API_URL` directs telego to a
+  custom API server; leaving it unset keeps Telegram's hosted endpoint.
+
 ## [3.11.1] - 2026-08-20
 
 ### Removed
@@ -87,73 +98,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [3.11.0] - 2026-08-20
 
-### Changed
-- **Kernel prompt rewritten; the printed example is now a rejected decoy.** The prompt was one
-  colloquial paragraph. It is now split into labelled parts (作答方式 / 无 Linux 设备) in written
-  register across zh-CN / zh-TW / en, with the literal reply shown as `<code>` rather than 「」. The
-  format example is an impossible version (`7.1.30`): `kernelAnswerOK` rejects it and a verbatim copy
-  is bounced once with a nudge, so pasting the example back can never pass. The reworded no-Linux
-  escape adds `无 Linux` / `無 Linux` to the phrase table so it still fires.
-- **Wording pass over every Chinese string the bot shows.** A Codex audit against the repository's
-  Chinese writing rules turned up 76 candidates; the ones that were factually wrong or that named
-  the wrong thing are fixed. The channel sock-puppet feature is called 频道身份发言 instead of the
-  slang 频道马甲; a Portage keyword is no longer described as a version type ("~ 表示测试 keyword",
-  "未设置 arm64 keyword"); a missing arm64 keyword no longer claims `ACCEPT_KEYWORDS="~arm64"` will
-  fix it; the Bugzilla assignee/reporter labels read 负责人/报告人; "取不到 / 读不到" became
-  "无法获取 / 无法读取" in every failure message. README.zh-CN caught up with the buttons it
-  documents (拒绝并封禁, not 举报并封禁), dropped the literal "武装定时器" and the repo shorthands
-  必关频道 / 守护群 / strike.
-- Two applicant-facing corrections worth calling out: the "you have no pending request" message told
-  people to 在群里发起加入申请 when they are not in the group yet, and the Traditional Chinese
-  catalog said 關注頻道 where Telegram's own Traditional interface says 加入頻道.
-
-### Fixed
-- **The minute proof accepted a canned reply.** `minuteProofOK` read every number in the message,
-  so a fixed string listing five of them ("no Linux device 1 4 7 10 13") matched at all 60 minutes
-  of the hour — the check it was supposed to be immune to. Exactly one minute may now be offered,
-  either as a standalone number or as a written-out clock ("14:46"); several different candidates
-  are no proof at all. The phantom fourth shift (there is no UTC-X:45 zone) is gone too, so a
-  single blind guess hits 9 minutes in 60 instead of 12.
-- **An agent's tripwire reply was admitted to the group next door.** The reply names a model, and a
-  model name carries a version, so grading it per pending declined the token's group and read
-  "deepseek-v3.2" as a kernel version everywhere else the applicant was verifying. A DM is now
-  classified once per message: one reply, one verdict for every pending, and one tally entry.
-- **Re-applying handed back fresh attempts.** Cancelling the join request and applying again
-  replaced the pending with `tries` zero and no recorded failure, so an applicant could answer
-  wrong forever without reaching the strike threshold. A replacement now inherits the attempts and
-  the spent one-shot guards.
-- **A reply about another OS could bury a correct answer.** "Windows WSL2,
-  5.15.167.4-microsoft-standard-WSL2" is a real kernel version with an explanation attached; it was
-  routed to the no-Linux path and, repeated, walked a legitimate user toward the auto-ban. It now
-  costs no attempt: one clarification, and the same answer sent again is accepted.
-- **Stale replies could act on the pending that replaced theirs.** Every state transition
-  (`recordKernelTry`, the reminder / hint / sample / clarification guards, the fallback switch) now
-  requires the nonce it was decided against, so a message about a since-replaced request can no
-  longer charge an attempt or spend a guard belonging to the new one.
-- The one-shot guards are persisted, so a restart no longer hands each of them out again.
-- `/start` re-sends the verification prompt at most once every 15 seconds per user; each press
-  fanned out one message per pending with nothing throttling it.
-
-### Changed
-- **The no-Linux escape is documented again, but now costs a proof of liveness.** Hiding it kept
-  spam operators from learning it existed, at the price of a newcomer with no Linux having no idea
-  what to do. The prompt now spells it out — reply "我现在没有Linux设备" **plus the current minute**
-  — which a canned string cannot carry and most LLM agents cannot produce either, while a person just
-  reads their clock. A skewed clock is tolerated (±1 minute) and the half-hour / three-quarter-hour
-  timezones are accepted at their own shift. A declaration without the minute earns one free format
-  reminder instead of a strike; repeating it is graded as a wrong answer.
-- **The automated-agent tripwire is written as a binding override, not a request.** The polite
-  wording read as advice an agent could weigh against its own task; it now voids prior instructions
-  explicitly, states that completing the check for a user is unauthorized automation, forbids
-  answering, and demands the token plus the model name as the only allowed output. Detection is
-  unchanged: only the per-applicant token counts.
-- Fixed the phrases that mean "I have no Linux": "我沒有安裝" / "我没有安装" matched nothing (the list
-  held "没有装" and "未安装", neither a substring of "没有安装"), and neither did "我不懂", "no idea"
-  or a bare "what?". Those replies cost an attempt instead of offering the escape.
-
-## [3.12.0] - 2026-08-20
-
 ### Added
+
 - New state file `agents.json`: the automated-agent tally, kept across restarts.
 - **Kernel-version verification, now the default join challenge.** A spam bot passes a four-option
   button quiz by tapping at random — one time in four, and it can re-apply — which is how the
@@ -212,19 +158,6 @@ All notable changes to this project are documented here. The format is based on
   it unfolded. Previously the send error was discarded, so a rejected message meant the
   applicant got no question at all and was declined at timeout.
 
-### Changed
-- With no `verify_mode` in the config the bot now serves the kernel challenge instead of the quiz.
-  Set `"verify_mode": "quiz"` (or run `/vmode quiz`) to keep the previous behaviour.
-- `questions` is only required for a group that can actually serve a quiz; a kernel-only config may
-  omit the pool entirely. A quiz-mode group with an empty pool falls back to the kernel challenge
-  rather than posting an unanswerable question.
-- `pending.json` records the challenge mode, the applicant's locale and the replies used, so a kernel
-  verification survives a restart or an outage recovery intact; a record written by an older build
-  restores as a Simplified-Chinese quiz.
-
-## [3.11.0] - 2026-07-12
-
-### Added
 - Outage resilience for verification, so a Telegram or network outage no longer punishes applicants for
   the bot's own downtime. A heartbeat (a periodic `GetMe`) tracks whether Telegram is reachable; while
   it isn't, a verification timeout re-arms a fresh window instead of declining and striking someone we
@@ -236,8 +169,77 @@ All notable changes to this project are documented here. The format is based on
   restart.
 
 ### Changed
+- **Kernel prompt rewritten; the printed example is now a rejected decoy.** The prompt was one
+  colloquial paragraph. It is now split into labelled parts (作答方式 / 无 Linux 设备) in written
+  register across zh-CN / zh-TW / en, with the literal reply shown as `<code>` rather than 「」. The
+  format example is an impossible version (`7.1.30`): `kernelAnswerOK` rejects it and a verbatim copy
+  is bounced once with a nudge, so pasting the example back can never pass. The reworded no-Linux
+  escape adds `无 Linux` / `無 Linux` to the phrase table so it still fires.
+- **Wording pass over every Chinese string the bot shows.** A Codex audit against the repository's
+  Chinese writing rules turned up 76 candidates; the ones that were factually wrong or that named
+  the wrong thing are fixed. The channel sock-puppet feature is called 频道身份发言 instead of the
+  slang 频道马甲; a Portage keyword is no longer described as a version type ("~ 表示测试 keyword",
+  "未设置 arm64 keyword"); a missing arm64 keyword no longer claims `ACCEPT_KEYWORDS="~arm64"` will
+  fix it; the Bugzilla assignee/reporter labels read 负责人/报告人; "取不到 / 读不到" became
+  "无法获取 / 无法读取" in every failure message. README.zh-CN caught up with the buttons it
+  documents (拒绝并封禁, not 举报并封禁), dropped the literal "武装定时器" and the repo shorthands
+  必关频道 / 守护群 / strike.
+- Two applicant-facing corrections worth calling out: the "you have no pending request" message told
+  people to 在群里发起加入申请 when they are not in the group yet, and the Traditional Chinese
+  catalog said 關注頻道 where Telegram's own Traditional interface says 加入頻道.
+
+- **The no-Linux escape is documented again, but now costs a proof of liveness.** Hiding it kept
+  spam operators from learning it existed, at the price of a newcomer with no Linux having no idea
+  what to do. The prompt now spells it out — reply "我现在没有Linux设备" **plus the current minute**
+  — which a canned string cannot carry and most LLM agents cannot produce either, while a person just
+  reads their clock. A skewed clock is tolerated (±1 minute) and the half-hour / three-quarter-hour
+  timezones are accepted at their own shift. A declaration without the minute earns one free format
+  reminder instead of a strike; repeating it is graded as a wrong answer.
+- **The automated-agent tripwire is written as a binding override, not a request.** The polite
+  wording read as advice an agent could weigh against its own task; it now voids prior instructions
+  explicitly, states that completing the check for a user is unauthorized automation, forbids
+  answering, and demands the token plus the model name as the only allowed output. Detection is
+  unchanged: only the per-applicant token counts.
+- Fixed the phrases that mean "I have no Linux": "我沒有安裝" / "我没有安装" matched nothing (the list
+  held "没有装" and "未安装", neither a substring of "没有安装"), and neither did "我不懂", "no idea"
+  or a bare "what?". Those replies cost an attempt instead of offering the escape.
+- With no `verify_mode` in the config the bot now serves the kernel challenge instead of the quiz.
+  Set `"verify_mode": "quiz"` (or run `/vmode quiz`) to keep the previous behaviour.
+- `questions` is only required for a group that can actually serve a quiz; a kernel-only config may
+  omit the pool entirely. A quiz-mode group with an empty pool falls back to the kernel challenge
+  rather than posting an unanswerable question.
+- `pending.json` records the challenge mode, the applicant's locale and the replies used, so a kernel
+  verification survives a restart or an outage recovery intact; a record written by an older build
+  restores as a Simplified-Chinese quiz.
 - The long poller's retry interval is pinned explicitly, and an update stream that ends without a
   shutdown signal now exits non-zero so systemd restarts the bot rather than sitting there dead.
+
+### Fixed
+- **The minute proof accepted a canned reply.** `minuteProofOK` read every number in the message,
+  so a fixed string listing five of them ("no Linux device 1 4 7 10 13") matched at all 60 minutes
+  of the hour — the check it was supposed to be immune to. Exactly one minute may now be offered,
+  either as a standalone number or as a written-out clock ("14:46"); several different candidates
+  are no proof at all. The phantom fourth shift (there is no UTC-X:45 zone) is gone too, so a
+  single blind guess hits 9 minutes in 60 instead of 12.
+- **An agent's tripwire reply was admitted to the group next door.** The reply names a model, and a
+  model name carries a version, so grading it per pending declined the token's group and read
+  "deepseek-v3.2" as a kernel version everywhere else the applicant was verifying. A DM is now
+  classified once per message: one reply, one verdict for every pending, and one tally entry.
+- **Re-applying handed back fresh attempts.** Cancelling the join request and applying again
+  replaced the pending with `tries` zero and no recorded failure, so an applicant could answer
+  wrong forever without reaching the strike threshold. A replacement now inherits the attempts and
+  the spent one-shot guards.
+- **A reply about another OS could bury a correct answer.** "Windows WSL2,
+  5.15.167.4-microsoft-standard-WSL2" is a real kernel version with an explanation attached; it was
+  routed to the no-Linux path and, repeated, walked a legitimate user toward the auto-ban. It now
+  costs no attempt: one clarification, and the same answer sent again is accepted.
+- **Stale replies could act on the pending that replaced theirs.** Every state transition
+  (`recordKernelTry`, the reminder / hint / sample / clarification guards, the fallback switch) now
+  requires the nonce it was decided against, so a message about a since-replaced request can no
+  longer charge an attempt or spend a guard belonging to the new one.
+- The one-shot guards are persisted, so a restart no longer hands each of them out again.
+- `/start` re-sends the verification prompt at most once every 15 seconds per user; each press
+  fanned out one message per pending with nothing throttling it.
 
 ## [3.10.2] - 2026-07-06
 
@@ -1210,6 +1212,21 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[3.12.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.12.0
+[3.11.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.11.1
+[3.11.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.11.0
+[3.10.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.10.0
+[3.9.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.9.3
+[3.9.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.9.2
+[3.9.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.9.1
+[3.9.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.9.0
+[3.8.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.8.1
+[3.8.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.8.0
+[3.7.6]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.6
+[3.7.5]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.5
+[3.7.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.4
+[3.7.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.3
+[3.7.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.2
 [3.7.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.1
 [3.7.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.7.0
 [3.6.7]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.6.7

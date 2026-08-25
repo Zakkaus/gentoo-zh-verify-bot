@@ -83,6 +83,13 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 		VerifyMode:     config.ModeKernel,
 		TimeoutSeconds: 240,
 	})
+	group, _ := v.settings.Group(groupID)
+	overrides := group.Overrides()
+	dmFirst := false
+	overrides.DMFirst = &dmFirst
+	if _, err := v.settings.CommitGroup(groupID, group.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
 	bot := newFakeVerifyBot()
 	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
 		Chat: telego.Chat{ID: groupID},
@@ -107,6 +114,170 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 	}
 }
 
+func TestNoPendingDMUsesRequesterLocale(t *testing.T) {
+	const uid = int64(42)
+	for _, tt := range []struct {
+		code string
+		lang i18n.Lang
+	}{
+		{code: "en-US", lang: i18n.LangEN},
+		{code: "zh-CN", lang: i18n.LangZH},
+		{code: "zh-TW", lang: i18n.LangZHHant},
+	} {
+		t.Run(tt.code, func(t *testing.T) {
+			for _, target := range []struct {
+				name    string
+				groupID int64
+			}{
+				{name: "bare"},
+				{name: "scoped", groupID: -1009000000799},
+			} {
+				t.Run(target.name, func(t *testing.T) {
+					v := newTestService(&config.Config{})
+					caller := newFakeVerifyBot()
+					bot := newAPITestBot(t, caller)
+
+					v.SendDMChallenge(context.Background(), bot, uid, tt.code, target.groupID)
+
+					want := i18n.Messages.Verification.Channel.NoPending.For(tt.lang)
+					if caller.sends != 1 || caller.lastSendChat != uid || caller.lastSendText != want {
+						t.Fatalf("no-pending DM sends/chat/text = %d/%d/%q, want requester catalogue message %q",
+							caller.sends, caller.lastSendChat, caller.lastSendText, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestJoinRequestDeliversDMFirstOrFallsBackToScopedGroupLink(t *testing.T) {
+	const (
+		groupID int64 = -1009000000701
+		userID  int64 = 701
+	)
+	newVerifier := func() *Service {
+		service := newTestService(&config.Config{
+			Groups:         []config.GroupConfig{{ID: groupID}},
+			GroupIDs:       []int64{groupID},
+			Lang:           "en",
+			VerifyMode:     config.ModeKernel,
+			TimeoutSeconds: 240,
+		})
+		service.botUsername = "settings_test_bot"
+		return service
+	}
+	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: groupID},
+		From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+	}}
+
+	t.Run("successful DM suppresses group challenge", func(t *testing.T) {
+		service := newVerifier()
+		caller := newFakeVerifyBot()
+		runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, update)
+		defer service.Shutdown()
+
+		if caller.sends != 1 || len(caller.sendChats) != 1 || caller.sendChats[0] != userID {
+			t.Fatalf("challenge sends/chats = %d/%v, want one private send", caller.sends, caller.sendChats)
+		}
+		if pending := service.pend[pkey{groupID, userID}]; pending == nil ||
+			!pending.challengeDelivered || pending.groupMsgID != 0 {
+			t.Fatalf("private delivery pending state = %+v, want delivered without group message", pending)
+		}
+	})
+
+	t.Run("cannot initiate DM falls back with group-scoped link", func(t *testing.T) {
+		service := newVerifier()
+		caller := newFakeVerifyBot()
+		caller.sendErr = &ta.Error{ErrorCode: 403, Description: "Forbidden: bot can't initiate conversation with a user"}
+		caller.sendFailN = 1
+		runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, update)
+		defer service.Shutdown()
+
+		if caller.sends != 2 || len(caller.sendChats) != 2 ||
+			caller.sendChats[0] != userID || caller.sendChats[1] != groupID {
+			t.Fatalf("challenge sends/chats = %d/%v, want failed private send then group fallback", caller.sends, caller.sendChats)
+		}
+		wantLink := fmt.Sprintf("https://t.me/settings_test_bot?start=verify_%d", groupID)
+		if !strings.Contains(caller.sendTexts[1], wantLink) {
+			t.Fatalf("group fallback does not contain scoped link %q: %q", wantLink, caller.sendTexts[1])
+		}
+		if pending := service.pend[pkey{groupID, userID}]; pending == nil ||
+			!pending.challengeDelivered || pending.groupMsgID == 0 {
+			t.Fatalf("group fallback pending state = %+v, want confirmed group delivery", pending)
+		}
+	})
+
+	t.Run("per-group setting keeps group-first behavior", func(t *testing.T) {
+		service := newVerifier()
+		group, _ := service.settings.Group(groupID)
+		overrides := group.Overrides()
+		dmFirst := false
+		overrides.DMFirst = &dmFirst
+		if _, err := service.settings.CommitGroup(groupID, group.Revision(), overrides); err != nil {
+			t.Fatal(err)
+		}
+		caller := newFakeVerifyBot()
+		runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, update)
+		defer service.Shutdown()
+
+		if caller.sends != 1 || len(caller.sendChats) != 1 || caller.sendChats[0] != groupID {
+			t.Fatalf("group-first challenge sends/chats = %d/%v, want one group send", caller.sends, caller.sendChats)
+		}
+	})
+
+	for _, rejection := range []struct {
+		name string
+		err  error
+	}{
+		{name: "blocked after an earlier conversation", err: &ta.Error{ErrorCode: 403, Description: "Forbidden: bot was blocked by the user"}},
+		{name: "rate limited without a retry delay", err: &ta.Error{ErrorCode: 429, Description: "Too Many Requests"}},
+	} {
+		t.Run(rejection.name, func(t *testing.T) {
+			service := newVerifier()
+			caller := newFakeVerifyBot()
+			caller.sendErr = rejection.err
+			caller.sendFailN = 1
+			runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, update)
+			defer service.Shutdown()
+
+			if caller.sends != 2 || caller.sendChats[0] != userID || caller.sendChats[1] != groupID {
+				t.Fatalf("%s produced sends/chats = %d/%v, want private rejection then group fallback",
+					rejection.name, caller.sends, caller.sendChats)
+			}
+		})
+	}
+}
+
+func TestJoinRequestAmbiguousDMFailureDoesNotRiskDuplicateGroupChallenge(t *testing.T) {
+	const (
+		groupID int64 = -1009000000702
+		userID  int64 = 702
+	)
+	service := newTestService(&config.Config{
+		Groups:         []config.GroupConfig{{ID: groupID}},
+		GroupIDs:       []int64{groupID},
+		Lang:           "en",
+		VerifyMode:     config.ModeKernel,
+		TimeoutSeconds: 240,
+	})
+	caller := newFakeVerifyBot()
+	caller.sendErr = errors.New("connection reset after request write")
+	caller.sendFailN = 1
+	runFakeHandler(t, newAPITestBot(t, caller), service.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: groupID},
+		From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+	}})
+	defer service.Shutdown()
+
+	if caller.sends != 1 || len(caller.sendChats) != 1 || caller.sendChats[0] != userID {
+		t.Fatalf("ambiguous send failure produced sends/chats = %d/%v, want only the uncertain DM attempt", caller.sends, caller.sendChats)
+	}
+	if pending := service.pend[pkey{groupID, userID}]; pending == nil || pending.challengeDelivered {
+		t.Fatalf("uncertain private delivery pending state = %+v, want strike-free unconfirmed delivery", pending)
+	}
+}
+
 // fakeVerifyBot is a verifyBot stand-in so the approve / decline / ban handler branches can be
 // exercised without a real Telegram connection; it records call counts and returns configured
 // errors for those network actions.
@@ -126,6 +297,8 @@ type fakeVerifyBot struct {
 	lastSendChat    int64
 	lastSendText    string
 	lastParseMode   string
+	sendChats       []int64
+	sendTexts       []string
 	member          telego.ChatMember
 	memberByID      map[int64]telego.ChatMember
 	memberErr       error
@@ -166,13 +339,15 @@ func (b *fakeVerifyBot) SendMessage(_ context.Context, p *telego.SendMessagePara
 	b.lastSendChat = p.ChatID.ID
 	b.lastSendText = p.Text
 	b.lastParseMode = p.ParseMode
+	b.sendChats = append(b.sendChats, p.ChatID.ID)
+	b.sendTexts = append(b.sendTexts, p.Text)
 	if b.sendErr != nil && b.sends <= b.sendFailN {
 		return nil, b.sendErr
 	}
 	return &telego.Message{MessageID: 1}, nil
 }
 
-func (b *fakeVerifyBot) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) bool {
+func (b *fakeVerifyBot) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (bool, error) {
 	send := func(text, parseMode string) error {
 		_, err := b.SendMessage(ctx, &telego.SendMessageParams{
 			ChatID:    telego.ChatID{ID: chatID},
@@ -181,20 +356,26 @@ func (b *fakeVerifyBot) SendHTMLFallback(ctx context.Context, chatID int64, rich
 		})
 		return err
 	}
-	if err := send(rich, telego.ModeHTML); err == nil {
-		return true
-	} else {
-		message := strings.ToLower(err.Error())
-		if !strings.Contains(message, "parse") && !strings.Contains(message, "entit") && !strings.Contains(message, "bad request") {
-			return false
-		}
+	err := send(rich, telego.ModeHTML)
+	if err == nil {
+		return true, nil
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "parse") && !strings.Contains(message, "entit") && !strings.Contains(message, "bad request") {
+		return false, err
 	}
 	if simpler != "" && simpler != rich {
-		if err := send(simpler, telego.ModeHTML); err == nil {
-			return true
+		err = send(simpler, telego.ModeHTML)
+		if err == nil {
+			return true, nil
+		}
+		message = strings.ToLower(err.Error())
+		if !strings.Contains(message, "parse") && !strings.Contains(message, "entit") && !strings.Contains(message, "bad request") {
+			return false, err
 		}
 	}
-	return send(simpler, "") == nil
+	err = send(simpler, "")
+	return err == nil, err
 }
 
 func (b *fakeVerifyBot) Delete(ctx context.Context, chatID int64, messageID int) {
@@ -612,9 +793,9 @@ func TestDeclineBelowThreshold(t *testing.T) {
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
-	handled, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
-	if !handled || banned {
-		t.Fatalf("first failure should decline, not ban: handled=%v banned=%v", handled, banned)
+	handled, settled, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
+	if !handled || !settled || banned {
+		t.Fatalf("first failure should settle the decline without a ban: handled=%v settled=%v banned=%v", handled, settled, banned)
 	}
 	if fb.declines != 1 || fb.bans != 0 {
 		t.Errorf("below threshold: want 1 decline + 0 bans, got declines=%d bans=%d", fb.declines, fb.bans)
@@ -632,9 +813,9 @@ func TestDeclineAutoBan(t *testing.T) {
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
-	handled, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
-	if !handled || !banned {
-		t.Fatalf("reaching the threshold should auto-ban: handled=%v banned=%v", handled, banned)
+	handled, settled, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
+	if !handled || !settled || !banned {
+		t.Fatalf("threshold decline = handled %v, settled %v, banned %v; want all true", handled, settled, banned)
 	}
 	if fb.bans != 1 {
 		t.Errorf("BanChatMember should be called once, got %d", fb.bans)
@@ -718,7 +899,7 @@ func TestTerminalActionBlocksReapplication(t *testing.T) {
 					result <- ok && v.executeApprove(context.Background(), bot, gid, uid, p)
 					return
 				}
-				handled, _ := v.decline(context.Background(), bot, gid, uid, old.nonce, "wrong answer")
+				handled, _, _ := v.decline(context.Background(), bot, gid, uid, old.nonce, "wrong answer")
 				result <- handled
 			}()
 			select {
@@ -799,9 +980,9 @@ func TestApproveClaimBlocksTimeoutDecline(t *testing.T) {
 	v.pend[key].done = true
 	v.mu.Unlock()
 
-	// the timeout timer now fires -> decline -> consumeNonce; it MUST bail on the claimed pending.
-	if _, ok := v.consumeNonce(-100, 5, "abc"); ok {
-		t.Error("a claimed (done) pending must not be consumable by the timeout path — a verified user would otherwise get a strike/ban")
+	// A second claim must refuse the pending while approval is in flight.
+	if _, ok := v.claimPendingNonce(-100, 5, "abc"); ok {
+		t.Error("a claimed pending must not be claimable again; otherwise a verified user could be declined or struck")
 	}
 }
 
@@ -819,12 +1000,12 @@ func TestStopForShutdownFreezesPending(t *testing.T) {
 	if _, ok := v.pend[key]; !ok {
 		t.Fatal("stopForShutdown must NOT remove pendings — they must persist across the restart")
 	}
-	// a timeout timer firing now reaches consumeNonce, which must refuse while shutting down.
-	if _, ok := v.consumeNonce(-100, 42, "n1"); ok {
-		t.Error("consumeNonce must refuse while shutting down, so a firing timeout can't decline/strike/ban")
+	// A timer firing now reaches a claim helper, which must refuse during shutdown.
+	if _, ok := v.claimPendingNonce(-100, 42, "n1"); ok {
+		t.Error("claimPendingNonce must refuse during shutdown")
 	}
 	if _, ok := v.pend[key]; !ok {
-		t.Error("the pending must remain intact after the refused consumeNonce")
+		t.Error("the pending must remain intact after the refused claim")
 	}
 }
 
@@ -891,7 +1072,7 @@ func TestJoinGate(t *testing.T) {
 	cooldown(v)
 	bot := newFakeVerifyBot()
 	bot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
-	if !v.joinGate(ctx, bot, gid, uid) {
+	if !v.joinGate(ctx, bot, gid, uid, i18n.LangEN) {
 		t.Error("a trusted member in cooldown must be handled (bypassed)")
 	}
 	if bot.approves != 1 || bot.declines != 0 {
@@ -904,7 +1085,7 @@ func TestJoinGate(t *testing.T) {
 	failBot := newFakeVerifyBot()
 	failBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberMember{}}
 	failBot.approveErr = errors.New("no rights")
-	if vf.joinGate(ctx, failBot, gid, uid) {
+	if vf.joinGate(ctx, failBot, gid, uid, i18n.LangEN) {
 		t.Error("a confirmed trusted member whose approve failed must proceed to verification (not be handled by the cooldown)")
 	}
 	if failBot.declines != 0 {
@@ -916,7 +1097,7 @@ func TestJoinGate(t *testing.T) {
 	cooldown(vn)
 	nonBot := newFakeVerifyBot()
 	nonBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
-	if !vn.joinGate(ctx, nonBot, gid, uid) {
+	if !vn.joinGate(ctx, nonBot, gid, uid, i18n.LangEN) {
 		t.Error("a non-member in cooldown must be handled (declined)")
 	}
 	if nonBot.declines != 1 || nonBot.approves != 0 {
@@ -927,8 +1108,37 @@ func TestJoinGate(t *testing.T) {
 	vp := mkV()
 	pBot := newFakeVerifyBot()
 	pBot.memberByID = map[int64]telego.ChatMember{uid: &telego.ChatMemberLeft{}}
-	if vp.joinGate(ctx, pBot, gid, uid) {
+	if vp.joinGate(ctx, pBot, gid, uid, i18n.LangEN) {
 		t.Error("a non-member with no cooldown must proceed to the challenge (not handled)")
+	}
+}
+
+func TestCooldownReapplicationDMsCurrentWait(t *testing.T) {
+	const (
+		gid      = int64(-1003265952923)
+		uid      = int64(5)
+		cooldown = 600
+	)
+	v := newTestService(&config.Config{
+		Groups:             []config.GroupConfig{{ID: gid}},
+		GroupIDs:           []int64{gid},
+		VerifyRetrySeconds: cooldown,
+	})
+	v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()}
+	caller := newFakeVerifyBot()
+	update := telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: gid},
+		From: telego.User{ID: uid, FirstName: "Applicant", LanguageCode: "zh-Hant"},
+	}}
+
+	runFakeHandler(t, newAPITestBot(t, caller), v.OnJoinRequest, update)
+
+	if caller.declines != 1 {
+		t.Fatalf("cooldown reapplication decline calls = %d, want 1", caller.declines)
+	}
+	want := i18n.Messages.Verification.Result.CooldownActive.Render(i18n.LangZHHant, cooldown)
+	if caller.sends != 1 || caller.lastSendChat != uid || caller.lastSendText != want {
+		t.Fatalf("cooldown DM sends/chat/text = %d/%d/%q, want one applicant catalogue message %q", caller.sends, caller.lastSendChat, caller.lastSendText, want)
 	}
 }
 
@@ -941,6 +1151,7 @@ func TestStrikesUser(t *testing.T) {
 		{reason: "wrong answer", want: true},
 		{reason: "something-else", want: true},
 		{reason: "approve-retry"},
+		{reason: "decline-retry"},
 		{reason: "restart-lapsed"},
 		{reason: "recovered"},
 		{reason: "challenge-post-failed"},
@@ -959,7 +1170,7 @@ func TestDeclineNoStrike(t *testing.T) {
 		v.loc = time.UTC
 		return v
 	}
-	for _, reason := range []string{"approve-retry", "restart-lapsed", "challenge-post-failed"} {
+	for _, reason := range []string{"approve-retry", "decline-retry", "restart-lapsed", "challenge-post-failed"} {
 		v := mkV()
 		v.pend[pkey{gid, uid}] = &pending{nonce: "n", deadline: time.Now().Add(time.Hour)}
 		fb := &fakeVerifyBot{}
@@ -989,7 +1200,7 @@ func TestReopenPendingRestoresRetryable(t *testing.T) {
 	p := &pending{nonce: "abc", deadline: time.Now().Add(time.Hour), done: true}
 	v.pend[key] = p
 
-	v.reopenPending(nil, -100, 5, p) // bot unused: a 1h deadline means the re-armed timer won't fire in-test
+	v.reopenPending(nil, -100, 5, p, "approve-retry") // bot unused: a 1h deadline means the re-armed timer won't fire in-test
 	if p.done {
 		t.Error("reopenPending should re-open the pending (done=false) for retry")
 	}
@@ -1001,7 +1212,7 @@ func TestReopenPendingRestoresRetryable(t *testing.T) {
 	// a pending already replaced by a newer request must NOT be re-opened.
 	v.pend[key] = &pending{nonce: "new", deadline: time.Now().Add(time.Hour)}
 	stale := &pending{nonce: "abc", deadline: time.Now().Add(time.Hour), done: true}
-	v.reopenPending(nil, -100, 5, stale)
+	v.reopenPending(nil, -100, 5, stale, "approve-retry")
 	if !stale.done {
 		t.Error("a replaced pending must not be re-opened")
 	}
@@ -1011,17 +1222,69 @@ func TestDeclineFailureAlertsAdmins(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
 	v := newTestService(&config.Config{AdminLogChatID: -200})
 	v.loc = time.UTC
-	v.pend[pkey{gid, uid}] = livePending(42)
+	p := livePending(42)
+	v.pend[pkey{gid, uid}] = p
 	fb := &fakeVerifyBot{declineErr: errors.New("Forbidden: missing can_invite_users")}
-	handled, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")
-	if !handled || fb.declines != 1 {
-		t.Fatalf("decline result = handled %v, calls %d; want true, 1", handled, fb.declines)
+	handled, settled, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")
+	if !handled || settled || fb.declines != 1 {
+		t.Fatalf("decline result = handled %v, settled %v, calls %d; want true, false, 1", handled, settled, fb.declines)
 	}
 	if fb.sends != 1 || fb.lastSendChat != -200 {
 		t.Fatalf("admin alert sends/chat = %d/%d, want 1/-200", fb.sends, fb.lastSendChat)
 	}
 	if !strings.Contains(fb.lastSendText, "missing can_invite_users") {
 		t.Errorf("admin alert must name the decline failure, got %q", fb.lastSendText)
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+}
+
+func TestDeclineFailureReopensWithoutStrikeAndUsesGroupAlertFallback(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	v := newTestService(&config.Config{VerifyMaxFails: 3})
+	key := pkey{gid, uid}
+	p := &pending{
+		nonce:      "current",
+		lang:       i18n.LangZHHant,
+		correctIdx: 1,
+		groupMsgID: 42,
+		deadline:   time.Now().Add(time.Hour),
+	}
+	v.pend[key] = p
+	caller := &fakeVerifyBot{declineErr: errors.New("Forbidden: missing can_invite_users")}
+	update := telego.Update{CallbackQuery: &telego.CallbackQuery{
+		ID:   "answer",
+		From: telego.User{ID: uid},
+		Data: "v:-100:5:current:0",
+	}}
+
+	runFakeHandler(t, newAPITestBot(t, caller), v.OnAnswer, update)
+
+	if cur, ok := v.pend[key]; !ok || cur != p || cur.done || cur.timer == nil {
+		t.Fatalf("failed decline pending = %+v, want the original request reopened and re-armed", cur)
+	}
+	t.Cleanup(func() {
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+	})
+	if _, struck := v.vfail[key]; struck {
+		t.Error("a failed decline must not record a verification strike")
+	}
+	if caller.deletes != 0 {
+		t.Errorf("a failed decline deleted %d group challenges, want 0", caller.deletes)
+	}
+	if caller.sends != 1 || caller.lastSendChat != gid {
+		t.Errorf("failure-alert fallback sends/chat = %d/%d, want 1/%d", caller.sends, caller.lastSendChat, gid)
+	}
+	if len(caller.callbackAnswers) != 1 {
+		t.Fatalf("callback answers = %d, want 1", len(caller.callbackAnswers))
+	}
+	got := caller.callbackAnswers[0].Text
+	want := i18n.Messages.Verification.Result.DeclinePending.For(i18n.LangZHHant)
+	if got != want {
+		t.Errorf("decline failure callback = %q, want applicant catalogue warning %q", got, want)
 	}
 }
 
@@ -1096,16 +1359,16 @@ func TestDeliveredKernelPromptSurvivesRestart(t *testing.T) {
 func TestChallengeResendCapacityKeepsActiveCooldown(t *testing.T) {
 	v := newTestService(&config.Config{})
 	now := time.Now()
-	const activeUID int64 = 1
-	v.challengeAt[activeUID] = now
+	const gid, activeUID = int64(-100), int64(1)
+	v.challengeAt[pkey{gid, activeUID}] = now
 	for uid := int64(2); uid <= challengeResendMapMax; uid++ {
-		v.challengeAt[uid] = now.Add(-challengeResendCooldown - time.Second)
+		v.challengeAt[pkey{gid, uid}] = now.Add(-challengeResendCooldown - time.Second)
 	}
 
-	if !v.challengeResendOK(challengeResendMapMax + 1) {
+	if !v.challengeResendOK(gid, challengeResendMapMax+1) {
 		t.Fatal("new user was unexpectedly throttled")
 	}
-	if v.challengeResendOK(activeUID) {
+	if v.challengeResendOK(gid, activeUID) {
 		t.Error("capacity event discarded an active challenge resend cooldown")
 	}
 }

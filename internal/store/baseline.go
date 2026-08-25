@@ -88,6 +88,7 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 
 	defaultGroup := GroupBaseline{
 		Enabled:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
+		DMFirst:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
 		VerifyMode:              BaselineValue[string]{Value: verifyMode, Source: verifyModeSource},
 		NameSpoiler:             BaselineValue[bool]{Value: true, Source: SourceDefault},
 		BanSeconds:              BaselineValue[int]{Value: config.ClampBanSeconds(cfg.BanSeconds), Source: baselineSource(topHas("ban_seconds"))},

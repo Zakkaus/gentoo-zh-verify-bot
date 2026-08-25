@@ -62,7 +62,7 @@
     "ban_users": "Enable Ban users so the bot can ban or restrict users.",
     "delete_messages": "Enable Delete messages so the bot can clean up messages.",
     "channel_admin": "Make the bot an administrator of required channel “%[1]s” (%[2]d); plain membership cannot read other users' membership.",
-    "recheck": "After fixing these items, restart the service or select Recheck in Settings."
+    "restart": "After fixing these items, restart the service to rerun this check."
   },
   "warning": {
     "cleared": "✅ Cleared %[1]s's warnings (previous count: %[2]d). Operator: %[3]s.",

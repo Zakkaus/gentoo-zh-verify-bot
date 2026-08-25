@@ -36,7 +36,7 @@
     "unauthorized_chat": "🚪 已自动退出未授权聊天：%[1]s（ID：%[2]d，类型：%[3]s）。"
   },
   "direct_message": {
-    "auto_reply": "👋 这是 Gentoo 中文社区的入群验证和 Gentoo/Linux 助手机器人。\n\n• 申请入群：请返回群组发起加入申请，再点击群组内机器人消息中的「✅ 开始验证」，在这里完成验证。\n• 查询命令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私聊中使用。私聊每分钟最多 %[1]d 次，群组内不限次数。\n• 审核和管理命令仅可在群组内使用。"
+    "auto_reply": "👋 这是 Gentoo 中文社区的入群验证和 Gentoo/Linux 助手机器人。\n\n• 申请入群：请在群组发起加入申请。如果你以前向此机器人发送过 /start，机器人会立即私聊发送验证题；否则，请点击群组内机器人消息中的「✅ 开始验证」。\n• 查询命令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私聊中使用。私聊每分钟最多 %[1]d 次，群组内不限次数。\n• 审核和管理命令仅可在群组内使用。"
   },
   "registration": {
     "owner_claimed": "部署者身份已绑定。现在可以添加群组。",

@@ -422,9 +422,10 @@ func (v *Service) save() {
 				continue
 			}
 			recs = append(recs, pendingRec{UserID: k.uid, GroupID: k.gid, GroupMsgID: p.groupMsgID,
-				Mode: p.mode, Lang: p.persistedLang(), FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries,
-				Hinted: p.hinted, SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified, QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx,
-				Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
+				ChallengeDelivered: p.challengeDelivered && p.groupMsgID == 0, Mode: p.mode, Lang: p.persistedLang(),
+				FbAnswers: p.fbAnswers, Prompted: p.prompted, Tries: p.tries, Hinted: p.hinted,
+				SampleBounced: p.sampleBounced, NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
+				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name, Deadline: p.deadline.Unix()})
 		}
 		return recs
 	})
@@ -468,12 +469,13 @@ func (v *Service) load(bot verifyBot) {
 			log.Printf("state load: skip pending with invalid question payload (group %d user %d)", gid, uid)
 			continue
 		}
-		p := &pending{groupMsgID: r.GroupMsgID, mode: mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
+		p := &pending{groupMsgID: r.GroupMsgID, challengeDelivered: r.ChallengeDelivered || r.GroupMsgID != 0,
+			mode: mode, lang: i18n.FromStored(r.Lang), storedLang: r.Lang, preserveStoredLang: true,
 			fbAnswers: r.FbAnswers, prompted: r.Prompted, tries: r.Tries, hinted: r.Hinted, sampleBounced: r.SampleBounced,
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified, qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0)}
 		delay := time.Until(p.deadline)
-		reason := challengeExpiryReason(r.GroupMsgID)
+		reason := challengeExpiryReason(p.challengeDelivered)
 		switch {
 		case longOutage:
 			// The outage consumed the window, so refresh and do not strike on this lapse.
@@ -569,11 +571,16 @@ func (v *Service) onExpiry(c context.Context, bot verifyBot, gid, uid int64, non
 		v.deferExpiry(bot, gid, uid, nonce, epoch, reason)
 		return
 	}
-	p, ok := v.consumeExpiry(gid, uid, nonce, epoch)
+	p, ok := v.claimPendingExpiry(gid, uid, nonce, epoch)
 	if !ok {
 		return
 	}
-	v.finishDecline(c, bot, gid, uid, p, reason)
+	settled, banned := v.finishDecline(c, bot, gid, uid, p, reason)
+	text := v.messages.Verification.Result.DeclinePending.For(p.lang)
+	if settled {
+		text = v.timeoutResultText(gid, uid, p.lang, banned)
+	}
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
 }
 
 // Keep the original reason while re-arming offline expiries; nonce and epoch guard replacement.
@@ -598,7 +605,7 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	mention := joinerLabel(uid, name, v.NameSpoilerOn(gid))
 	link := ""
 	if v.botUsername != "" {
-		link = "https://t.me/" + v.botUsername + "?start=verify"
+		link = "https://t.me/" + v.botUsername + "?start=verify_" + gidStr
 	}
 	// Keep channel navigation inside the DM verification flow.
 	group := &(*v.messages).Verification.Group
@@ -768,6 +775,7 @@ func (v *Service) renotifyPending(c context.Context, bot verifyBot, gid, uid int
 	v.mu.Lock()
 	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
 		cur.groupMsgID = newMsg
+		cur.challengeDelivered = newMsg != 0
 	}
 	v.mu.Unlock()
 }

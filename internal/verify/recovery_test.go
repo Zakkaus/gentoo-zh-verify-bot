@@ -98,6 +98,57 @@ func TestOnExpiryOnlineDeclines(t *testing.T) {
 	}
 }
 
+func TestOnExpiryNotifiesApplicantOfRetryOutcome(t *testing.T) {
+	const (
+		gid = int64(-100)
+		uid = int64(5)
+	)
+	var retryText, bannedText, noWaitText string
+	for _, tt := range []struct {
+		name      string
+		maxFails  int
+		retry     int
+		wantBan   bool
+		resultOut *string
+	}{
+		{name: "retry cooldown", maxFails: 3, retry: 600, resultOut: &retryText},
+		{name: "automatic ban", maxFails: 1, retry: 600, wantBan: true, resultOut: &bannedText},
+		{name: "immediate retry", maxFails: 3, retry: -1, resultOut: &noWaitText},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newTestService(&config.Config{TimeoutSeconds: 240, VerifyMaxFails: tt.maxFails, VerifyRetrySeconds: tt.retry})
+			v.pend[pkey{gid, uid}] = &pending{
+				nonce:      "n",
+				lang:       i18n.LangEN,
+				deadline:   time.Now(),
+				groupMsgID: 42,
+			}
+			fb := &fakeVerifyBot{}
+
+			v.onExpiry(context.Background(), fb, gid, uid, "n", 0, "timeout")
+
+			want := v.messages.Verification.Result.TimeoutNoWait.For(i18n.LangEN)
+			if tt.retry > 0 {
+				want = v.messages.Verification.Result.TimeoutRetry.Render(i18n.LangEN, tt.retry)
+			}
+			if tt.wantBan {
+				duration := verificationBanDurationText(v.messages, i18n.LangEN, v.verificationBanDuration(gid))
+				want = v.messages.Verification.Result.TimeoutBanned.Render(i18n.LangEN, duration)
+			}
+			if fb.sends != 1 || fb.lastSendChat != uid || fb.lastSendText != want {
+				t.Fatalf("timeout result sends/chat/text = %d/%d/%q, want one applicant catalogue message %q", fb.sends, fb.lastSendChat, fb.lastSendText, want)
+			}
+			if (fb.bans != 0) != tt.wantBan {
+				t.Errorf("timeout ban calls = %d, wantBan=%v", fb.bans, tt.wantBan)
+			}
+			*tt.resultOut = fb.lastSendText
+		})
+	}
+	if retryText == bannedText || retryText == noWaitText || bannedText == noWaitText {
+		t.Errorf("timeout retry, automatic-ban, and no-wait outcomes must use distinct messages")
+	}
+}
+
 func TestOnExpiryOnsetLagProbeDefers(t *testing.T) {
 	v := newTestService(&config.Config{TimeoutSeconds: 240, VerifyMaxFails: 3}) // offlineNow == false (seeded online)
 	probe := &fakeVerifyBot{getMeErr: errors.New("network down")}
@@ -397,15 +448,15 @@ func TestOutageText(t *testing.T) {
 func TestChallengeExpiryReason(t *testing.T) {
 	tests := []struct {
 		name       string
-		groupMsgID int
+		delivered  bool
 		wantStrike bool
 	}{
-		{name: "challenge delivered", groupMsgID: 1, wantStrike: true},
-		{name: "challenge missing", groupMsgID: 0, wantStrike: false},
+		{name: "challenge delivered", delivered: true, wantStrike: true},
+		{name: "challenge missing", delivered: false, wantStrike: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason := challengeExpiryReason(tt.groupMsgID)
+			reason := challengeExpiryReason(tt.delivered)
 			if got := strikesUser(reason); got != tt.wantStrike {
 				t.Errorf("strikesUser(%q) = %v, want %v", reason, got, tt.wantStrike)
 			}

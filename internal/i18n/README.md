@@ -25,12 +25,29 @@ Keep the object nesting and key spelling identical across locales. JSON does not
 
 ## Add a locale
 
-A translator can prepare a locale without reading Go:
+Adding files and registering the catalogue is necessary but does not make a locale selectable.
+Complete every step:
 
 1. Copy an existing locale directory to a directory named with the new canonical locale tag.
-2. Translate every string value in all eight files. Keep every JSON key, array shape, HTML fragment, command, URL, and indexed placeholder.
-3. Ask a Go maintainer to add a documented `Lang` constant and a matching `localeDefinitions` entry in `catalog.go`. Their order must match, and the new entry must appear before `langCount`.
-4. Run `go test ./internal/i18n` after registration. The locale is not loaded or selectable until the Go registration is complete.
+2. Translate every string value in all eight files. Keep every JSON key, array shape, HTML
+   fragment, command, URL, and indexed placeholder.
+3. In `internal/i18n/catalog.go`, add a documented `Lang` constant before `langCount` and the
+   matching `localeDefinitions` entry in the same order. Update `FromTelegram`, `FromRequester`,
+   and `FromStored` so Telegram, requester, and persisted tags resolve to the new locale instead
+   of a fallback.
+4. In `internal/config/config.go`, extend `ValidLanguage`. This validator gates the top-level
+   `lang`, `groups[].lang`, feed `lang`, startup validation, and persisted panel values.
+5. In `internal/bot/commands.go`, add the locale to `SetupCommands` and decide which Telegram
+   `language_code` and per-chat command-menu scopes it needs. The current list registers only the
+   Simplified-Chinese fallback, `zh`, and `en`, with a separate Traditional-Chinese per-chat path.
+6. In `internal/panel/codec.go`, add a compact value to the `lg` callback grammar. In
+   `internal/panel/settings_panel.go`, map that value to the canonical tag and add the localized
+   language button. Keep the encoded callback within Telegram's 64-byte limit.
+7. Add an end-to-end selection test outside `internal/i18n` that selects the locale through a
+   public configuration or settings-panel path and asserts the rendered locale. Catalogue-only
+   tests cannot prove that users can select it.
+8. Run `go test ./internal/i18n`, then `go test -race -count=1 ./...`. The locale is complete only
+   when registration, every selection path, and the end-to-end test pass.
 
 ## Tests
 

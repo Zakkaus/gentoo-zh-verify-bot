@@ -61,10 +61,12 @@ The group picker lists only effective groups where the bot is still present and 
 
 The panel exposes source provenance—runtime override, `config.json`, or built-in default—and edits these values:
 
-- runtime: verification enabled, mode, name spoiler, ban duration, lookup auto-delete and TTL, and group language;
+- runtime: verification enabled, DM-first challenge delivery (on by default), mode, name spoiler, ban duration, lookup auto-delete and TTL, and group language;
 - lists: sender-channel whitelist, trusted-member groups, and known/support chats;
 - verification parameters: timeout (30–1,800 seconds), maximum failures or off, cooldown or off, and the bot-wide private-DM query rate;
 - required channel: select a channel, set or clear a private invite, or disable the gate.
+
+`dm_first` has a built-in `true` baseline. The runtime toggle commits the group's sparse override at the revision shown by the panel; restoring `true` removes the baseline-equal override. A concurrent group commit ends the panel with the same conflict handling as the neighboring runtime toggles.
 
 List additions use Telegram’s chat picker. The submitting admin must still belong to the selected chat. A required channel must also contain the bot. A private channel without a username requires a valid `https://t.me/...` invite before the channel and display are committed together. Duplicate list additions are no-ops. Removing an absent list item is treated as a concurrent change. Whitelisting commits first and then tries to unban the sender channel; unban failure is reported but does not roll back the whitelist.
 
@@ -88,4 +90,4 @@ Every rendered panel rotates its callback token and binds callbacks to the owner
 
 Navigation, pagination, refresh, and cancel can absorb a newer group revision. A mutation, draft action, confirmation, or input submission requires the revision captured by the session/prompt. A mismatch ends the session with a concurrent-change message rather than merging. Global private-rate commits independently check the captured global revision.
 
-`CommitGroup` and `CommitGlobal` build and validate a candidate, write it atomically when persistence is configured, and publish the new immutable snapshot only after the write succeeds. A write or validation failure ends the current panel session with a save-failed message. Telegram send/edit/delete failures can leave stale UI messages or keyboards; they do not bypass the revision or authorization checks.
+`CommitGroup` and `CommitGlobal` build and validate a candidate, write it atomically when persistence is configured, and publish the new immutable snapshot only after the write succeeds. A write or validation failure ends the current panel session with a save-failed message. If a runtime setting commits but the subsequent panel edit fails, the callback instead reports that the setting was probably saved and tells the administrator to reopen the panel. Telegram send/edit/delete failures can leave stale UI messages or keyboards; they do not bypass the revision or authorization checks.

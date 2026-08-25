@@ -21,6 +21,7 @@ const (
 func testSettingsBaseline() SettingsBaseline {
 	group := GroupBaseline{
 		Enabled:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
+		DMFirst:                 BaselineValue[bool]{Value: true, Source: SourceDefault},
 		VerifyMode:              BaselineValue[string]{Value: config.ModeKernel, Source: SourceDefault},
 		NameSpoiler:             BaselineValue[bool]{Value: true, Source: SourceDefault},
 		BanSeconds:              BaselineValue[int]{Value: 0, Source: SourceDefault},
@@ -71,6 +72,9 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	if got := initial.Enabled(); got.Value != true || got.Source != SourceDefault {
 		t.Fatalf("initial enabled = %+v, want built-in true", got)
 	}
+	if got := initial.DMFirst(); !got.Value || got.Source != SourceDefault {
+		t.Fatalf("initial DM-first = %+v, want built-in true", got)
+	}
 	if got := initial.TimeoutSeconds(); got.Value != 240 || got.Source != SourceConfig {
 		t.Fatalf("initial timeout = %+v, want configured 240", got)
 	}
@@ -101,6 +105,7 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	fallback := []config.ShortQuestion{{Q: "Package manager?", Answers: []string{"portage", "emerge"}}}
 	next := GroupOverrides{
 		Enabled:                 ptr(false),
+		DMFirst:                 ptr(false),
 		VerifyMode:              ptr(config.ModeMixed),
 		NameSpoiler:             ptr(false),
 		BanSeconds:              ptr(3600),
@@ -147,6 +152,9 @@ func TestSettingsSparseRoundTripAndRestore(t *testing.T) {
 	group, _ := reloaded.Group(testGroupA)
 	if group.Revision() != 1 || group.Enabled().Value || group.Enabled().Source != SourceRuntime {
 		t.Fatalf("reloaded enabled/revision = %+v/%d", group.Enabled(), group.Revision())
+	}
+	if got := group.DMFirst(); got.Value || got.Source != SourceRuntime {
+		t.Fatalf("reloaded DM-first = %+v, want runtime false", got)
 	}
 	if got := group.ChannelWhitelist(); len(got.Value) != 0 || got.Source != SourceRuntime {
 		t.Fatalf("explicit empty channel whitelist = %+v", got)

@@ -119,8 +119,13 @@
       "ai_caught_no_wait": "❌ This reply triggered the automated-answer check, so the join request was declined. You can reapply now and complete verification yourself.",
       "already_handled": "This request has already been handled or verification cannot continue. Check the group first; if you have not joined, reopen the verification link or submit a new join request.",
       "approved": "✅ Verification passed. Your join request was approved. Welcome.",
+      "cooldown_active": "❌ Verification is still in cooldown, so this join request was declined. Reapply in %[1]d seconds.",
+      "decline_pending": "⚠️ The bot could not decline your join request, so it may still be pending. Wait for a group administrator before submitting another request.",
       "not_yours": "This is not your join request. Open the verification link for your own request.",
       "stale_question": "This question has expired. Reopen the verification link to receive a new question.",
+      "timeout_banned": "❌ Verification timed out, so the join request was declined and you received a %[1]s ban. Reapply after the ban expires; for a permanent ban, contact a group administrator.",
+      "timeout_no_wait": "❌ Verification timed out, so the join request was declined. You can reapply now.",
+      "timeout_retry": "❌ Verification timed out, so the join request was declined. Reapply in %[1]d seconds.",
       "wrong_banned": "❌ The configured verification failure limit was reached, so the join request was declined and you received a %[1]s ban. Reapply after the ban expires; for a permanent ban, contact a group administrator.",
       "wrong_no_wait": "❌ The answer was incorrect, so the join request was declined. Reapply now.",
       "wrong_retry": "❌ The answer was incorrect, so the join request was declined. Reapply in %[1]d seconds."

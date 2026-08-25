@@ -267,8 +267,7 @@ func aiTrapToken(nonce string) string {
 
 // The tripwire asks automated agents for an exact nonce-bound token and model declaration.
 // It is only a deterrent; typed answers, deadlines, cooldowns, and strikes remain the gate.
-// English works across applicant locales. Expandable markup keeps it out of a human's way.
-// Old self-hosted Bot API servers may reject the entity, so callers also render a fallback.
+// Localized copy keeps the legacy plain rendering readable when expandable markup is unavailable.
 func aiTrapLine(messages *i18n.Catalog, l i18n.Lang, nonce string, expandable bool) string {
 	body := messages.Verification.Challenge.AgentTrap.Render(l, aiTrapToken(nonce))
 	if expandable {
@@ -517,8 +516,14 @@ func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, no
 	} else {
 		log.Printf("verify: declining %d in %d — the same reply tripped the tripwire in another group", uid, gid)
 	}
-	_, banned := v.decline(c, bot, gid, uid, cur, "wrong answer")
-	msg := v.agentCaughtText(gid, ul, banned)
+	handled, settled, banned := v.decline(c, bot, gid, uid, cur, "wrong answer")
+	if !handled {
+		return
+	}
+	msg := v.messages.Verification.Result.DeclinePending.For(ul)
+	if settled {
+		msg = v.agentCaughtText(gid, ul, banned)
+	}
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 }
 
@@ -557,8 +562,15 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			return
 		}
 		// Decline only the nonce charged by recordKernelTry, never a replacement pending.
-		_, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer")
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(gid, ul, banned)))
+		handled, settled, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer")
+		if !handled {
+			return
+		}
+		msg := v.messages.Verification.Result.DeclinePending.For(ul)
+		if settled {
+			msg = v.wrongAnswerText(gid, ul, banned)
+		}
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
 	// Give WSL or VM users one free clarification before accepting the same real kernel.
@@ -599,8 +611,15 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.KernelWrong.Render(ul, left)))
 			return
 		}
-		_, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer") // the nonce as of the charge, see above
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.wrongAnswerText(gid, ul, banned)))
+		handled, settled, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer") // the nonce as of the charge, see above
+		if !handled {
+			return
+		}
+		msg := v.messages.Verification.Result.DeclinePending.For(ul)
+		if settled {
+			msg = v.wrongAnswerText(gid, ul, banned)
+		}
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
 	v.finishKernelPass(c, bot, gid, uid, nonce, ul, groupLang)

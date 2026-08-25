@@ -122,6 +122,11 @@ func (v *Panel) openSettingsStart(ctx *th.Context, message *telego.Message, toke
 	return true
 }
 
+type postCommitRenderError struct{ err error }
+
+func (e *postCommitRenderError) Error() string { return e.err.Error() }
+func (e *postCommitRenderError) Unwrap() error { return e.err }
+
 // OnSettingsCallback authorizes and applies one versioned panel callback.
 func (v *Panel) OnSettingsCallback(ctx *th.Context, update telego.Update) error {
 	query := update.CallbackQuery
@@ -174,6 +179,14 @@ func (v *Panel) OnSettingsCallback(ctx *th.Context, update telego.Update) error 
 		return nil
 	}
 	if err := v.dispatchCallback(requestCtx, bot, session, data); err != nil {
+		var postCommit *postCommitRenderError
+		if errors.As(err, &postCommit) {
+			log.Printf("settings callback for group %d committed but panel render failed: %v", data.group, postCommit)
+			text := i18n.Messages.Panel.Settings.Error.SavedRenderFailed.For(session.language)
+			v.finishSession(requestCtx, bot, session, text)
+			v.answerCallback(requestCtx, bot, query.ID, text, true)
+			return nil
+		}
 		var notice *panelNoticeError
 		if errors.As(err, &notice) {
 			v.answerCallback(requestCtx, bot, query.ID, notice.text, true)
@@ -309,6 +322,9 @@ func (v *Panel) dispatchRuntime(ctx context.Context, bot *telego.Bot, session *p
 	case "en":
 		value := !group.Enabled().Value
 		next.Enabled = &value
+	case "df":
+		value := !group.DMFirst().Value
+		next.DMFirst = &value
 	case "vm":
 		value := map[string]string{"k": config.ModeKernel, "q": config.ModeQuiz, "m": config.ModeMixed}[data.value]
 		next.VerifyMode = &value
@@ -336,7 +352,10 @@ func (v *Panel) dispatchRuntime(ctx context.Context, bot *telego.Bot, session *p
 	if data.field == "lg" {
 		session.language = i18n.FromStored(*next.Lang)
 	}
-	return v.renderSession(ctx, bot, session, session.groupID)
+	if err := v.renderSession(ctx, bot, session, session.groupID); err != nil {
+		return &postCommitRenderError{err: err}
+	}
+	return nil
 }
 
 func (v *Panel) dispatchLists(ctx context.Context, bot *telego.Bot, session *panelSession, data callbackData) error {
@@ -583,11 +602,13 @@ func (v *Panel) buildRuntime(session *panelSession, token string) (string, *tele
 	}
 	text := i18n.Messages.Panel.Settings.Screen.Runtime.Render(session.language, session.groupID,
 		v.sourcedBool(session.language, group.Enabled()), v.sourcedMode(session.language, group.VerifyMode()),
-		v.sourcedBool(session.language, group.NameSpoiler()), v.sourcedSeconds(session.language, group.BanSeconds(), true),
+		v.sourcedBool(session.language, group.DMFirst()), v.sourcedBool(session.language, group.NameSpoiler()),
+		v.sourcedSeconds(session.language, group.BanSeconds(), true),
 		v.sourcedBool(session.language, group.LookupAutoDeleteEnabled()), v.sourcedSeconds(session.language, group.LookupTTLSeconds(), false),
 		v.sourcedLanguage(session.language, group.Lang()))
 	buttons := []panelButton{
 		{text: i18n.Messages.Panel.Settings.Field.Verification.For(session.language), field: "en", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.DMFirst.For(session.language), field: "df", value: "_"},
 		{text: i18n.Messages.Panel.Settings.Field.ModeKernel.For(session.language), field: "vm", value: "k"},
 		{text: i18n.Messages.Panel.Settings.Field.ModeQuiz.For(session.language), field: "vm", value: "q"},
 		{text: i18n.Messages.Panel.Settings.Field.ModeMixed.For(session.language), field: "vm", value: "m"},

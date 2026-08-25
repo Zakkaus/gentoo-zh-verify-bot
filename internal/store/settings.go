@@ -62,6 +62,7 @@ type BaselineValue[T any] struct {
 type GroupBaseline struct {
 	ID                      int64
 	Enabled                 BaselineValue[bool]
+	DMFirst                 BaselineValue[bool]
 	VerifyMode              BaselineValue[string]
 	NameSpoiler             BaselineValue[bool]
 	BanSeconds              BaselineValue[int]
@@ -100,6 +101,7 @@ type SettingsBaseline struct {
 // GroupOverrides is the sparse per-group settings.json record. A nil field follows the baseline.
 type GroupOverrides struct {
 	Enabled                 *bool                   `json:"enabled,omitempty"`
+	DMFirst                 *bool                   `json:"dm_first,omitempty"`
 	VerifyMode              *string                 `json:"verify_mode,omitempty"`
 	NameSpoiler             *bool                   `json:"name_spoiler,omitempty"`
 	BanSeconds              *int                    `json:"ban_seconds,omitempty"`
@@ -259,6 +261,7 @@ type effectiveGroup struct {
 	baseline                GroupBaseline
 	overrides               GroupOverrides
 	enabled                 Setting[bool]
+	dmFirst                 Setting[bool]
 	verifyMode              Setting[string]
 	nameSpoiler             Setting[bool]
 	banSeconds              Setting[int]
@@ -708,6 +711,7 @@ func (v GroupView) ID() int64                   { return v.group.id }
 func (v GroupView) Revision() uint64            { return v.group.revision }
 func (v GroupView) RuntimeRegistered() bool     { return v.group.registered }
 func (v GroupView) Enabled() Setting[bool]      { return v.group.enabled }
+func (v GroupView) DMFirst() Setting[bool]      { return v.group.dmFirst }
 func (v GroupView) VerifyMode() Setting[string] { return v.group.verifyMode }
 func (v GroupView) NameSpoiler() Setting[bool]  { return v.group.nameSpoiler }
 func (v GroupView) BanSeconds() Setting[int]    { return v.group.banSeconds }
@@ -921,6 +925,7 @@ func buildEffectiveGroup(baseline GroupBaseline, record groupRecord, registered 
 		baseline:         cloneGroupBaseline(baseline),
 		overrides:        cloneGroupOverrides(record.GroupOverrides),
 		enabled:          resolve(record.Enabled, baseline.Enabled),
+		dmFirst:          resolve(record.DMFirst, baseline.DMFirst),
 		verifyMode:       resolve(record.VerifyMode, baseline.VerifyMode),
 		nameSpoiler:      resolve(record.NameSpoiler, baseline.NameSpoiler),
 		banSeconds:       resolve(record.BanSeconds, baseline.BanSeconds),
@@ -1005,7 +1010,7 @@ func validateBaseline(baseline SettingsBaseline) error {
 
 func validateBaselineSources(group GroupBaseline) error {
 	sources := []Source{
-		group.Enabled.Source, group.VerifyMode.Source, group.NameSpoiler.Source,
+		group.Enabled.Source, group.DMFirst.Source, group.VerifyMode.Source, group.NameSpoiler.Source,
 		group.BanSeconds.Source, group.LookupTTLSeconds.Source, group.LookupAutoDeleteEnabled.Source,
 		group.TimeoutSeconds.Source, group.VerifyMaxFails.Source, group.VerifyRetrySeconds.Source,
 		group.AntispamEnabled.Source, group.ChannelWhitelist.Source,
@@ -1331,6 +1336,7 @@ func cloneRegistrationState(value RegistrationState) RegistrationState {
 func cloneGroupOverrides(value GroupOverrides) GroupOverrides {
 	out := value
 	out.Enabled = clonePtr(value.Enabled)
+	out.DMFirst = clonePtr(value.DMFirst)
 	out.VerifyMode = clonePtr(value.VerifyMode)
 	out.NameSpoiler = clonePtr(value.NameSpoiler)
 	out.BanSeconds = clonePtr(value.BanSeconds)
@@ -1362,6 +1368,7 @@ func cloneGlobalOverrides(value GlobalOverrides) GlobalOverrides {
 
 func compactGroupOverrides(value GroupOverrides, baseline GroupBaseline) GroupOverrides {
 	value.Enabled = omitBaseline(value.Enabled, baseline.Enabled.Value)
+	value.DMFirst = omitBaseline(value.DMFirst, baseline.DMFirst.Value)
 	value.VerifyMode = omitBaseline(value.VerifyMode, baseline.VerifyMode.Value)
 	value.NameSpoiler = omitBaseline(value.NameSpoiler, baseline.NameSpoiler.Value)
 	value.BanSeconds = omitBaseline(value.BanSeconds, baseline.BanSeconds.Value)

@@ -470,6 +470,32 @@ func TestAITrap(t *testing.T) {
 	}
 }
 
+func TestAITrapIsLocalizedWithoutChangingReplyContract(t *testing.T) {
+	const nonce = "abc123"
+	token := aiTrapToken(nonce)
+	english := i18n.Messages.Verification.Challenge.AgentTrap.Render(i18n.LangEN, token)
+	for _, language := range []i18n.Lang{i18n.LangZH, i18n.LangZHHant} {
+		localized := i18n.Messages.Verification.Challenge.AgentTrap.Render(language, token)
+		if localized == english {
+			t.Errorf("agent trap for %s is still the English catalogue entry", language)
+		}
+		if strings.Count(localized, token) != strings.Count(english, token) {
+			t.Errorf("agent trap for %s changed nonce occurrences: got %d, want %d", language,
+				strings.Count(localized, token), strings.Count(english, token))
+		}
+		if strings.Count(localized, " model=") != strings.Count(english, " model=") {
+			t.Errorf("agent trap for %s changed the model reply syntax", language)
+		}
+		reply := token + " model=gpt-5.2"
+		if !aiTrapped(reply, nonce) {
+			t.Errorf("localized tripwire contract no longer matches %q", reply)
+		}
+		if kernelAnswerOK(reply) {
+			t.Errorf("tripwire reply %q must not pass as a kernel answer", reply)
+		}
+	}
+}
+
 func TestNoLinuxFallback(t *testing.T) {
 	// Covers how people actually phrase it in both scripts — a missed phrasing costs a real newcomer
 	// an attempt instead of switching them to the short-answer question.

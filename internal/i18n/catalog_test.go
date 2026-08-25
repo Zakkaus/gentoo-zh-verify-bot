@@ -1,6 +1,7 @@
 package i18n
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -123,6 +124,28 @@ func TestCatalogComplete(t *testing.T) {
 					t.Errorf("%s exposes its answer", catalogEntry(path, locale))
 				}
 			}
+		}
+	}
+}
+
+func TestSetupRecoveryCatalogNamesImplementedRestartAction(t *testing.T) {
+	for _, definition := range localeDefinitions {
+		data, err := localeFiles.ReadFile(localeFilePath(definition.tag, "moderate"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw struct {
+			Setup map[string]string `json:"setup"`
+		}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatal(err)
+		}
+		recovery, ok := raw.Setup["restart"]
+		if !ok || recovery == "" {
+			t.Errorf("%s setup catalogue has no restart recovery action", definition.tag)
+		}
+		if _, stale := raw.Setup["recheck"]; stale {
+			t.Errorf("%s setup catalogue still names the nonexistent recheck action", definition.tag)
 		}
 	}
 }

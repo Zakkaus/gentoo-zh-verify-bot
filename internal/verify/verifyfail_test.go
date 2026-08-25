@@ -162,24 +162,6 @@ func TestVerifyFailCapacityEvictsOldestWithoutClearingLiveState(t *testing.T) {
 	}
 }
 
-func TestConsumeNonceIdentity(t *testing.T) {
-	v := newTestService(&config.Config{})
-	key := pkey{-100, 42}
-	v.pend[key] = &pending{nonce: "NEW"}
-	if _, ok := v.consumeNonce(-100, 42, "OLD"); ok {
-		t.Error("stale nonce must NOT consume the fresh pending")
-	}
-	if _, ok := v.pend[key]; !ok {
-		t.Error("fresh pending must survive a stale-nonce consume attempt")
-	}
-	if _, ok := v.consumeNonce(-100, 42, "NEW"); !ok {
-		t.Error("matching nonce should consume")
-	}
-	if _, ok := v.pend[key]; ok {
-		t.Error("pending should be gone after a matching consume")
-	}
-}
-
 func TestClaimPendingNonce(t *testing.T) {
 	v := newTestService(&config.Config{})
 	key := pkey{-100, 42}

@@ -150,6 +150,7 @@ type PanelSettingsFieldCatalog struct {
 	Content                Text
 	ChangeGroup            Text
 	Verification           Text
+	DMFirst                Text
 	ModeKernel             Text
 	ModeQuiz               Text
 	ModeMixed              Text
@@ -207,6 +208,7 @@ type PanelSettingsErrorCatalog struct {
 	AuthorizationCheckFailed  Text
 	ConcurrentChange          Text
 	SaveFailed                Text
+	SavedRenderFailed         Text
 	InvalidInput              Text
 	InvalidNumber             Text
 	InvalidDuration           Text

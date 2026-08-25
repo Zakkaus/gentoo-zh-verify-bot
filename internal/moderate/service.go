@@ -132,7 +132,7 @@ func (s *Service) CheckGroupSetup(ctx context.Context, bot MemberLookup, selfID,
 		return SetupReport{GroupID: groupID, Ready: true, Text: messages.Ready.Render(l, title, groupID)}
 	}
 	text := messages.MissingHeader.Render(l, title, groupID) + "\n- " +
-		strings.Join(missing, "\n- ") + "\n" + messages.Recheck.For(l)
+		strings.Join(missing, "\n- ") + "\n" + messages.Restart.For(l)
 	return SetupReport{GroupID: groupID, Text: text}
 }
 

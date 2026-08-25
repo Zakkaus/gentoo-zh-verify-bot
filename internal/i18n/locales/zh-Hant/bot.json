@@ -36,7 +36,7 @@
     "unauthorized_chat": "🚪 已自動退出未授權聊天：%[1]s（ID：%[2]d，類型：%[3]s）。"
   },
   "direct_message": {
-    "auto_reply": "👋 這是 Gentoo 中文社群的加入群組驗證與 Gentoo/Linux 助手機器人。\n\n• 申請加入群組：請返回群組提出加入申請，再點選群組內機器人訊息中的「✅ 開始驗證」，並在此完成驗證。\n• 查詢指令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私訊中使用。私訊每分鐘最多 %[1]d 次，群組內不限次數。\n• 審核與管理指令僅可在群組內使用。"
+    "auto_reply": "👋 這是 Gentoo 中文社群的加入群組驗證與 Gentoo/Linux 助手機器人。\n\n• 申請加入群組：請在群組提出加入申請。如果你以前曾向此機器人傳送過 /start，機器人會立即透過私訊傳送驗證題；否則，請點選群組內機器人訊息中的「✅ 開始驗證」。\n• 查詢指令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私訊中使用。私訊每分鐘最多 %[1]d 次，群組內不限次數。\n• 審核與管理指令僅可在群組內使用。"
   },
   "registration": {
     "owner_claimed": "部署者身分已綁定。現在可以新增群組。",

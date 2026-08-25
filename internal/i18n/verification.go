@@ -96,6 +96,16 @@ type VerificationResultCatalog struct {
 	AICaughtNoWait Text
 	// Approved reports successful verification.
 	Approved Text
+	// CooldownActive formats an early reapplication refusal and its remaining cooldown.
+	CooldownActive Format
+	// DeclinePending reports that Telegram may still hold the join request.
+	DeclinePending Text
+	// TimeoutRetry formats a timeout rejection and its retry cooldown.
+	TimeoutRetry Format
+	// TimeoutNoWait reports a timeout rejection without a cooldown.
+	TimeoutNoWait Text
+	// TimeoutBanned formats a timeout rejection and its automatic ban duration.
+	TimeoutBanned Format
 	// WrongRetry formats the retry cooldown.
 	WrongRetry Format
 	// WrongNoWait reports rejection without a cooldown.

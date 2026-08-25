@@ -373,6 +373,12 @@ func TestGroupSetupReportPermissionsAndChannelReadability(t *testing.T) {
 			if test.wantText != "" && !strings.Contains(report.Text, test.wantText) {
 				t.Fatalf("report %q does not contain %q", report.Text, test.wantText)
 			}
+			if !test.ready {
+				restart := i18n.Messages.Moderate.Setup.Restart.For(i18n.LangEN)
+				if !strings.Contains(report.Text, restart) {
+					t.Fatalf("incomplete setup report %q does not contain catalogue recovery %q", report.Text, restart)
+				}
+			}
 			if len(telegram.memberRequests) != test.wantLookups {
 				t.Fatalf("member lookups = %d, want %d: %+v", len(telegram.memberRequests), test.wantLookups, telegram.memberRequests)
 			}

@@ -99,11 +99,12 @@ func TestRuntimeRegistrationActivatesServicesWithoutRebuiltConfig(t *testing.T) 
 	}
 
 	beforeJoin := caller.sentTo(groupID)
+	beforePrivate := caller.sentTo(userID)
 	runRuntimeHandler(t, bot, verification.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
 		Chat: telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Runtime Group"},
 		From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
 	}})
-	joinHandled := caller.sentTo(groupID) > beforeJoin
+	joinHandled := caller.sentTo(userID) > beforePrivate && caller.sentTo(groupID) == beforeJoin
 
 	runRuntimeHandler(t, bot, administration.OnStop, telego.Update{Message: &telego.Message{
 		MessageID: 2,
@@ -122,7 +123,7 @@ func TestRuntimeRegistrationActivatesServicesWithoutRebuiltConfig(t *testing.T) 
 		t.Error("runtime group did not receive its locale-specific command scope")
 	}
 	if !joinHandled {
-		t.Error("runtime group join request did not create a verification challenge")
+		t.Error("runtime group join request did not create only the default private verification challenge")
 	}
 	if !commandHandled {
 		t.Error("runtime group /stop command did not change verification state")

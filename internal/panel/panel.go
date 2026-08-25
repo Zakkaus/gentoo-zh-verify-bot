@@ -26,7 +26,7 @@ type Verification interface {
 	KernelAnswerDM(ctx context.Context, update telego.Update) bool
 	EffectiveMode(groupID int64) string
 	IsEnabled(groupID int64) bool
-	SendDMChallenge(ctx context.Context, bot *telego.Bot, userID int64)
+	SendDMChallenge(ctx context.Context, bot *telego.Bot, userID int64, languageCode string, groupID int64)
 	SetAutoDelete(groupID int64, ttl time.Duration, enabled bool) error
 	SetEnabled(groupID int64, enabled bool) error
 	SetVerifyMode(groupID int64, mode string) error
@@ -143,6 +143,25 @@ func (v *Panel) OnPing(ctx *th.Context, update telego.Update) error {
 	})
 }
 
+func verificationStartGroup(text string) int64 {
+	fields := strings.Fields(text)
+	if len(fields) != 2 {
+		return 0
+	}
+	command := fields[0]
+	if index := strings.IndexByte(command, '@'); index >= 0 {
+		command = command[:index]
+	}
+	if command != "/start" || !strings.HasPrefix(fields[1], "verify_") {
+		return 0
+	}
+	groupID, err := strconv.ParseInt(strings.TrimPrefix(fields[1], "verify_"), 10, 64)
+	if err != nil || groupID >= 0 {
+		return 0
+	}
+	return groupID
+}
+
 // OnStart routes settings deep links before the existing verification branch.
 func (v *Panel) OnStart(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
@@ -151,7 +170,7 @@ func (v *Panel) OnStart(ctx *th.Context, update telego.Update) error {
 			return nil
 		}
 		if msg.From != nil {
-			v.verifier.SendDMChallenge(ctx.Context(), ctx.Bot(), msg.From.ID)
+			v.verifier.SendDMChallenge(ctx.Context(), ctx.Bot(), msg.From.ID, msg.From.LanguageCode, verificationStartGroup(msg.Text))
 		}
 		return nil
 	}

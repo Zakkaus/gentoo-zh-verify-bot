@@ -3,9 +3,13 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
 	"math"
+	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/verify"
 	"github.com/mymmrac/telego"
 	ta "github.com/mymmrac/telego/telegoapi"
 )
@@ -41,7 +46,7 @@ func (v *panelVerifierStub) KernelAnswerDM(_ context.Context, update telego.Upda
 	return v.kernelPending && message != nil && message.From != nil && message.Chat.Type == "private" &&
 		strings.TrimSpace(message.Text) != "" && !strings.HasPrefix(strings.TrimSpace(message.Text), "/")
 }
-func (v *panelVerifierStub) SendDMChallenge(context.Context, *telego.Bot, int64) {
+func (v *panelVerifierStub) SendDMChallenge(context.Context, *telego.Bot, int64, string, int64) {
 	v.challengeCalls++
 }
 func (v *panelVerifierStub) SetAutoDelete(int64, time.Duration, bool) error { return nil }
@@ -53,11 +58,14 @@ func (v *panelVerifierStub) ToggleRich() (bool, error)                      { re
 
 type panelAPICaller struct {
 	admin                bool
+	editErr              error
 	memberCalls          atomic.Int32
 	lastEditText         string
 	lastAnswerText       string
 	lastSendText         string
 	lastURL              string
+	sendChats            []int64
+	sendTexts            []string
 	messageID            int
 	replyKeyboardRemoved bool
 	senderUnbans         []telego.UnbanChatSenderChatParams
@@ -90,6 +98,9 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 			return nil, err
 		}
 		c.lastEditText = request.Text
+		if c.editErr != nil {
+			return nil, c.editErr
+		}
 		return panelAPIResponse(&telego.Message{MessageID: 90})
 	case "answerCallbackQuery":
 		var request struct {
@@ -102,6 +113,7 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 		return panelAPIResponse(true)
 	case "sendMessage":
 		var request struct {
+			ChatID      int64  `json:"chat_id"`
 			Text        string `json:"text"`
 			ReplyMarkup struct {
 				InlineKeyboard [][]struct {
@@ -114,6 +126,8 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 			return nil, err
 		}
 		c.lastSendText = request.Text
+		c.sendChats = append(c.sendChats, request.ChatID)
+		c.sendTexts = append(c.sendTexts, request.Text)
 		if len(request.ReplyMarkup.InlineKeyboard) > 0 && len(request.ReplyMarkup.InlineKeyboard[0]) > 0 {
 			c.lastURL = request.ReplyMarkup.InlineKeyboard[0][0].URL
 		}
@@ -318,6 +332,121 @@ func TestSettingsLauncherOpensGroupPickerWithoutVerification(t *testing.T) {
 		!strings.Contains(caller.lastSendText, fmt.Sprintf("%d", panelTestGroupA)) ||
 		!strings.Contains(caller.lastSendText, fmt.Sprintf("%d", panelTestGroupB)) {
 		t.Fatalf("group picker did not render: message=%q session=%+v", caller.lastSendText, session)
+	}
+}
+
+func TestVerificationStartPayloadSelectsOnePendingGroupAndBarePayloadStillFansOut(t *testing.T) {
+	const userID int64 = 8801
+	questionA := config.Question{Q: "Group A question", Options: []string{"A", "B"}, Answer: 0}
+	questionB := config.Question{Q: "Group B question", Options: []string{"A", "B"}, Answer: 1}
+
+	newFlow := func(t *testing.T) (*Panel, *verify.Service, *panelAPICaller, *telego.Bot) {
+		t.Helper()
+		cfg := &config.Config{
+			Groups: []config.GroupConfig{
+				{ID: panelTestGroupA, VerifyMode: config.ModeQuiz, Questions: []config.Question{questionA}},
+				{ID: panelTestGroupB, VerifyMode: config.ModeQuiz, Questions: []config.Question{questionB}},
+			},
+			GroupIDs:       []int64{panelTestGroupA, panelTestGroupB},
+			ControlGroupID: panelTestGroupA,
+			Lang:           "en",
+			VerifyMode:     config.ModeQuiz,
+			TimeoutSeconds: 240,
+		}
+		settings, err := store.NewSettings("", testSettingsBaseline(t, cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		caller := &panelAPICaller{messageID: 100}
+		bot := newAPITestBot(t, caller)
+		telegram := tg.New(bot)
+		verifier := verify.New(settings, telegram, cfg, &i18n.Messages, bot,
+			verify.Identity{ID: 500, Username: "settings_test_bot"}, "")
+		t.Cleanup(verifier.Shutdown)
+		panel := New(settings, telegram, cfg, &i18n.Messages, verifier, nil, nil, "test", time.Now())
+		for _, groupID := range []int64{panelTestGroupA, panelTestGroupB} {
+			runFakeHandler(t, bot, verifier.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+				Chat: telego.Chat{ID: groupID, Type: "supergroup"},
+				From: telego.User{ID: userID, FirstName: "Applicant", LanguageCode: "en"},
+			}})
+		}
+		caller.sendChats = nil
+		caller.sendTexts = nil
+		return panel, verifier, caller, bot
+	}
+
+	t.Run("group-scoped payload", func(t *testing.T) {
+		panel, _, caller, bot := newFlow(t)
+		runFakeHandler(t, bot, panel.OnStart, telego.Update{Message: &telego.Message{
+			Chat: telego.Chat{ID: userID, Type: "private"},
+			From: &telego.User{ID: userID, LanguageCode: "en"},
+			Text: fmt.Sprintf("/start verify_%d", panelTestGroupB),
+		}})
+		want := i18n.Messages.Verification.Challenge.QuizPrompt.Render(i18n.LangEN, html.EscapeString(questionB.Q))
+		if len(caller.sendTexts) != 1 || caller.sendChats[0] != userID || caller.sendTexts[0] != want {
+			t.Fatalf("scoped start sends/chats = %q/%v, want only group B catalogue prompt %q", caller.sendTexts, caller.sendChats, want)
+		}
+	})
+
+	t.Run("bare payload", func(t *testing.T) {
+		panel, _, caller, bot := newFlow(t)
+		runFakeHandler(t, bot, panel.OnStart, telego.Update{Message: &telego.Message{
+			Chat: telego.Chat{ID: userID, Type: "private"},
+			From: &telego.User{ID: userID, LanguageCode: "en"},
+			Text: "/start verify",
+		}})
+		if len(caller.sendTexts) != 2 || caller.sendChats[0] != userID || caller.sendChats[1] != userID {
+			t.Fatalf("bare start sends/chats = %q/%v, want both live challenges", caller.sendTexts, caller.sendChats)
+		}
+	})
+}
+
+func TestPanelDMFirstTogglePersistsAndRejectsStaleRevision(t *testing.T) {
+	path := t.TempDir() + "/settings.json"
+	panel, settings, caller, bot := newSettingsPanelTest(t, path)
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "rt")
+
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "df", "_")
+	readOverride := func() *bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state struct {
+			Groups map[string]struct {
+				DMFirst *bool `json:"dm_first"`
+			} `json:"groups"`
+		}
+		if err := json.Unmarshal(data, &state); err != nil {
+			t.Fatal(err)
+		}
+		return state.Groups[strconv.FormatInt(panelTestGroupA, 10)].DMFirst
+	}
+	if value := readOverride(); value == nil || *value {
+		t.Fatalf("DM-first override after panel toggle = %v, want persisted false", value)
+	}
+	setting, ok := settings.Group(panelTestGroupA)
+	if !ok {
+		t.Fatal("panel group disappeared after DM-first toggle")
+	}
+	if got := setting.DMFirst(); got.Value || got.Source != store.SourceRuntime {
+		t.Fatalf("effective DM-first setting after panel toggle = %+v", got)
+	}
+
+	group, _ := settings.Group(panelTestGroupA)
+	next := group.Overrides()
+	spoiler := !group.NameSpoiler().Value
+	next.NameSpoiler = &spoiler
+	if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), next); err != nil {
+		t.Fatal(err)
+	}
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "df", "_")
+	if value := readOverride(); value == nil || *value {
+		t.Fatalf("stale callback changed persisted DM-first override to %v", value)
+	}
+	if caller.lastEditText != i18n.Messages.Panel.Settings.Error.ConcurrentChange.For(i18n.LangEN) {
+		t.Fatalf("stale DM-first callback message = %q, want catalogue conflict text %q",
+			caller.lastEditText, i18n.Messages.Panel.Settings.Error.ConcurrentChange.For(i18n.LangEN))
 	}
 }
 
@@ -854,5 +983,22 @@ func TestPanelFailedCommitSurfaced(t *testing.T) {
 	}
 	if err := settings.Persistence().LastError; err == nil {
 		t.Fatal("failed settings path did not retain its error")
+	}
+}
+
+func TestPanelPostCommitRenderFailureDoesNotClaimSaveFailed(t *testing.T) {
+	panel, settings, caller, bot := newSettingsPanelTest(t, "")
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "rt")
+	caller.editErr = errors.New("edit failed after commit")
+
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "en", "_")
+
+	group, _ := settings.Group(panelTestGroupA)
+	if group.Enabled().Value {
+		t.Fatal("runtime setting was not committed before the render failure")
+	}
+	want := i18n.Messages.Panel.Settings.Error.SavedRenderFailed.For(i18n.LangEN)
+	if caller.lastAnswerText != want {
+		t.Fatalf("post-commit callback message = %q, want saved-render warning %q", caller.lastAnswerText, want)
 	}
 }

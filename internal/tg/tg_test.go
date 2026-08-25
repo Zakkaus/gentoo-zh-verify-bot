@@ -103,9 +103,10 @@ func TestSendHTMLFallback(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			caller := &scriptedCaller{responses: map[string][]scriptedResult{"sendMessage": tt.responses}}
 			client := newTestClient(t, caller)
-			if got := client.SendHTMLFallback(context.Background(), 5,
-				`<blockquote expandable><b>rich</b></blockquote>`, `<b>simple &amp; safe</b>`); got != tt.wantOK {
-				t.Fatalf("SendHTMLFallback() = %v, want %v", got, tt.wantOK)
+			got, err := client.SendHTMLFallback(context.Background(), 5,
+				`<blockquote expandable><b>rich</b></blockquote>`, `<b>simple &amp; safe</b>`)
+			if got != tt.wantOK || (err == nil) != tt.wantOK {
+				t.Fatalf("SendHTMLFallback() = (%v, %v), want success %v", got, err, tt.wantOK)
 			}
 			calls := caller.methodCalls("sendMessage")
 			if len(calls) != tt.wantCalls {
@@ -472,6 +473,12 @@ func TestUnmuteRejectsUnavailableDefaults(t *testing.T) {
 func TestErrorClassification(t *testing.T) {
 	if !IsBlocked(&ta.Error{ErrorCode: 403, Description: "Forbidden"}) || IsBlocked(errors.New("Bad Gateway")) {
 		t.Error("403 blocked classification failed")
+	}
+	initErr := &ta.Error{ErrorCode: 403, Description: "Forbidden: bot can't initiate conversation with a user"}
+	blockedErr := &ta.Error{ErrorCode: 403, Description: "Forbidden: bot was blocked by the user"}
+	if !CannotInitiateConversation(initErr) || CannotInitiateConversation(blockedErr) ||
+		!BotWasBlockedByUser(blockedErr) || BotWasBlockedByUser(initErr) {
+		t.Error("never-started and blocked-user 403 responses were not distinguished")
 	}
 	rateErr := &ta.Error{ErrorCode: 429, Description: "Too Many Requests", Parameters: &ta.ResponseParameters{RetryAfter: 30}}
 	if !IsRateLimited(rateErr) || RetryAfter(rateErr) != 30*time.Second {

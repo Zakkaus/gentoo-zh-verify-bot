@@ -83,28 +83,32 @@ func (c *Client) ReplyHTML(ctx context.Context, chatID int64, replyTo int, text 
 	return sent
 }
 
-// SendHTMLFallback sends verification HTML, retries simpler HTML on markup rejection, then plain text.
-func (c *Client) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) bool {
+// SendHTMLFallback sends verification HTML, retries only rejected markup, and returns the final send error.
+func (c *Client) SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (bool, error) {
 	_, err := c.bot.SendMessage(ctx, HTMLMessage(chatID, rich))
 	if err == nil {
-		return true
+		return true, nil
 	}
 	if !MarkupRejected(err) {
 		// Do not retry transient failures: the first request may have landed despite the error.
-		log.Printf("verify DM to %d failed (%v)", chatID, err)
-		return false
+		return false, err
 	}
 	log.Printf("verify DM to %d rejected (%v) — retrying without the collapsed quote", chatID, err)
 	if simpler != "" && simpler != rich {
-		if _, err := c.bot.SendMessage(ctx, HTMLMessage(chatID, simpler)); err == nil {
-			return true
+		_, err = c.bot.SendMessage(ctx, HTMLMessage(chatID, simpler))
+		if err == nil {
+			return true, nil
+		}
+		if !MarkupRejected(err) {
+			return false, err
 		}
 	}
-	if _, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), stripHTML(simpler))); err != nil {
+	_, err = c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), stripHTML(simpler)))
+	if err != nil {
 		log.Printf("verify DM to %d failed even as plain text: %v", chatID, err)
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
 // SendPrivateHTMLFallback retries an HTML private reply as plain text after any send failure.

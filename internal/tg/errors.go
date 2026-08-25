@@ -32,6 +32,32 @@ func ErrorCode(err error) int {
 	return 0
 }
 
+// CannotInitiateConversation reports the ordinary 403 returned before a user has started the bot.
+func CannotInitiateConversation(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "bot can't initiate conversation with a user") {
+		return false
+	}
+	code := ErrorCode(err)
+	return code == 0 || code == 403
+}
+
+// BotWasBlockedByUser reports the distinct 403 returned after a user blocks the bot.
+func BotWasBlockedByUser(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "bot was blocked by the user") {
+		return false
+	}
+	code := ErrorCode(err)
+	return code == 0 || code == 403
+}
+
 // IsBlocked reports Telegram 403 responses indicating that the bot cannot contact the target.
 func IsBlocked(err error) bool {
 	if err == nil {

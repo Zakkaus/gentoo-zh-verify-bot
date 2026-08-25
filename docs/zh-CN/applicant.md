@@ -12,15 +12,19 @@
 
 同一用户重新申请同一群组时，新记录替换旧记录，并尽力删除旧群内提示。新记录获得完整时限，但不会恢复已用掉的内核答案次数和一次性提示。批准或封禁操作仍在执行时，新申请不会覆盖正在结束的记录。
 
-## 群内提示和 DM 深链接
+## 优先私聊验证和群内回退
 
-**实现位置：**`internal/verify` 包；`internal/verify/state.go` 和 `internal/verify/service.go` 中的 `(*Service).postGroupChallenge`、`(*Service).SendDMChallenge`、`(*Service).sendQuizzes`；`internal/panel` 包；`internal/panel/panel.go` 中的 `(*Panel).OnStart`。
+**实现位置：**`internal/verify` 包；`internal/verify/state.go` 和 `internal/verify/service.go` 中的 `(*Service).tryProactiveDMChallenge`、`(*Service).postGroupChallenge`、`(*Service).SendDMChallenge`、`(*Service).sendQuizzes`；`internal/panel` 包；`internal/panel/panel.go` 中的 `(*Panel).OnStart`。
 
-程序先预留待验证记录，再向群内发送提示。提示包含申请者、截止时间、可选的必加频道说明、可用时的 `t.me/<bot>?start=verify` 按钮，以及管理员批准和封禁按钮。申请者在 DM 中打开深链接后，`Panel.OnStart` 调用 `SendDMChallenge`。
+程序先预留待验证记录。按群设置 `dm_first` 默认启用，因此机器人随后尝试通过私聊发送该群组的必加频道提示或验证题。只有申请者以前至少启动过一次此机器人时，Telegram 才允许机器人主动发送私聊。私聊送达后，程序不再发送群内提示，并从送达时重新提供完整验证时限。
 
-群内提示发送失败时，消息 ID 记为零，管理员收到告警，待验证记录继续存在。该记录到期时会拒绝入群申请，但因为失败源于程序未送达提示，所以不增加验证失败次数。申请者仍可手动打开机器人并执行 `/start`。DM 题目发送是尽力而为；内核题只有在提示成功送达后才接收答案。15 秒内重复执行 `/start` 不会重复发送仍有效的题目。
+Telegram 明确返回机器人不能主动发起会话的 403 时，程序立即且不另行提示地回退到群内消息。申请者已屏蔽机器人时也会返回 403；程序同样回退，但单独记录日志。429 明确表示发送被拒绝；只要 `retry_after` 小于验证时限，处理器就按该时长等待并重试一次私聊。其他明确的 4xx 拒绝会回退并记录日志。传输中断、请求取消、5xx 或其他无法确认送达状态的错误不会触发群内副本，因为私聊请求可能已经到达 Telegram；对应记录到期时仍按不计失败的送达故障处理。
 
-同一用户同时申请多个群组时，初始频道检查通过后，`sendQuizzes` 会发送该用户的全部有效题目。初始检查从 Go map 中选择一条记录，代码未定义选择顺序。每份答案仍会单独检查对应群组要求的频道。
+回退消息包含申请者、从发送时开始计算的完整时限、可选的必加频道说明、可用时的 `t.me/<bot>?start=verify_<groupID>` 按钮，以及管理员批准和封禁按钮。`Panel.OnStart` 将链接中的群组传给 `SendDMChallenge`，仅打开该群组的待验证请求。指定请求已处理或过期时，程序发送与过期请求相同的本地化无待处理提示。15 秒内重复打开同一群组的链接不会重复发送仍有效的题目。
+
+已经发出的 `?start=verify` 旧链接继续采用原有行为：程序从 Go map 中选择一条有效记录执行初始频道检查，再由 `sendQuizzes` 发送全部有效题目。新的按群链接不依赖 map 顺序，也不会被其他群组的必加频道检查阻断。
+
+群内回退发送失败时，消息 ID 记为零，管理员收到告警，待验证记录继续存在。该记录到期时会拒绝入群申请，但因为失败源于程序未送达提示，所以不增加验证失败次数。申请者仍可手动打开机器人并执行 `/start`。内核题只有在提示成功送达后才接收答案。
 
 ## 必加频道
 

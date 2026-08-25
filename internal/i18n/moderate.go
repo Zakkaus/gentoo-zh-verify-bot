@@ -166,6 +166,6 @@ type ModerateSetupCatalog struct {
 	DeleteMessages Text
 	// ChannelAdmin formats the required-channel administrator action.
 	ChannelAdmin Format
-	// Recheck explains how to rerun the setup check.
-	Recheck Text
+	// Restart explains how to rerun the setup check.
+	Restart Text
 }
