@@ -18,46 +18,19 @@ import (
 )
 
 func newTestService(cfg *config.Config) *Service {
-	v := newService(nil, nil, cfg, &i18n.Messages)
-	groupIDs := make([]int64, 0, max(len(cfg.Groups), len(cfg.GroupIDs)))
-	seen := make(map[int64]bool, cap(groupIDs))
-	for _, configured := range cfg.Groups {
-		if configured.ID != 0 && !seen[configured.ID] {
-			groupIDs = append(groupIDs, configured.ID)
-			seen[configured.ID] = true
-		}
+	effective := *cfg
+	if len(effective.Groups) == 0 && len(effective.GroupIDs) == 0 {
+		effective.GroupIDs = []int64{-100}
 	}
-	for _, groupID := range cfg.GroupIDs {
-		if groupID != 0 && !seen[groupID] {
-			groupIDs = append(groupIDs, groupID)
-			seen[groupID] = true
-		}
-	}
-	if len(groupIDs) == 0 {
-		return v
-	}
-	privateQueryPerMin := cfg.PrivateQueryPerMin
-	if privateQueryPerMin <= 0 {
-		privateQueryPerMin = 3
-	}
-	baseline := store.SettingsBaseline{
-		DefaultGroup:   v.fallbackGroupSettings(0),
-		ControlGroupID: cfg.ControlGroupID,
-		Global: store.GlobalBaseline{
-			RichMessages:       store.BaselineValue[bool]{Value: cfg.RichMessages, Source: store.SourceDefault},
-			PrivateQueryPerMin: store.BaselineValue[int]{Value: privateQueryPerMin, Source: store.SourceDefault},
-		},
-		Groups: make([]store.GroupBaseline, 0, len(groupIDs)),
-	}
-	for _, groupID := range groupIDs {
-		baseline.Groups = append(baseline.Groups, v.fallbackGroupSettings(groupID))
-	}
-	settings, err := store.NewSettings("", baseline)
+	baseline, err := store.LoadBaseline("", &effective)
 	if err != nil {
 		panic(fmt.Sprintf("test settings baseline: %v", err))
 	}
-	v.settings = settings
-	return v
+	settings, err := store.NewSettings("", baseline)
+	if err != nil {
+		panic(fmt.Sprintf("test settings: %v", err))
+	}
+	return newService(settings, nil, &effective, &i18n.Messages)
 }
 
 func TestJoinerLabel(t *testing.T) {
@@ -803,7 +776,7 @@ func TestFailAlertFallsBackToGroup(t *testing.T) {
 }
 
 func TestApproveClaimBlocksTimeoutDecline(t *testing.T) {
-	v := &Service{pend: map[pkey]*pending{}}
+	v := newTestService(&config.Config{})
 	key := pkey{gid: -100, uid: 5}
 	v.pend[key] = &pending{nonce: "abc", deadline: time.Now().Add(time.Hour)}
 
@@ -819,7 +792,7 @@ func TestApproveClaimBlocksTimeoutDecline(t *testing.T) {
 }
 
 func TestStopForShutdownFreezesPending(t *testing.T) {
-	v := &Service{pend: map[pkey]*pending{}}
+	v := newTestService(&config.Config{})
 	key := pkey{gid: -100, uid: 42}
 	tmr := time.AfterFunc(time.Hour, func() {}) // a live timer that stopForShutdown should stop
 	v.pend[key] = &pending{nonce: "n1", deadline: time.Now().Add(time.Hour), timer: tmr}
@@ -845,8 +818,9 @@ func TestTrustedBypass(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
 	mkV := func() *Service {
-		return &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{}, messages: &i18n.Messages,
-			cfg: &config.Config{Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
+		v := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}})
+		v.loc = time.UTC
+		return v
 	}
 
 	v := mkV()
@@ -882,7 +856,7 @@ func TestTrustedBypass(t *testing.T) {
 		t.Errorf("a confirmed member with a failed approve must be (false,true): handled=%v trusted=%v", handled, trusted)
 	}
 
-	plain := &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{}, cfg: &config.Config{Groups: []config.GroupConfig{{ID: gid}}}}
+	plain := newTestService(&config.Config{Groups: []config.GroupConfig{{ID: gid}}})
 	if handled, trusted := plain.tryTrustedBypass(ctx, newFakeVerifyBot(), gid, uid); handled || trusted {
 		t.Errorf("no trusted config -> (false,false): handled=%v trusted=%v", handled, trusted)
 	}
@@ -892,8 +866,9 @@ func TestJoinGate(t *testing.T) {
 	ctx := context.Background()
 	const gid, src, uid = int64(-1003265952923), int64(-1001163306055), int64(5)
 	mkV := func() *Service {
-		return &Service{loc: time.UTC, vfail: map[pkey]*vfailRec{}, messages: &i18n.Messages,
-			cfg: &config.Config{VerifyRetrySeconds: 600, Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}}}
+		v := newTestService(&config.Config{VerifyRetrySeconds: 600, Groups: []config.GroupConfig{{ID: gid, TrustedMemberGroupIDs: []int64{src}}}})
+		v.loc = time.UTC
+		return v
 	}
 	cooldown := func(v *Service) { v.vfail[pkey{gid, uid}] = &vfailRec{count: 1, last: time.Now()} }
 
@@ -966,7 +941,9 @@ func TestStrikesUser(t *testing.T) {
 func TestDeclineNoStrike(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
 	mkV := func() *Service {
-		return &Service{loc: time.UTC, cfg: &config.Config{}, pend: map[pkey]*pending{}, vfail: map[pkey]*vfailRec{}}
+		v := newTestService(&config.Config{})
+		v.loc = time.UTC
+		return v
 	}
 	for _, reason := range []string{"approve-retry", "restart-lapsed", "challenge-post-failed"} {
 		v := mkV()
@@ -993,7 +970,7 @@ func TestDeclineNoStrike(t *testing.T) {
 }
 
 func TestReopenPendingRestoresRetryable(t *testing.T) {
-	v := &Service{pend: map[pkey]*pending{}}
+	v := newTestService(&config.Config{})
 	key := pkey{gid: -100, uid: 5}
 	p := &pending{nonce: "abc", deadline: time.Now().Add(time.Hour), done: true}
 	v.pend[key] = p
@@ -1018,13 +995,9 @@ func TestReopenPendingRestoresRetryable(t *testing.T) {
 
 func TestDeclineFailureAlertsAdmins(t *testing.T) {
 	const gid, uid = int64(-100), int64(5)
-	v := &Service{
-		cfg:      &config.Config{AdminLogChatID: -200},
-		loc:      time.UTC,
-		messages: &i18n.Messages,
-		pend:     map[pkey]*pending{{gid, uid}: livePending(42)},
-		vfail:    map[pkey]*vfailRec{},
-	}
+	v := newTestService(&config.Config{AdminLogChatID: -200})
+	v.loc = time.UTC
+	v.pend[pkey{gid, uid}] = livePending(42)
 	fb := &fakeVerifyBot{declineErr: errors.New("Forbidden: missing can_invite_users")}
 	handled, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")
 	if !handled || fb.declines != 1 {

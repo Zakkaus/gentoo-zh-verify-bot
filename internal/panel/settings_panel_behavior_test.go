@@ -11,6 +11,7 @@ import (
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/mymmrac/telego"
@@ -56,6 +57,7 @@ type panelAPICaller struct {
 	lastSendText   string
 	lastURL        string
 	messageID      int
+	senderUnbans   []telego.UnbanChatSenderChatParams
 }
 
 func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.RequestData) (*ta.Response, error) {
@@ -113,7 +115,14 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 		}
 		c.messageID++
 		return panelAPIResponse(&telego.Message{MessageID: c.messageID})
-	case "deleteMessage", "unbanChatSenderChat":
+	case "deleteMessage":
+		return panelAPIResponse(true)
+	case "unbanChatSenderChat":
+		var request telego.UnbanChatSenderChatParams
+		if err := json.Unmarshal(data.BodyRaw, &request); err != nil {
+			return nil, err
+		}
+		c.senderUnbans = append(c.senderUnbans, request)
 		return panelAPIResponse(true)
 	default:
 		return nil, fmt.Errorf("unexpected Telegram method %q", method)
@@ -144,7 +153,9 @@ func newSettingsPanelTest(t *testing.T, path string) (*Panel, *store.Settings, *
 	caller := &panelAPICaller{admin: true, messageID: 100}
 	bot := newAPITestBot(t, caller)
 	verifier := &panelVerifierStub{}
-	panel := New(settings, tg.New(bot), cfg, &i18n.Messages, verifier, nil, nil, "test", time.Now())
+	telegram := tg.New(bot)
+	moderation := moderate.New(settings, telegram, cfg, "")
+	panel := New(settings, telegram, cfg, &i18n.Messages, verifier, moderation, nil, "test", time.Now())
 	return panel, settings, caller, bot
 }
 
@@ -419,6 +430,45 @@ func TestPanelChatListsAndRequiredChannel(t *testing.T) {
 	group, _ = settings.Group(panelTestGroupA)
 	if panel.requiredChannelID(group) != 0 {
 		t.Fatalf("required channel disable result = %d", panel.requiredChannelID(group))
+	}
+}
+
+func TestPanelChannelWhitelistUsesModerationPolicy(t *testing.T) {
+	const (
+		whitelistLimit = 4096
+		sharedChatID   = int64(-1009000000999)
+	)
+	panel, settings, caller, bot := newSettingsPanelTest(t, "")
+	group, _ := settings.Group(panelTestGroupA)
+	whitelist := make([]int64, whitelistLimit)
+	for index := range whitelist {
+		whitelist[index] = -1008000000000 - int64(index)
+	}
+	overrides := group.Overrides()
+	overrides.ChannelWhitelist = &whitelist
+	if _, err := settings.CommitGroup(panelTestGroupA, group.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
+
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "ls")
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "cw", "_")
+	invokePanelCallback(t, panel, bot, session, panelTestGroupA, "ca", "cw")
+	submitSharedChat(t, panel, bot, session, sharedChatID)
+
+	group, _ = settings.Group(panelTestGroupA)
+	values := group.ChannelWhitelist().Value
+	if len(values) != whitelistLimit {
+		t.Fatalf("panel whitelist entries = %d, want %d", len(values), whitelistLimit)
+	}
+	if values[0] != whitelist[1] || values[len(values)-1] != sharedChatID {
+		t.Fatalf("panel whitelist did not evict the oldest entry: first=%d last=%d", values[0], values[len(values)-1])
+	}
+	if len(caller.senderUnbans) != 1 {
+		t.Fatalf("panel sender unbans = %d, want 1", len(caller.senderUnbans))
+	}
+	unban := caller.senderUnbans[0]
+	if unban.ChatID.ID != panelTestGroupA || unban.SenderChatID != sharedChatID {
+		t.Fatalf("panel sender unban = chat %d sender %d", unban.ChatID.ID, unban.SenderChatID)
 	}
 }
 

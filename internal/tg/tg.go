@@ -142,12 +142,7 @@ func (c *Client) ScheduleCleanup(chatID int64, commandMessageID, responseMessage
 	if cleanupAfter <= 0 || responseMessageID == 0 || chatID >= 0 {
 		return
 	}
-	time.AfterFunc(cleanupAfter, func() {
-		_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: responseMessageID})
-		if commandMessageID != 0 {
-			_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: commandMessageID})
-		}
-	})
+	c.scheduleDelete(chatID, responseMessageID, commandMessageID, cleanupAfter)
 }
 
 // Delete removes one message and treats a zero message ID as a no-op.
@@ -160,14 +155,10 @@ func (c *Client) Delete(ctx context.Context, chatID int64, messageID int) {
 // Notify sends a transient plain-text notice and bounds outstanding deletion timers.
 func (c *Client) Notify(ctx context.Context, chatID int64, text string, ttlSeconds int) {
 	message, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), text))
-	if err != nil || message == nil || ttlSeconds < 0 || !c.reserveCleanupTimer() {
+	if err != nil || message == nil || ttlSeconds < 0 {
 		return
 	}
-	messageID := message.MessageID
-	time.AfterFunc(time.Duration(ttlSeconds)*time.Second, func() {
-		defer c.cleanupTimers.Add(-1)
-		_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID})
-	})
+	c.scheduleDelete(chatID, message.MessageID, 0, time.Duration(ttlSeconds)*time.Second)
 }
 
 // Alert sends an operator alert when an admin-log chat is configured.
@@ -317,6 +308,19 @@ func (c *Client) pruneAdminCacheLocked(now time.Time) {
 		}
 		delete(c.adminCache, victim)
 	}
+}
+
+func (c *Client) scheduleDelete(chatID int64, firstMessageID, secondMessageID int, after time.Duration) {
+	if !c.reserveCleanupTimer() {
+		return
+	}
+	time.AfterFunc(after, func() {
+		defer c.cleanupTimers.Add(-1)
+		_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: firstMessageID})
+		if secondMessageID != 0 {
+			_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: secondMessageID})
+		}
+	})
 }
 
 func (c *Client) reserveCleanupTimer() bool {

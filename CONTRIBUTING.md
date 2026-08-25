@@ -28,15 +28,19 @@ go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -exclude=G304,G703,G706 ./
 
 ## Project layout
 
-The bot remains a **single `package main`** in the repository root. Files are grouped by
-responsibility:
+The executable entry point and process assembly live in `cmd/gentoo-zh-verify-bot`. Runtime
+responsibilities are split across focused internal packages:
 
-- **Verification and configuration:** `main.go`, `config.go`, `verify.go`, `kernel.go`,
-  `quiz.go`, `dm.go`, `i18n.go`, `settings.go`, `agents.go`, `verifyfail.go`
-- **Moderation:** `moderate.go`, `mute.go`, `bantime.go`, `warn.go`, `antispam.go`,
-  `admin.go`, `commands.go`
-- **Lookups and feeds:** `pkg.go`, `use.go`, `bug.go`, `news.go`, `wiki.go`, `bbs.go`,
-  `pkgs.go`, `arm.go`, `armpkgs.go`, `feed.go`, `releaseinfo.go`, `http.go`
+- `internal/bot`: handler ordering, command menus, and private-message routing
+- `internal/config`: configuration loading, normalization, and validation
+- `internal/feed`: Bugzilla and news polling
+- `internal/i18n`: typed catalogues and locale files
+- `internal/lookup`: package, bug, news, wiki, and distribution lookups
+- `internal/moderate`: moderation policy, commands, and warning state
+- `internal/panel`: administration commands and the settings panel
+- `internal/store`: persisted settings and atomic JSON state helpers
+- `internal/tg`: shared Telegram transport and authorization mechanics
+- `internal/verify`: join-verification state and challenge flows
 
 Tests sit beside the code they cover. `state_compat_test.go` and `testdata/state/` define
 the persisted-format compatibility contract. A persisted-format change must preserve
@@ -44,6 +48,9 @@ intentional backward compatibility and update the affected fixtures deliberately
 regenerate them as an unrelated cleanup. When a format change requires new fixtures, run
 `UPDATE_STATE_COMPAT_FIXTURES=1 go test -run TestStateCompatGenerateFixtures`, review every
 fixture diff, then run the full test gate.
+
+See the [documentation index](docs/README.md) for architecture, operations, and flow-specific
+guides.
 
 ## Localisation
 
@@ -63,9 +70,9 @@ translation workflow.
 
 ## Code style
 
-- Put new functionality in a focused, command-named file and reuse the shared helpers
-  (`httpGetJSON`, `httpGetBody`, `htmlMessage`, the `Verifier`/`Config` types) rather than
-  duplicating them.
+- Put new functionality in the package that owns its policy. Keep
+  `cmd/gentoo-zh-verify-bot` focused on process assembly and registration lifecycle, and reuse
+  existing package services and transport or storage helpers instead of duplicating them.
 - Keep it simple and readable; match the surrounding style. `gofmt` decides formatting.
 - Keep user-visible text in the localisation catalogue; do not hard-code it in production.
 - Make config values configurable (with a sensible default in `LoadConfig`) instead of

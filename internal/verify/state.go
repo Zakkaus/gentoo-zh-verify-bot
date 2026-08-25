@@ -274,17 +274,19 @@ func (v *Service) clearVerifyFails(gid, uid int64) {
 }
 
 func (v *Service) verifyMaxFails(groupID int64) int {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.VerifyMaxFails().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return 0
 	}
-	return v.fallbackGroupSettings(groupID).VerifyMaxFails.Value
+	return group.VerifyMaxFails().Value
 }
 
 func (v *Service) verifyRetrySeconds(groupID int64) int {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.VerifyRetrySeconds().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return 0
 	}
-	return v.fallbackGroupSettings(groupID).VerifyRetrySeconds.Value
+	return group.VerifyRetrySeconds().Value
 }
 
 // verifyCooldownRemaining returns zero when the applicant may reapply.

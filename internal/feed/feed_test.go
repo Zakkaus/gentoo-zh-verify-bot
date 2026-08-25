@@ -677,6 +677,34 @@ func TestLoadFeedStateCorruptBackup(t *testing.T) {
 	}
 }
 
+func TestUnreadableFeedStateDisablesWrites(t *testing.T) {
+	dir := t.TempDir()
+	target := t.TempDir()
+	path := feedStatePath(dir, -43)
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	st := loadFeedState(path)
+	st.LastBugID = 42
+	saveFeedState(path, st)
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("unreadable feed state path was replaced")
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unreadable feed state target contains %d entries, want none", len(entries))
+	}
+}
+
 // TestRefreshTrackedPartialFetchNoMiss locks in finding B's fix: when the refetch was incomplete
 // (fetchOK=false, a chunk failed), an absent tracked bug must NOT accrue a miss — it could have been
 // in the failed chunk — so a flaky chunk can never age out a live bug.

@@ -1,6 +1,7 @@
 package moderate
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strconv"
@@ -96,16 +97,22 @@ func nextChannelWhitelist(current []int64, senderID int64, allow bool) []int64 {
 	return append(current, senderID)
 }
 
-func (s *Service) setChannelWhitelist(groupID, senderID int64, allow bool) error {
+// UpdateChannelWhitelist applies the shared whitelist bound and unbans newly allowed senders.
+func (s *Service) UpdateChannelWhitelist(ctx context.Context, groupID, senderID int64, allow bool) (unbanErr, updateErr error) {
 	group, ok := s.settings.Group(groupID)
 	if !ok {
-		return fmt.Errorf("%w: %d", store.ErrUnknownGroup, groupID)
+		return nil, fmt.Errorf("%w: %d", store.ErrUnknownGroup, groupID)
 	}
 	whitelist := nextChannelWhitelist(group.ChannelWhitelist().Value, senderID, allow)
 	overrides := group.Overrides()
 	overrides.ChannelWhitelist = &whitelist
-	_, err := s.settings.CommitGroup(groupID, group.Revision(), overrides)
-	return err
+	if _, err := s.settings.CommitGroup(groupID, group.Revision(), overrides); err != nil {
+		return nil, err
+	}
+	if allow {
+		return s.telegram.UnbanSenderChat(ctx, groupID, senderID), nil
+	}
+	return nil, nil
 }
 
 func channelSenderAlert(l i18n.Lang, banned bool, title string, senderID, groupID int64) string {
@@ -176,7 +183,8 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 			return nil
 		}
 		allow := fields[0] == "allow"
-		if err := s.setChannelWhitelist(groupID, senderID, allow); err != nil {
+		unbanErr, err := s.UpdateChannelWhitelist(requestCtx, groupID, senderID, allow)
+		if err != nil {
 			s.notifySettingsFailure(requestCtx, groupID, l, err)
 			return nil
 		}
@@ -184,8 +192,8 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.Removed.Render(l, senderID))
 			return nil
 		}
-		if err := s.telegram.UnbanSenderChat(requestCtx, groupID, senderID); err != nil {
-			log.Printf("/bc allow: unban sender_chat %d in %d: %v", senderID, groupID, err)
+		if unbanErr != nil {
+			log.Printf("/bc allow: unban sender_chat %d in %d: %v", senderID, groupID, unbanErr)
 			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Antispam.AllowedUnbanFailed.Render(l, senderID))
 			return nil
 		}

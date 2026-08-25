@@ -121,6 +121,12 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 	}
 }
 
+func (c *registrationCaller) leftChats() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int64(nil), c.left...)
+}
+
 func registrationAPIResponse(value any) (*ta.Response, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -394,4 +400,62 @@ func TestNonOwnerPromotionAttemptLeaves(t *testing.T) {
 	if settings.IsGroup(groupID) || len(caller.left) != 1 || caller.left[0] != groupID {
 		t.Fatalf("non-owner attempt: groups=%v leaves=%v", settings.GroupIDs(), caller.left)
 	}
+}
+
+func TestUnknownGroupGraceExpiry(t *testing.T) {
+	newFixture := func(t *testing.T) (*registrationService, *registrationCaller) {
+		t.Helper()
+		cfg, settings := registrationFixture(t)
+		caller := &registrationCaller{
+			members: make(map[[2]int64]telego.ChatMember),
+			events:  make(chan string, 16),
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		service := newRegistrationService(ctx, newRegistrationBot(t, caller), settings, cfg, "verify_test_bot", testBotID, nil)
+		return service, caller
+	}
+
+	t.Run("expired unknown group leaves exactly once", func(t *testing.T) {
+		const groupID = int64(-3001)
+		service, caller := newFixture(t)
+		service.scheduleUnknownLeave(groupID, "Expired", time.Now().Add(-time.Second))
+		waitForRegistrationMethod(t, caller, "leaveChat")
+		time.Sleep(20 * time.Millisecond)
+		left := caller.leftChats()
+		if len(left) != 1 || left[0] != groupID {
+			t.Fatalf("expired unknown group leaves = %v, want [%d]", left, groupID)
+		}
+	})
+
+	t.Run("registered group is retained", func(t *testing.T) {
+		const groupID = int64(-3002)
+		service, caller := newFixture(t)
+		if err := service.registerGroup(groupID, testOwner, "Registered"); err != nil {
+			t.Fatal(err)
+		}
+		service.scheduleUnknownLeave(groupID, "Registered", time.Now().Add(-time.Second))
+		select {
+		case method := <-caller.events:
+			t.Fatalf("registered group triggered Telegram method %q", method)
+		case <-time.After(20 * time.Millisecond):
+		}
+		if left := caller.leftChats(); len(left) != 0 {
+			t.Fatalf("registered group leaves = %v, want none", left)
+		}
+	})
+
+	t.Run("later deadline does not double fire", func(t *testing.T) {
+		const groupID = int64(-3003)
+		service, caller := newFixture(t)
+		now := time.Now()
+		service.scheduleUnknownLeave(groupID, "Duplicate", now.Add(50*time.Millisecond))
+		service.scheduleUnknownLeave(groupID, "Duplicate", now.Add(100*time.Millisecond))
+		waitForRegistrationMethod(t, caller, "leaveChat")
+		time.Sleep(20 * time.Millisecond)
+		left := caller.leftChats()
+		if len(left) != 1 || left[0] != groupID {
+			t.Fatalf("duplicate deadline leaves = %v, want [%d]", left, groupID)
+		}
+	})
 }

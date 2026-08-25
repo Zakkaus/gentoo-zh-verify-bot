@@ -2,21 +2,17 @@
 package bot
 
 import (
-	"context"
 	"log"
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
-	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/moderate"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/panel"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/tg"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/verify"
-	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 type handlerRoute struct {
@@ -29,12 +25,10 @@ type handlerRoute struct {
 type Service struct {
 	cfg            *config.Config
 	settings       *store.Settings
-	telegram       *tg.Client
 	verification   *verify.Service
 	administration *panel.Panel
 	moderation     *moderate.Service
 	lookups        *lookup.Service
-	version        string
 	dm             *dmHandler
 }
 
@@ -47,17 +41,14 @@ func New(
 	administration *panel.Panel,
 	moderation *moderate.Service,
 	lookups *lookup.Service,
-	version string,
 ) *Service {
 	return &Service{
 		cfg:            cfg,
 		settings:       settings,
-		telegram:       telegram,
 		verification:   verification,
 		administration: administration,
 		moderation:     moderation,
 		lookups:        lookups,
-		version:        version,
 		dm: &dmHandler{
 			cfg:            cfg,
 			telegram:       telegram,
@@ -88,7 +79,6 @@ func (s *Service) handlerRoutes() []handlerRoute {
 		{name: "verify.channel_recheck", handler: s.verification.OnChannelRecheck, predicates: []th.Predicate{th.CallbackDataPrefix(verify.ChannelRecheckCallbackPrefix)}},
 		{name: "panel.settings_callback", handler: s.administration.OnSettingsCallback, predicates: []th.Predicate{th.CallbackDataPrefix(panel.SettingsCallbackPrefix)}},
 		{name: "verify.join_request", handler: s.verification.OnJoinRequest, predicates: []th.Predicate{th.AnyChatJoinRequest()}},
-		{name: "bot.unauthorized_chat", handler: s.onMyChatMember, predicates: []th.Predicate{th.AnyMyChatMember()}},
 		{name: "panel.chat_shared", handler: s.administration.OnPanelChatShared, predicates: []th.Predicate{s.administration.PanelChatSharedDM}},
 		{name: "panel.input", handler: s.administration.OnPanelInput, predicates: []th.Predicate{s.administration.PanelInputDM}},
 		{name: "verify.kernel_answer", handler: s.verification.OnKernelAnswer, predicates: []th.Predicate{s.verification.KernelAnswerDM}},
@@ -122,77 +112,4 @@ func (s *Service) handlerRoutes() []handlerRoute {
 		{name: "moderate.unmute", handler: s.moderation.OnUnmute, predicates: []th.Predicate{th.CommandEqual("unmute")}},
 		{name: "panel.help", handler: s.administration.OnHelp, predicates: []th.Predicate{th.CommandEqual("help")}},
 	}
-}
-
-func unauthorizedChatAlert(l i18n.Lang, chat telego.Chat) string {
-	return i18n.Messages.Bot.Lifecycle.UnauthorizedChat.Render(l, chat.Title, chat.ID, chat.Type)
-}
-
-func (s *Service) onMyChatMember(ctx *th.Context, update telego.Update) error {
-	cm := update.MyChatMember
-	if cm == nil || cm.Chat.Type == "private" {
-		return nil
-	}
-	switch cm.NewChatMember.MemberStatus() {
-	case "left", "kicked":
-		return nil
-	}
-	if s.isKnownChat(cm.Chat.ID) {
-		return nil
-	}
-	bot := ctx.Bot()
-	c := ctx.Context()
-	log.Printf("auto-leave: leaving unauthorized chat %d (%q, %s)", cm.Chat.ID, cm.Chat.Title, cm.Chat.Type)
-	if err := bot.LeaveChat(c, &telego.LeaveChatParams{ChatID: tu.ID(cm.Chat.ID)}); err != nil {
-		log.Printf("auto-leave: failed to leave %d: %v", cm.Chat.ID, err)
-		return nil
-	}
-	s.telegram.Alert(c, s.cfg.AdminLogChatID,
-		unauthorizedChatAlert(i18n.FromStored(s.cfg.LangForGroup(0)), cm.Chat))
-	return nil
-}
-
-func (s *Service) isKnownChat(chatID int64) bool {
-	if s.settings == nil {
-		return s.cfg.IsKnownChat(chatID)
-	}
-	if s.settings.IsGroup(chatID) || s.cfg.AdminLogChatID == chatID {
-		return true
-	}
-	for _, configuredFeed := range s.cfg.Feeds {
-		if configuredFeed.ChatID == chatID {
-			return true
-		}
-	}
-	for _, groupID := range s.settings.GroupIDs() {
-		group, _ := s.settings.Group(groupID)
-		if s.verification.RequiredChannelID(groupID) == chatID {
-			return true
-		}
-		for _, knownID := range group.KnownChatIDs().Value {
-			if knownID == chatID {
-				return true
-			}
-		}
-		for _, trustedID := range group.TrustedMemberGroupIDs().Value {
-			if trustedID == chatID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// LogStartup reports the running version, effective groups, and required Telegram rights.
-func (s *Service) LogStartup(ctx context.Context, telegramBot *telego.Bot, identity verify.Identity) {
-	log.Printf("verify bot @%s (%s) started — groups=%d", identity.Username, s.version, len(s.settings.GroupIDs()))
-	for _, groupID := range s.settings.GroupIDs() {
-		group, _ := s.settings.Group(groupID)
-		log.Printf("  group %d: required_channel=%d questions=%d timeout=%ds", groupID,
-			s.verification.RequiredChannelID(groupID), len(group.Questions().Value), group.TimeoutSeconds().Value)
-	}
-	go func() {
-		s.moderation.LogGroupAdmin(ctx, telegramBot, identity.ID)
-		s.verification.LogVerificationAccess(ctx, telegramBot, identity.ID)
-	}()
 }

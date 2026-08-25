@@ -233,7 +233,8 @@ func TestStateCompatHeartbeat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := &Service{hbPath: stateCompatTempFile(t, "heartbeat.json", tt.data)}
+			v := newTestService(stateCompatConfig())
+			v.hbPath = stateCompatTempFile(t, "heartbeat.json", tt.data)
 			got := v.loadHeartbeat()
 			if !got.Equal(stateCompatHeartbeat) {
 				t.Fatalf("loaded heartbeat = %v, want %v", got, stateCompatHeartbeat)

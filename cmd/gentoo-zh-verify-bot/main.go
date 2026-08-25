@@ -104,7 +104,7 @@ func main() {
 		verification, moderation, lookups, version, startedAt,
 	)
 	application := botapp.New(
-		cfg, runtimeSettings, telegram, verification, administration, moderation, lookups, version,
+		cfg, runtimeSettings, telegram, verification, administration, moderation, lookups,
 	)
 	registration := newRegistrationService(
 		ctx, bot, runtimeSettings, cfg, identity.Username, identity.ID,

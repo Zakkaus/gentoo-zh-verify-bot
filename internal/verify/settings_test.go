@@ -16,7 +16,7 @@ func TestRuntimeSettingsGroupCommandsPersist(t *testing.T) {
 	cfg := runtimeSettingsTestConfig()
 	groupID := cfg.GroupIDs[0]
 	path := filepath.Join(t.TempDir(), "settings.json")
-	settings, err := store.NewSettings(path, testSettingsBaselineFromConfig(cfg, store.SourceDefault))
+	settings, err := store.NewSettings(path, testSettingsBaselineFromConfig(t, cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestRuntimeSettingsGroupCommandsPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := store.NewSettings(path, testSettingsBaselineFromConfig(cfg, store.SourceDefault))
+	reloaded, err := store.NewSettings(path, testSettingsBaselineFromConfig(t, cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestRuntimeSettingsGroupCommandsPersist(t *testing.T) {
 		t.Fatalf("reloaded group = enabled:%v spoiler:%v mode:%q", v2.IsEnabled(groupID), v2.NameSpoilerOn(groupID), v2.EffectiveMode(groupID))
 	}
 
-	runtimeOnly, err := store.NewSettings("", testSettingsBaselineFromConfig(cfg, store.SourceDefault))
+	runtimeOnly, err := store.NewSettings("", testSettingsBaselineFromConfig(t, cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestUntouchedGroupUsesConfigAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseline := testSettingsBaselineFromConfig(cfg, store.SourceConfig)
+	baseline := testSettingsBaselineFromConfig(t, cfg, store.SourceConfig)
 	settings, err := store.NewSettings("", baseline)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 		VerifyRetrySeconds: 180,
 		LookupTTLSeconds:   intPointer(180),
 	}
-	settings, err := store.NewSettings("", testSettingsBaselineFromConfig(cfg, store.SourceDefault))
+	settings, err := store.NewSettings("", testSettingsBaselineFromConfig(t, cfg, store.SourceDefault))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 	cfg := runtimeSettingsTestConfig()
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	baseline := testSettingsBaselineFromConfig(cfg, store.SourceDefault)
+	baseline := testSettingsBaselineFromConfig(t, cfg, store.SourceDefault)
 	settings, err := store.NewSettings(settingsPath, baseline)
 	if err != nil {
 		t.Fatal(err)
@@ -283,71 +283,36 @@ func TestRuntimeOnlyGroupPendingSurvivesRestart(t *testing.T) {
 	}
 }
 
-func testSettingsBaselineFromConfig(cfg *config.Config, configuredSource store.Source) store.SettingsBaseline {
-	seed := newService(nil, nil, cfg, &i18n.Messages)
-	defaultGroup := seed.fallbackGroupSettings(0)
-	defaultGroup.BanSeconds.Source = configuredSource
-	defaultGroup.LookupTTLSeconds.Source = configuredSource
-	defaultGroup.LookupAutoDeleteEnabled.Source = configuredSource
-	defaultGroup.TimeoutSeconds.Source = configuredSource
-	defaultGroup.VerifyMaxFails.Source = configuredSource
-	defaultGroup.VerifyRetrySeconds.Source = configuredSource
-	defaultGroup.AntispamEnabled.Source = configuredSource
-	defaultGroup.ChannelWhitelist.Source = configuredSource
-	defaultGroup.TrustedMemberGroupIDs.Source = configuredSource
-	defaultGroup.KnownChatIDs.Source = configuredSource
-	defaultGroup.RequiredChannelID.Source = configuredSource
-	defaultGroup.ChannelDisplay.Source = configuredSource
-	defaultGroup.ChannelInviteURL.Source = configuredSource
-	defaultGroup.Questions.Source = configuredSource
-	defaultGroup.FallbackQuestions.Source = configuredSource
-
-	privateQueryPerMin := cfg.PrivateQueryPerMin
-	if privateQueryPerMin <= 0 {
-		privateQueryPerMin = 3
-	}
-	baseline := store.SettingsBaseline{
-		DefaultGroup:   defaultGroup,
-		ControlGroupID: cfg.ControlGroupID,
-		Global: store.GlobalBaseline{
-			RichMessages:       store.BaselineValue[bool]{Value: cfg.RichMessages, Source: configuredSource},
-			PrivateQueryPerMin: store.BaselineValue[int]{Value: privateQueryPerMin, Source: configuredSource},
-		},
-	}
-	seen := make(map[int64]bool, max(len(cfg.Groups), len(cfg.GroupIDs)))
-	for _, configured := range cfg.Groups {
-		if configured.ID == 0 || seen[configured.ID] {
-			continue
+func testSettingsBaselineFromConfig(t *testing.T, cfg *config.Config, configuredSource store.Source) store.SettingsBaseline {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "missing-config.json")
+	if configuredSource == store.SourceConfig {
+		path = filepath.Join(t.TempDir(), "config.json")
+		data := []byte(`{
+			"ban_seconds": 0,
+			"lookup_ttl_seconds": 0,
+			"timeout_seconds": 0,
+			"verify_max_fails": 0,
+			"verify_retry_seconds": 0,
+			"block_channel_senders": false,
+			"channel_whitelist": [],
+			"trusted_member_group_ids": [],
+			"known_chat_ids": [],
+			"required_channel_id": 0,
+			"channel_display": "",
+			"channel_invite_url": "",
+			"questions": [],
+			"fallback_questions": [],
+			"rich_messages": false,
+			"private_query_per_min": 0
+		}`)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
 		}
-		group := seed.fallbackGroupSettings(configured.ID)
-		group.BanSeconds.Source = configuredSource
-		group.LookupTTLSeconds.Source = configuredSource
-		group.LookupAutoDeleteEnabled.Source = configuredSource
-		group.TimeoutSeconds.Source = configuredSource
-		group.VerifyMaxFails.Source = configuredSource
-		group.VerifyRetrySeconds.Source = configuredSource
-		group.AntispamEnabled.Source = configuredSource
-		group.ChannelWhitelist.Source = configuredSource
-		group.KnownChatIDs.Source = configuredSource
-		baseline.Groups = append(baseline.Groups, group)
-		seen[configured.ID] = true
 	}
-	for _, groupID := range cfg.GroupIDs {
-		if groupID == 0 || seen[groupID] {
-			continue
-		}
-		group := seed.fallbackGroupSettings(groupID)
-		group.BanSeconds.Source = configuredSource
-		group.LookupTTLSeconds.Source = configuredSource
-		group.LookupAutoDeleteEnabled.Source = configuredSource
-		group.TimeoutSeconds.Source = configuredSource
-		group.VerifyMaxFails.Source = configuredSource
-		group.VerifyRetrySeconds.Source = configuredSource
-		group.AntispamEnabled.Source = configuredSource
-		group.ChannelWhitelist.Source = configuredSource
-		group.KnownChatIDs.Source = configuredSource
-		baseline.Groups = append(baseline.Groups, group)
-		seen[groupID] = true
+	baseline, err := store.LoadBaseline(path, cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return baseline
 }

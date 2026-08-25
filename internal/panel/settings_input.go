@@ -687,6 +687,13 @@ func (v *Panel) applySharedChat(ctx context.Context, bot *telego.Bot, session *p
 		session.screen = "ch"
 		return v.renderSession(ctx, bot, session, session.groupID)
 	}
+	if pending.kind == inputChannelWhitelist {
+		if err := v.updateChannelWhitelist(ctx, bot, session, sharedID, true); err != nil {
+			return err
+		}
+		session.screen = pending.parent
+		return v.renderSession(ctx, bot, session, session.groupID)
+	}
 	values := v.listValues(group, pending.kind)
 	for _, existing := range values {
 		if existing == sharedID {
@@ -702,13 +709,25 @@ func (v *Panel) applySharedChat(ctx context.Context, bot *telego.Bot, session *p
 		return err
 	}
 	session.revision = result.Revision
-	if pending.kind == inputChannelWhitelist {
-		if err := v.telegram.UnbanSenderChat(ctx, session.groupID, sharedID); err != nil {
-			v.sendInputError(ctx, bot, session, i18n.Messages.Panel.Settings.Error.WhitelistUnbanFailed.For(session.language))
-		}
-	}
+
 	session.screen = pending.parent
 	return v.renderSession(ctx, bot, session, session.groupID)
+}
+
+func (v *Panel) updateChannelWhitelist(ctx context.Context, bot *telego.Bot, session *panelSession, senderID int64, allow bool) error {
+	unbanErr, err := v.moderation.UpdateChannelWhitelist(ctx, session.groupID, senderID, allow)
+	if err != nil {
+		return err
+	}
+	group, ok := v.settings.Group(session.groupID)
+	if !ok {
+		return store.ErrUnknownGroup
+	}
+	session.revision = group.Revision()
+	if unbanErr != nil {
+		v.sendInputError(ctx, bot, session, i18n.Messages.Panel.Settings.Error.WhitelistUnbanFailed.For(session.language))
+	}
+	return nil
 }
 
 func (v *Panel) sendInputError(ctx context.Context, bot *telego.Bot, session *panelSession, text string) {

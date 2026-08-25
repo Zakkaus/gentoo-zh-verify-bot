@@ -85,9 +85,10 @@ var (
 // records the message id of each recently-posted OPEN bug so the feed can edit it to show
 // "resolved" once Bugzilla closes it.
 type feedState struct {
-	LastBugID   int                    `json:"last_bug_id"`
-	LastNewsURL string                 `json:"last_news_url"`
-	Tracked     map[string]*trackedBug `json:"tracked,omitempty"` // bug id (as string for JSON) -> posted message
+	LastBugID     int                    `json:"last_bug_id"`
+	LastNewsURL   string                 `json:"last_news_url"`
+	Tracked       map[string]*trackedBug `json:"tracked,omitempty"` // bug id (as string for JSON) -> posted message
+	writeDisabled bool                   `json:"-"`
 }
 
 type trackedBug struct {
@@ -337,7 +338,7 @@ func loadFeedState(path string) feedState {
 	var st feedState
 	if path != "" {
 		if err := store.Load(path, &st); err != nil {
-			st = feedState{}
+			st = feedState{writeDisabled: store.ReadFailed(err)}
 		}
 	}
 	migrateFeedState(&st)
@@ -361,7 +362,7 @@ func migrateFeedState(st *feedState) {
 }
 
 func saveFeedState(path string, st feedState) {
-	if path == "" {
+	if path == "" || st.writeDisabled {
 		return
 	}
 	_ = store.Write(path, st)

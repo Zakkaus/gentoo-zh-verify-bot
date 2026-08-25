@@ -1,17 +1,14 @@
 package bot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
@@ -28,7 +25,6 @@ func TestHandlerOrder(t *testing.T) {
 		"verify.channel_recheck",
 		"panel.settings_callback",
 		"verify.join_request",
-		"bot.unauthorized_chat",
 		"panel.chat_shared",
 		"panel.input",
 		"verify.kernel_answer",
@@ -75,7 +71,6 @@ func TestHandlerOrder(t *testing.T) {
 type recordingCaller struct {
 	mu           sync.Mutex
 	sendMessages int
-	leaveChats   int
 }
 
 func (c *recordingCaller) Call(_ context.Context, url string, _ *ta.RequestData) (*ta.Response, error) {
@@ -85,9 +80,6 @@ func (c *recordingCaller) Call(_ context.Context, url string, _ *ta.RequestData)
 	case "sendMessage":
 		c.sendMessages++
 		return apiResponse(&telego.Message{MessageID: c.sendMessages})
-	case "leaveChat":
-		c.leaveChats++
-		return apiResponse(true)
 	default:
 		return nil, fmt.Errorf("unexpected Telegram method %q", url)
 	}
@@ -222,28 +214,5 @@ func TestDMReplyThrottle(t *testing.T) {
 	runHandlerUpdates(t, telegramBot, dm.onPrivateDM, []telego.Update{message(7), message(7), message(8)})
 	if caller.sendMessages != 2 {
 		t.Fatalf("DM replies = %d, want one per user during the cooldown", caller.sendMessages)
-	}
-}
-
-func TestUnauthorizedChatLeaves(t *testing.T) {
-	var logs bytes.Buffer
-	oldOutput := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(oldOutput)
-	caller := &recordingCaller{}
-	telegramBot := testBot(t, caller)
-	service := &Service{cfg: &config.Config{}, telegram: tg.New(telegramBot)}
-	update := telego.Update{MyChatMember: &telego.ChatMemberUpdated{
-		Chat:          telego.Chat{ID: -100123, Type: "supergroup", Title: "unknown"},
-		NewChatMember: &telego.ChatMemberMember{Status: telego.MemberStatusMember},
-	}}
-	runHandlerUpdates(t, telegramBot, service.onMyChatMember, []telego.Update{update})
-	if caller.leaveChats != 1 {
-		t.Fatalf("LeaveChat calls = %d, want 1", caller.leaveChats)
-	}
-	for _, r := range logs.String() {
-		if unicode.Is(unicode.Han, r) {
-			t.Fatalf("process log contains Han text: %q", logs.String())
-		}
 	}
 }

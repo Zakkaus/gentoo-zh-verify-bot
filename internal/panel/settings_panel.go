@@ -374,6 +374,12 @@ func (v *Panel) dispatchList(ctx context.Context, bot *telego.Bot, session *pane
 		if !found {
 			return &store.ConflictError{GroupID: session.groupID, Expected: session.revision, Actual: group.Revision()}
 		}
+		if session.listKind == inputChannelWhitelist {
+			if err := v.updateChannelWhitelist(ctx, bot, session, id, false); err != nil {
+				return err
+			}
+			return v.renderSession(ctx, bot, session, session.groupID)
+		}
 		setListOverride(&next, session.listKind, kept)
 		result, err := v.settings.CommitGroup(session.groupID, session.revision, next)
 		if err != nil {
@@ -1142,8 +1148,6 @@ func (v *Panel) listValues(group store.GroupView, kind inputKind) []int64 {
 func setListOverride(overrides *store.GroupOverrides, kind inputKind, values []int64) {
 	values = append([]int64(nil), values...)
 	switch kind {
-	case inputChannelWhitelist:
-		overrides.ChannelWhitelist = &values
 	case inputTrustedGroup:
 		overrides.TrustedMemberGroupIDs = &values
 	case inputKnownChat:

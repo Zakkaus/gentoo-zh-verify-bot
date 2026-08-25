@@ -208,17 +208,19 @@ func (v *Service) SetVerifyMode(groupID int64, mode string) error {
 
 // EffectiveMode returns one group's current challenge mode.
 func (v *Service) EffectiveMode(groupID int64) string {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.VerifyMode().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return config.ModeKernel
 	}
-	return v.fallbackGroupSettings(groupID).VerifyMode.Value
+	return group.VerifyMode().Value
 }
 
 func (v *Service) questions(groupID int64) []config.Question {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.Questions().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return nil
 	}
-	return v.fallbackGroupSettings(groupID).Questions.Value
+	return group.Questions().Value
 }
 
 // Mixed mode uses a cryptographic coin flip; an empty quiz pool falls back to kernel.
@@ -297,15 +299,8 @@ func copiedSample(text string) bool {
 // Operator fallback questions override the localized built-in questions.
 func (v *Service) fallbackQuestion(groupID int64, l i18n.Lang) (string, []string) {
 	var questions []config.ShortQuestion
-	if group, ok := v.groupSettings(groupID); ok {
-		if !group.FallbackBuiltin().Value {
-			questions = group.FallbackQuestions().Value
-		}
-	} else {
-		fallback := v.fallbackGroupSettings(groupID)
-		if !fallback.FallbackBuiltin.Value {
-			questions = fallback.FallbackQuestions.Value
-		}
+	if group, ok := v.groupSettings(groupID); ok && !group.FallbackBuiltin().Value {
+		questions = group.FallbackQuestions().Value
 	}
 	if len(questions) != 0 {
 		question := questions[cryptoIntn(len(questions))]

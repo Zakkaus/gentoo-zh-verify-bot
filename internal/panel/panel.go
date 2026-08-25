@@ -38,6 +38,7 @@ type Verification interface {
 // Moderation is the administration surface provided by moderation.
 type Moderation interface {
 	OnBanTime(ctx *th.Context, update telego.Update) error
+	UpdateChannelWhitelist(ctx context.Context, groupID, senderID int64, allow bool) (unbanErr, updateErr error)
 }
 
 // Lookup is the administration surface provided by lookup.

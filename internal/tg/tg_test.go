@@ -179,6 +179,7 @@ func TestReplyCleanupAndNotifyBound(t *testing.T) {
 		client := newTestClient(t, caller)
 		client.ReplyPlain(context.Background(), -100, 9, "reply", time.Millisecond)
 		waitForMethodCalls(t, caller, "deleteMessage", 2)
+		waitForCleanupTimerCount(t, client, 0)
 		calls := caller.methodCalls("deleteMessage")
 		var first, second telego.DeleteMessageParams
 		if err := json.Unmarshal(calls[0].body, &first); err != nil {
@@ -189,6 +190,20 @@ func TestReplyCleanupAndNotifyBound(t *testing.T) {
 		}
 		if first.MessageID != 101 || second.MessageID != 9 {
 			t.Errorf("delete order = %d, %d; want response 101 then command 9", first.MessageID, second.MessageID)
+		}
+	})
+
+	t.Run("lookup cleanup respects capacity", func(t *testing.T) {
+		caller := &scriptedCaller{}
+		client := newTestClient(t, caller)
+		client.cleanupTimers.Store(cleanupTimerMax)
+		client.ScheduleCleanup(-100, 9, 101, time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
+		if got := len(caller.methodCalls("deleteMessage")); got != 0 {
+			t.Fatalf("deleteMessage calls = %d, want 0", got)
+		}
+		if got := client.cleanupTimers.Load(); got != cleanupTimerMax {
+			t.Fatalf("cleanup timer count = %d, want %d", got, cleanupTimerMax)
 		}
 	})
 
@@ -208,14 +223,30 @@ func TestReplyCleanupAndNotifyBound(t *testing.T) {
 			client.Notify(context.Background(), -100, "notice", 0)
 			if tt.wantDelete {
 				waitForMethodCalls(t, caller, "deleteMessage", 1)
+				waitForCleanupTimerCount(t, client, tt.prefill)
 			} else {
 				time.Sleep(10 * time.Millisecond)
 				if got := len(caller.methodCalls("deleteMessage")); got != 0 {
 					t.Fatalf("deleteMessage calls = %d, want 0", got)
 				}
 			}
+			if got := client.cleanupTimers.Load(); got != tt.prefill {
+				t.Fatalf("cleanup timer count = %d, want %d", got, tt.prefill)
+			}
 		})
 	}
+}
+
+func waitForCleanupTimerCount(t *testing.T, client *Client, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if client.cleanupTimers.Load() == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("cleanup timer count = %d, want %d", client.cleanupTimers.Load(), want)
 }
 
 func TestAlertsUseConfiguredOrFallbackChat(t *testing.T) {

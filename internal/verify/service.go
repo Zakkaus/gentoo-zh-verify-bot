@@ -235,6 +235,9 @@ func New(settings *store.Settings, telegram *tg.Client, cfg *config.Config, mess
 }
 
 func newService(settings *store.Settings, telegram *tg.Client, cfg *config.Config, messages *i18n.Catalog) *Service {
+	if settings == nil {
+		panic("verify: settings must not be nil")
+	}
 	return &Service{
 		cfg:            cfg,
 		loc:            loadStatsLoc(cfg.StatsTimezone),
@@ -274,108 +277,15 @@ func (v *Service) adminTransport(bot modBot) adminTransport {
 	return v.telegram(bot.(*telego.Bot))
 }
 func (v *Service) groupSettings(groupID int64) (store.GroupView, bool) {
-	if v.settings == nil {
-		return store.GroupView{}, false
-	}
 	return v.settings.Group(groupID)
-}
-
-func (v *Service) fallbackGroupSettings(groupID int64) store.GroupBaseline {
-	timeoutSeconds := v.cfg.TimeoutSeconds
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 240
-	}
-	timeoutSeconds = min(max(timeoutSeconds, 30), 1800)
-	lookupTTLSeconds := 180
-	if v.cfg.LookupTTLSeconds != nil {
-		lookupTTLSeconds = max(*v.cfg.LookupTTLSeconds, 0)
-	}
-	verifyMaxFails := v.cfg.VerifyMaxFails
-	if verifyMaxFails == 0 {
-		verifyMaxFails = 3
-	}
-	verifyRetrySeconds := v.cfg.VerifyRetrySeconds
-	if verifyRetrySeconds == 0 {
-		verifyRetrySeconds = 180
-	}
-	verifyMode := v.cfg.VerifyMode
-	if !config.ValidMode(verifyMode) {
-		verifyMode = config.ModeKernel
-	}
-	group := store.GroupBaseline{
-		ID:                      groupID,
-		Enabled:                 store.BaselineValue[bool]{Value: true, Source: store.SourceDefault},
-		VerifyMode:              store.BaselineValue[string]{Value: verifyMode, Source: store.SourceDefault},
-		NameSpoiler:             store.BaselineValue[bool]{Value: true, Source: store.SourceDefault},
-		BanSeconds:              store.BaselineValue[int]{Value: config.ClampBanSeconds(v.cfg.BanSeconds), Source: store.SourceDefault},
-		LookupTTLSeconds:        store.BaselineValue[int]{Value: lookupTTLSeconds, Source: store.SourceDefault},
-		LookupAutoDeleteEnabled: store.BaselineValue[bool]{Value: lookupTTLSeconds > 0, Source: store.SourceDefault},
-		TimeoutSeconds:          store.BaselineValue[int]{Value: timeoutSeconds, Source: store.SourceDefault},
-		VerifyMaxFails:          store.BaselineValue[int]{Value: verifyMaxFails, Source: store.SourceDefault},
-		VerifyRetrySeconds:      store.BaselineValue[int]{Value: verifyRetrySeconds, Source: store.SourceDefault},
-		AntispamEnabled:         store.BaselineValue[bool]{Value: v.cfg.BlockChannelSenders, Source: store.SourceDefault},
-		ChannelWhitelist:        store.BaselineValue[[]int64]{Value: v.cfg.ChannelWhitelist, Source: store.SourceDefault},
-		TrustedMemberGroupIDs:   store.BaselineValue[[]int64]{Value: v.cfg.TrustedMemberGroupIDs, Source: store.SourceDefault},
-		KnownChatIDs:            store.BaselineValue[[]int64]{Value: v.cfg.KnownChatIDs, Source: store.SourceDefault},
-		RequiredChannelID:       store.BaselineValue[int64]{Value: v.cfg.RequiredChannelID, Source: store.SourceDefault},
-		ChannelDisplay:          store.BaselineValue[string]{Value: v.cfg.ChannelDisplay, Source: store.SourceDefault},
-		ChannelInviteURL:        store.BaselineValue[string]{Value: v.cfg.ChannelInviteURL, Source: store.SourceDefault},
-		Questions:               store.BaselineValue[[]config.Question]{Value: v.cfg.Questions, Source: store.SourceDefault},
-		FallbackQuestions:       store.BaselineValue[[]config.ShortQuestion]{Value: v.cfg.FallbackQuestions, Source: store.SourceDefault},
-		FallbackBuiltin:         store.BaselineValue[bool]{Value: len(v.cfg.FallbackQuestions) == 0, Source: store.SourceDefault},
-		Lang:                    store.BaselineValue[string]{Value: v.cfg.LangForGroup(groupID), Source: store.SourceDefault},
-	}
-	for _, configured := range v.cfg.Groups {
-		if configured.ID != groupID {
-			continue
-		}
-		if configured.RequiredChannelID != nil {
-			group.RequiredChannelID = store.BaselineValue[int64]{Value: *configured.RequiredChannelID, Source: store.SourceConfig}
-		}
-		if configured.ChannelDisplay != "" {
-			group.ChannelDisplay = store.BaselineValue[string]{Value: configured.ChannelDisplay, Source: store.SourceConfig}
-		}
-		if configured.ChannelInviteURL != "" {
-			group.ChannelInviteURL = store.BaselineValue[string]{Value: configured.ChannelInviteURL, Source: store.SourceConfig}
-		}
-		if config.ValidMode(configured.VerifyMode) {
-			group.VerifyMode = store.BaselineValue[string]{Value: configured.VerifyMode, Source: store.SourceConfig}
-		}
-		if len(configured.Questions) > 0 {
-			group.Questions = store.BaselineValue[[]config.Question]{Value: configured.Questions, Source: store.SourceConfig}
-		}
-		if configured.TrustedMemberGroupIDs != nil {
-			group.TrustedMemberGroupIDs = store.BaselineValue[[]int64]{Value: configured.TrustedMemberGroupIDs, Source: store.SourceConfig}
-		}
-		if configured.Lang != "" {
-			group.Lang = store.BaselineValue[string]{Value: configured.Lang, Source: store.SourceConfig}
-		}
-		break
-	}
-	return group
 }
 
 // ControlGroupID returns the group used for bot-wide settings and DM status.
 func (v *Service) ControlGroupID() int64 {
-	if v.settings != nil {
-		return v.settings.ControlGroupID()
-	}
-	if v.cfg.ControlGroupID != 0 {
-		return v.cfg.ControlGroupID
-	}
-	if len(v.cfg.GroupIDs) != 0 {
-		return v.cfg.GroupIDs[0]
-	}
-	if len(v.cfg.Groups) != 0 {
-		return v.cfg.Groups[0].ID
-	}
-	return 0
+	return v.settings.ControlGroupID()
 }
 
 func (v *Service) updateGroupSettings(groupID int64, update func(store.GroupView, *store.GroupOverrides)) error {
-	if v.settings == nil {
-		return fmt.Errorf("%w: runtime settings are not installed", store.ErrSettingsUnavailable)
-	}
 	group, ok := v.settings.Group(groupID)
 	if !ok {
 		return fmt.Errorf("%w: %d", store.ErrUnknownGroup, groupID)
@@ -387,9 +297,6 @@ func (v *Service) updateGroupSettings(groupID int64, update func(store.GroupView
 }
 
 func (v *Service) updateGlobalSettings(update func(store.GlobalView, *store.GlobalOverrides)) error {
-	if v.settings == nil {
-		return fmt.Errorf("%w: runtime settings are not installed", store.ErrSettingsUnavailable)
-	}
 	global := v.settings.Global()
 	overrides := global.Overrides()
 	update(global, &overrides)
@@ -422,10 +329,8 @@ func (v *Service) DMOrGroup(msg *telego.Message) bool {
 
 // IsEnabled reports whether automated join verification is enabled for one group.
 func (v *Service) IsEnabled(groupID int64) bool {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.Enabled().Value
-	}
-	return v.fallbackGroupSettings(groupID).Enabled.Value
+	group, ok := v.groupSettings(groupID)
+	return ok && group.Enabled().Value
 }
 
 // SetEnabled updates automated join verification for one group.
@@ -447,10 +352,8 @@ func (v *Service) ToggleRich() (bool, error) {
 
 // NameSpoilerOn reports whether applicant names are hidden in one group.
 func (v *Service) NameSpoilerOn(groupID int64) bool {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.NameSpoiler().Value
-	}
-	return v.fallbackGroupSettings(groupID).NameSpoiler.Value
+	group, ok := v.groupSettings(groupID)
+	return ok && group.NameSpoiler().Value
 }
 
 // ToggleNameSpoiler flips applicant-name hiding for one group.
@@ -463,17 +366,19 @@ func (v *Service) ToggleNameSpoiler(groupID int64) (bool, error) {
 	return enabled, err
 }
 func (v *Service) timeout(groupID int64) time.Duration {
-	if group, ok := v.groupSettings(groupID); ok {
-		return time.Duration(group.TimeoutSeconds().Value) * time.Second
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return 0
 	}
-	return time.Duration(v.fallbackGroupSettings(groupID).TimeoutSeconds.Value) * time.Second
+	return time.Duration(group.TimeoutSeconds().Value) * time.Second
 }
 
 func (v *Service) verificationBanDuration(groupID int64) int {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.BanSeconds().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return 0
 	}
-	return v.fallbackGroupSettings(groupID).BanSeconds.Value
+	return group.BanSeconds().Value
 }
 
 func verificationBanDurationText(messages *i18n.Catalog, l i18n.Lang, seconds int) string {
@@ -499,42 +404,47 @@ func (v *Service) applyVerificationBan(ctx context.Context, bot verifyBot, group
 
 // RequiredChannelID returns the channel applicants must join for one group.
 func (v *Service) RequiredChannelID(groupID int64) int64 {
-	if group, ok := v.groupSettings(groupID); ok {
-		overrides := group.Overrides()
-		if overrides.RequiredChannelID != nil {
-			return *overrides.RequiredChannelID
-		}
-		return group.Baseline().RequiredChannelID.Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return 0
 	}
-	return v.fallbackGroupSettings(groupID).RequiredChannelID.Value
+	overrides := group.Overrides()
+	if overrides.RequiredChannelID != nil {
+		return *overrides.RequiredChannelID
+	}
+	return group.Baseline().RequiredChannelID.Value
 }
 
 func (v *Service) channelDisplay(groupID int64) string {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.ChannelDisplay().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return ""
 	}
-	return v.fallbackGroupSettings(groupID).ChannelDisplay.Value
+	return group.ChannelDisplay().Value
 }
 
 func (v *Service) channelInviteURL(groupID int64) string {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.ChannelInviteURL().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return ""
 	}
-	return v.fallbackGroupSettings(groupID).ChannelInviteURL.Value
+	return group.ChannelInviteURL().Value
 }
 
 func (v *Service) trustedGroups(groupID int64) []int64 {
-	if group, ok := v.groupSettings(groupID); ok {
-		return group.TrustedMemberGroupIDs().Value
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return nil
 	}
-	return v.fallbackGroupSettings(groupID).TrustedMemberGroupIDs.Value
+	return group.TrustedMemberGroupIDs().Value
 }
 
 func (v *Service) groupLanguage(groupID int64) i18n.Lang {
-	if group, ok := v.groupSettings(groupID); ok {
-		return i18n.FromStored(group.Lang().Value)
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return i18n.LangZH
 	}
-	return i18n.FromStored(v.cfg.LangForGroup(groupID))
+	return i18n.FromStored(group.Lang().Value)
 }
 
 func (v *Service) applicantLanguage(groupID, userID int64, telegramCode string) i18n.Lang {
@@ -544,42 +454,6 @@ func (v *Service) applicantLanguage(groupID, userID int64, telegramCode string) 
 		return p.lang
 	}
 	return i18n.FromTelegram(telegramCode)
-}
-
-// LogVerificationAccess reports required-channel and trusted-group membership visibility.
-func (v *Service) LogVerificationAccess(ctx context.Context, bot Telegram, selfID int64) {
-	groupIDs := v.cfg.GroupIDs
-	if v.settings != nil {
-		groupIDs = v.settings.GroupIDs()
-	}
-	seen := make(map[int64]bool)
-	for _, groupID := range groupIDs {
-		requiredChannelID := v.RequiredChannelID(groupID)
-		if requiredChannelID == 0 || seen[requiredChannelID] {
-			continue
-		}
-		seen[requiredChannelID] = true
-		if _, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(requiredChannelID), UserID: selfID}); err != nil {
-			log.Printf("required channel %d: bot CANNOT read membership (%v) — the follow-gate can't be enforced; make the bot an admin of this channel", requiredChannelID, err)
-		} else {
-			log.Printf("required channel %d: bot can read membership ✓", requiredChannelID)
-		}
-	}
-	var trusted []int64
-	for _, groupID := range groupIDs {
-		trusted = append(trusted, v.trustedGroups(groupID)...)
-	}
-	for _, sourceID := range trusted {
-		if sourceID == 0 || seen[sourceID] {
-			continue
-		}
-		seen[sourceID] = true
-		if _, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(sourceID), UserID: selfID}); err != nil {
-			log.Printf("trusted group %d: bot CANNOT read membership (%v) — its members can't be auto-approved; add the bot there (member/admin)", sourceID, err)
-		} else {
-			log.Printf("trusted group %d: bot can read membership ✓ — its members skip verification", sourceID)
-		}
-	}
 }
 
 // Spoilered names use one non-nested entity so hostile names cannot break challenge HTML.
