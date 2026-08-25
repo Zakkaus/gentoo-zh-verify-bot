@@ -1,0 +1,1 @@
+{"bugs":[{"product":"Gentoo Linux","resolution":"FIXED","component":"Current packages","summary":"dev-debug/gdb-17.2 fails to build on sparc","cf_stabilisation_atoms":"''","priority":"Normal","status":"RESOLVED","severity":"normal","creation_time":"2026-08-25T03:11:38Z","keywords":["PATCH"],"id":981378}]}

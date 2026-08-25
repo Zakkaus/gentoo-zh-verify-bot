@@ -18,9 +18,11 @@ released and your report credited, unless you prefer to stay anonymous.
 
 ## Operator notes
 
-- The bot token (`BOT_TOKEN`) and the optional `GITHUB_TOKEN` come from the
-  environment only. Keep `bot.env` at mode `0600` and never commit it; `config.json`
-  holds no secrets.
+- The bot token (`BOT_TOKEN`) and optional `GITHUB_TOKEN` come from the environment only.
+  Keep `bot.env` at mode `0600` and never commit it; `config.json` holds no secrets. Do not put a
+  real token in `printf`, `echo`, `install`, or another command argument: interactive shells may
+  preserve that argument in history even when the destination file is private. Create an empty
+  `0600` file and edit it with `sudoedit`, as shown in the README.
 - Admin and moderation commands are gated on Telegram group-admin status and **fail
   closed** on API errors; callback buttons verify the acting user. Only run the bot
   in groups whose admin set you trust.
@@ -28,6 +30,11 @@ released and your report credited, unless you prefer to stay anonymous.
 - The `$STATE_DIRECTORY` holds runtime state (pending verifications, strikes, feed cursors). It must
   be **private to the bot's service user** and not writable by untrusted users; the provided systemd
   unit's `StateDirectory=` + `DynamicUser=` already enforce this.
+- With no owner bound, startup logs an `OWNER UNCLAIMED` one-use claim link. Until that link is
+  used, **anyone who can read the journal, including a central log collector, can become the bot
+  owner**. The link expires after 10 minutes by default; set `owner_claim_lifetime_seconds` to
+  shorten or extend that window. Set the optional `owner_claim_user_id` to restrict the claim to
+  one Telegram user while retaining zero-touch setup when the key is absent.
 
 ## Static analysis (gosec)
 
@@ -37,7 +44,7 @@ excluded in CI (`-exclude=G304,G703,G706`):
 
 | Rule | Where | Why accepted |
 | --- | --- | --- |
-| **G304 / G703** — file path from a variable | state-file reads/writes and config load (`verify.go`, `feed.go`, `main.go`, `config.go`) | Paths come from the operator CLI (`--config`) or systemd `$STATE_DIRECTORY`, never from a Telegram user; the unit confines filesystem access. |
-| **G706** — log taint | `log.Printf` of usernames / chat titles / paths (`verify.go`, `feed.go`, `main.go`) | Values are operator config or Telegram-supplied display strings written to journald (not a fragile log parser); no command/format injection. |
+| **G304 / G703** — file path from a variable | state-file reads/writes and config load (`internal/store/json.go`, `internal/feed/feed.go`, `cmd/gentoo-zh-verify-bot/main.go`, `internal/config/config.go`) | Paths come from the operator CLI (`--config`) or systemd `$STATE_DIRECTORY`, never from a Telegram user; the unit confines filesystem access. |
+| **G706** — log taint | `log.Printf` of usernames, chat titles, and paths across `internal/verify`, `internal/feed`, and `cmd/gentoo-zh-verify-bot` | Values are operator config or Telegram-supplied display strings written to journald (not a fragile log parser); no command/format injection. |
 
 Any other gosec rule — or a path/log finding that ever reaches genuinely untrusted input — fails CI.

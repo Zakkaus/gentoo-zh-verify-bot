@@ -1,0 +1,1 @@
+{"faults":[],"bugs":[{"severity":"normal","resolution":"WONTFIX","product":"Gentoo Linux","component":"Current packages","summary":"=app-emulation/wine-vanilla-11.0: Cannot open shared library libasound_module_conf_pulse.so","status":"RESOLVED"}]}

@@ -1,0 +1,80 @@
+{
+  "bug": {
+    "usage": "用法：/bug <编号>。示例：/bug 900000。",
+    "not_found": "❓ Bug %[1]s 不存在。请检查编号后重试。",
+    "unavailable": "❓ 暂时无法获取 Bug %[1]s 的详情。请稍后重试。也可直接查看：%[2]s",
+    "heading": "🐞 <a href=\"%[1]s\">Bug %[2]s</a>\n%[3]s\n",
+    "details": {
+      "resolution_separator": " · ",
+      "status": "状态：%[1]s",
+      "severity": " · 严重性：%[1]s",
+      "product_component": "产品／组件：%[1]s"
+    },
+    "status": {
+      "unconfirmed": "未确认",
+      "confirmed": "已确认",
+      "in_progress": "处理中",
+      "resolved": "已解决",
+      "verified": "已验证"
+    },
+    "resolution": {
+      "fixed": "已修复",
+      "wont_fix": "不予修复",
+      "cant_fix": "无法修复",
+      "duplicate": "重复",
+      "invalid": "无效",
+      "works_for_me": "无法复现",
+      "obsolete": "已过时",
+      "upstream": "需转交上游",
+      "package_removed": "包已移除",
+      "need_info": "需补充信息",
+      "test_request": "待测试",
+      "pending_upstream": "等待上游处理"
+    },
+    "severity": {
+      "blocker": "阻断",
+      "critical": "严重",
+      "major": "重大",
+      "normal": "普通",
+      "minor": "次要",
+      "trivial": "轻微",
+      "enhancement": "功能增强"
+    },
+    "priority": {
+      "highest": "最高",
+      "high": "高",
+      "normal": "普通",
+      "low": "低",
+      "lowest": "最低"
+    }
+  },
+  "news": {
+    "latest_heading": "📰 Gentoo 最新新闻：",
+    "search_heading": "📰 Gentoo 新闻搜索「%[1]s」：",
+    "no_matches": "没找到匹配的新闻。请尝试其他关键词。",
+    "unavailable": "暂时无法获取新闻列表。请稍后重试。",
+    "stale": "新闻列表暂时无法更新。以上结果可能不完整。请稍后重试。"
+  },
+  "wiki": {
+    "usage": "用法：/wiki <关键词>。示例：/wiki systemd boot。搜索 Gentoo Wiki 和 ArchWiki，并优先显示简体中文页面。",
+    "heading": "📚 <b>%[1]s</b> 的 Wiki 搜索结果",
+    "sources_unavailable": "\n\n以下来源暂时无法查询，结果可能不完整：%[1]s。请稍后重试。",
+    "source_join": "、",
+    "no_matches": "\n\n未找到相关条目。请尝试其他关键词。"
+  },
+  "bbs": {
+    "usage": "用法：/bbs <关键词>。示例：/bbs nvidia 黑屏。搜索 Linux 论坛，并优先显示中文结果。",
+    "heading": "💬 <b>%[1]s</b> 的论坛搜索结果",
+    "arch_cn_heading": "\n\n<b>Arch Linux CN 论坛</b>",
+    "arch_cn_unavailable": "\n\n暂时无法获取 Arch Linux CN 论坛的结果。请稍后重试。",
+    "arch_cn_no_matches": "\n\nArch Linux CN 论坛未找到匹配结果。请使用下方按钮搜索其他论坛。",
+    "other_forums": "\n\n其他论坛（点击按钮搜索）：",
+    "gentoo_forum": "Gentoo 论坛",
+    "arch_bbs": "Arch BBS",
+    "ubuntu_forum": "Ubuntu 论坛",
+    "debian_forum": "Debian 论坛"
+  },
+  "transport": {
+    "private_rate_limited": "⏳ 查询过于频繁。私聊每分钟最多 %[1]d 次，请等待 1 分钟后重试；群组内不受此限制。"
+  }
+}

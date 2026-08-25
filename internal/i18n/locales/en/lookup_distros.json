@@ -1,0 +1,46 @@
+{
+  "pkgs": {
+    "repology_unavailable": "Repology is temporarily unavailable, so cross-distribution information for “%[1]s” could not be retrieved. Try again later.",
+    "repology_not_found": "❓ Repology has no cross-distribution package matching “%[1]s”. Try a more specific package name.",
+    "usage": "Usage: /pkgs <package>. Example: /pkgs firefox. Compare package versions across Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL, CentOS Stream, and openSUSE. Debian and similar distributions show stable/testing channels; RHEL data comes from AlmaLinux and Rocky Linux.",
+    "no_supported_distro": "No packaged version of “%[1]s” was found in Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL, CentOS Stream, EPEL, or openSUSE. It may be available only in another distribution.",
+    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> versions across distributions",
+    "closest_match": " <i>(closest match for “%[1]s”)</i>",
+    "plain_heading": "%[1]s:",
+    "release_role": " <i>(%[1]s)</i>",
+    "plain_row": "\n • <b>%[1]s</b>: %[2]s%[3]s",
+    "rich_row": "<li><b>%[1]s</b>: %[2]s%[3]s</li>",
+    "alternatives": "\nOther matches: %[1]s",
+    "rich_alternatives": "<details><summary>Other matches (%[1]d)</summary>%[2]s</details>"
+  },
+  "armpkgs": {
+    "usage": "Usage: /armpkgs <package>. Example: /armpkgs htop. Compare arm64 (AArch64) support for the package across Gentoo, Debian, Ubuntu, Fedora, Arch Linux ARM, and AUR.",
+    "heading": "🦾 <b>%[1]s</b> · cross-distribution arm64 (AArch64) support",
+    "row": "\n • <a href=\"%[1]s\">%[2]s</a>: %[3]s",
+    "footer": "<i>⚠️ “Query failed” means that source is temporarily unavailable; try again later. A package in another distribution does not show that an ebuild without an arm64 keyword works. Test it first; if needed, accept ** only for that package in package.accept_keywords.</i>",
+    "query_failed": "⚠️ Query failed",
+    "not_in_official_tree": "❌ Not in the official tree",
+    "stable_testing": "✅ stable %[1]s · 🧪 ~%[2]s",
+    "stable_only": "✅ stable %[1]s",
+    "testing_only": "🧪 ~arm64 only %[1]s",
+    "no_arm64_keyword": "❌ No arm64 keyword",
+    "no_arm64_package": "❌ No arm64 package",
+    "development_suite": "%[1]s (development release)",
+    "available": "✅ %[1]s %[2]s",
+    "not_in_fedora": "❌ Not in Fedora",
+    "fedora_query_failed": "⚠️ Fedora query failed",
+    "fedora_rawhide": "✅ Rawhide %[1]s",
+    "pkgbuild_parse_failed": "⚠️ Could not parse PKGBUILD; open the AUR link to inspect it",
+    "any_architecture": "✅ any (architecture-independent)",
+    "declares_aarch64": "✅ Declares aarch64",
+    "arm32_only": "🟡 32-bit ARM only (no aarch64)",
+    "x86_only": "❌ PKGBUILD declares x86 only (not aarch64; verify whether the source builds)",
+    "not_in_aur": "❌ Not in AUR",
+    "aur_query_failed": "⚠️ AUR query failed",
+    "not_packaged": "❌ Not packaged",
+    "packaged": "✅ Packaged"
+  },
+  "release": {
+    "standard_support_ended": " · standard support ended"
+  }
+}

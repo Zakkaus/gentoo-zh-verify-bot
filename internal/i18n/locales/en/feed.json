@@ -1,0 +1,18 @@
+{
+  "bug": {
+    "field_separator": ": ",
+    "status_resolution_separator": " · ",
+    "status": "Status",
+    "product_component": "Product / component",
+    "priority": "Priority",
+    "severity": "Severity",
+    "keywords": "Keywords",
+    "packages": "Packages",
+    "assignee": "Assignee",
+    "reporter": "Reporter",
+    "creation_date": "Created"
+  },
+  "config": {
+    "control_group_only": "⛔ Run this command in the control group (ID %[1]d)."
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "antispam": {
+    "allowed": "✅ Channel %[1]d was added to this group's allowlist and unbanned here.",
+    "allowed_unban_failed": "✅ Channel %[1]d was added to this group's allowlist, but unbanning it here failed. Make sure the bot can ban users, then unban the channel manually.",
+    "disabled": "Sender-channel blocking is disabled.",
+    "enabled": "🛡 Sender-channel blocking is enabled. Disable the bot's privacy mode in BotFather, or the bot cannot receive these messages.",
+    "invalid_channel_id": "Invalid channel ID. Enter a full ID (for example, -1001234567890) or its digits without the -100 prefix (for example, 1234567890).",
+    "removed": "Channel %[1]d was removed from this group's allowlist.",
+    "sender_ban_failed_alert": "🛡 Deleted the message sent as channel “%[1]s”, but failed to ban the channel. The bot may be missing permission to ban users. Ban the channel manually. (ID %[2]d, group %[3]d)",
+    "sender_banned_alert": "🛡 Deleted the message sent as channel “%[1]s” and permanently banned the channel; the ban will not lift automatically. If this was a mistake, use /bc allow %[4]d to unban and allowlist it. (ID %[2]d, group %[3]d)",
+    "usage": "Usage: /bc toggles sender-channel blocking; /bc allow <channel_id> allowlists and unbans a channel; /bc deny <channel_id> removes a channel from the allowlist."
+  },
+  "ban": {
+    "action": "%[1]s; ban duration: %[2]s",
+    "alert": "%[1]s %[2]s: group %[3]d, target %[4]d (%[5]s), operator %[6]s",
+    "applied": "✅ %[2]s (ID %[3]d): %[1]s. Operator: %[4]s.",
+    "failed": "❌ Ban failed. The bot may be missing permission to ban users. Grant the permission, then try again.",
+    "failure_alert": "⚠️ %[1]s failed: group %[2]d, target %[3]d (%[4]s), operator %[5]s. The bot may be missing permission to ban users. Grant the permission, then retry the action.",
+    "purge_verb": "banned; all messages purged",
+    "verb": "banned"
+  },
+  "ban_time": {
+    "current": "⏱ Current ban duration: %[1]s (%[2]s).\n\n%[3]s",
+    "permanent_description": "banned users cannot rejoin this group",
+    "set": "✅ Ban duration set to %[1]s (%[2]s).\n/ban, /sb, and automatic bans after repeated verification failures use this duration.",
+    "temporary_description": "the user may submit another join request after the ban lifts",
+    "usage": "Usage: /bantime <duration> sets the duration used by /ban, /sb, and automatic bans after repeated verification failures:\n• /bantime 0 — permanent ban (does not lift automatically; the user cannot rejoin this group)\n• /bantime 7d / 12h / 30m / 3600 — temporary ban (lifts automatically when the duration ends; the user may then submit another join request)\n(d = days, h = hours, m = minutes, bare number = seconds; minimum 30 seconds)"
+  },
+  "common": {
+    "admin_only": "⛔ Only group administrators can use this command.",
+    "command_admin_only": "⛔ Only group administrators can use %[1]s.",
+    "reply_usage": "Usage: reply to the target user's message, then send %[1]s.",
+    "settings_save_failed": "❌ Could not save the settings. Try again later.",
+    "target_admin_check_failed": "⚠️ Could not determine whether the target user is an administrator, so no action was taken. Make sure the bot can read member information, then try again.",
+    "target_is_admin": "The target user is an administrator, so no action was taken. Reply to a non-administrator's message and try again."
+  },
+  "duration": {
+    "days": "%[1]d days",
+    "hours": "%[1]d hours",
+    "minutes": "%[1]d minutes",
+    "permanent": "permanent",
+    "permanent_effect": "does not lift automatically",
+    "permanent_input": "permanent",
+    "seconds": "%[1]d seconds",
+    "status": "%[1]s; %[2]s",
+    "temporary_effect": "lifts automatically when the duration ends"
+  },
+  "mute": {
+    "alert": "/mute %[1]s: group %[2]d, target %[3]d (%[4]s), operator %[5]s",
+    "applied": "🔇 %[1]s (ID %[2]d) was muted. Duration: %[3]s. Use /unmute to lift it early. Operator: %[4]s.",
+    "failed": "❌ Mute failed. The bot may be missing permission to restrict members. Grant the permission, then send /mute again.",
+    "unmute_failed": "❌ Unmute failed, so the mute remains in effect and will lift at its original automatic expiry. The bot may be missing permission to restrict members. Grant the permission, then send /unmute again.",
+    "unmuted": "🔊 Unmuted %[1]s (ID %[2]d). Operator: %[3]s.",
+    "usage": "Usage: /mute (default duration: %[1]s), or send /mute 30m, /mute 2h, or /mute 12h to set a duration. Permanent mutes are not supported."
+  },
+  "setup": {
+    "ready": "Group “%[1]s” (%[2]d) is ready: all required moderation permissions and membership checks are available.",
+    "missing_header": "Group “%[1]s” (%[2]d) is not ready:",
+    "group_access": "Confirm that the bot can still access this group.",
+    "group_admin": "Promote the bot to group administrator.",
+    "approve_join_requests": "Enable Invite users so the bot can approve join requests.",
+    "ban_users": "Enable Ban users so the bot can ban or restrict users.",
+    "delete_messages": "Enable Delete messages so the bot can clean up messages.",
+    "channel_admin": "Make the bot an administrator of required channel “%[1]s” (%[2]d); plain membership cannot read other users' membership.",
+    "restart": "After fixing these items, restart the service to rerun this check."
+  },
+  "warning": {
+    "cleared": "✅ Cleared %[1]s's warnings (previous count: %[2]d). Operator: %[3]s.",
+    "issued": "⚠️ Warned %[1]s (%[2]d/%[3]d). At %[4]d warnings, the user will be removed from the group automatically. Operator: %[5]s.",
+    "kick_alert": "Warning-limit removal: group %[1]d, target %[2]d (%[3]s), operator %[4]s",
+    "kick_rejoinable": "removed from the group; the user may submit another join request",
+    "kick_unban_failed": "permanently banned because unbanning failed; the ban will not lift automatically; unban the user manually",
+    "limit_kick_alert": "⚠️ %[1]s reached the warning limit of %[2]d, but automatic removal failed. Remove the user manually (operator: %[3]s).",
+    "limit_kick_failed": "⚠️ The warning limit was reached, but the user could not be removed. The bot may be missing permission to ban users. Grant the permission, then remove the user manually.",
+    "limit_reached": "🚫 %[1]s reached the warning limit of %[2]d and was %[3]s. Operator: %[4]s."
+  }
+}

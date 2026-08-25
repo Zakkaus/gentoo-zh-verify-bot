@@ -1,0 +1,46 @@
+{
+  "pkgs": {
+    "repology_unavailable": "暂时无法查询 Repology 中「%[1]s」的跨发行版信息。请稍后重试。",
+    "repology_not_found": "❓ Repology 中没有与「%[1]s」匹配的跨发行版包。请尝试更精确的包名。",
+    "usage": "用法：/pkgs <包名>。示例：/pkgs firefox。比较 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream 和 openSUSE 等发行版的包版本；Debian 等显示 stable/testing 通道，RHEL 数据来自 AlmaLinux 和 Rocky Linux。",
+    "no_supported_distro": "未在 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream、EPEL 或 openSUSE 中找到「%[1]s」的已打包版本。它可能只由其他发行版提供。",
+    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> 跨发行版版本",
+    "closest_match": " <i>（与「%[1]s」最接近的匹配）</i>",
+    "plain_heading": "%[1]s：",
+    "release_role": " <i>（%[1]s）</i>",
+    "plain_row": "\n • <b>%[1]s</b>：%[2]s%[3]s",
+    "rich_row": "<li><b>%[1]s</b>：%[2]s%[3]s</li>",
+    "alternatives": "\n其他匹配：%[1]s",
+    "rich_alternatives": "<details><summary>其他匹配（共 %[1]d 个）</summary>%[2]s</details>"
+  },
+  "armpkgs": {
+    "usage": "用法：/armpkgs <包名>。示例：/armpkgs htop。比较该包在 Gentoo、Debian、Ubuntu、Fedora、Arch Linux ARM 和 AUR 的 arm64（AArch64）支持情况。",
+    "heading": "🦾 <b>%[1]s</b> · arm64（AArch64）跨发行版支持",
+    "row": "\n • <a href=\"%[1]s\">%[2]s</a>：%[3]s",
+    "footer": "<i>⚠️「查询失败」表示对应来源暂时不可用。请稍后重试。Gentoo 未设置 arm64 keyword 时，即使其他发行版有包，也不能据此判断该 ebuild 可用。请先测试；如需尝试，再在 package.accept_keywords 中仅对该包接受 **。</i>",
+    "query_failed": "⚠️ 查询失败",
+    "not_in_official_tree": "❌ 不在官方树",
+    "stable_testing": "✅ stable %[1]s · 🧪 ~%[2]s",
+    "stable_only": "✅ stable %[1]s",
+    "testing_only": "🧪 仅 ~arm64 %[1]s",
+    "no_arm64_keyword": "❌ 未设置 arm64 keyword",
+    "no_arm64_package": "❌ 无 arm64 包",
+    "development_suite": "%[1]s（开发版）",
+    "available": "✅ %[1]s %[2]s",
+    "not_in_fedora": "❌ 不在 Fedora",
+    "fedora_query_failed": "⚠️ Fedora 查询失败",
+    "fedora_rawhide": "✅ Rawhide %[1]s",
+    "pkgbuild_parse_failed": "⚠️ 无法解析 PKGBUILD，请打开 AUR 链接检查",
+    "any_architecture": "✅ any（架构无关）",
+    "declares_aarch64": "✅ 声明 aarch64",
+    "arm32_only": "🟡 仅 32 位 ARM（无 aarch64）",
+    "x86_only": "❌ PKGBUILD 仅声明 x86（未声明 aarch64；请自行验证源码能否构建）",
+    "not_in_aur": "❌ 不在 AUR",
+    "aur_query_failed": "⚠️ AUR 查询失败",
+    "not_packaged": "❌ 未打包",
+    "packaged": "✅ 已打包"
+  },
+  "release": {
+    "standard_support_ended": " · 标准支持已结束"
+  }
+}

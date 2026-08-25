@@ -1,11 +1,9 @@
 {
-  "groups": [
-    {"id": -1001234567890},
-    {"id": -1009876543210, "required_channel_id": -1001112223334, "channel_display": "@OtherChannel"},
-    {"id": -1005556667778, "trusted_member_group_ids": [-1001234567890], "verify_mode": "quiz"}
-  ],
+  "groups": [],
+  "control_group_id": 0,
+  "lang": "zh",
   "required_channel_id": 0,
-  "channel_display": "@YourChannel",
+  "channel_display": "",
   "channel_invite_url": "",
   "timeout_seconds": 240,
   "notify_ttl_seconds": 60,
@@ -20,6 +18,8 @@
   "required_channel_fail_open": true,
   "trusted_member_group_ids": [],
   "known_chat_ids": [],
+  "owner_claim_lifetime_seconds": 600,
+  "owner_claim_user_id": 0,
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",

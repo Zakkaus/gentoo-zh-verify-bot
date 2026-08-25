@@ -1,0 +1,18 @@
+{
+  "bug": {
+    "field_separator": "：",
+    "status_resolution_separator": " · ",
+    "status": "状态",
+    "product_component": "产品／组件",
+    "priority": "优先级",
+    "severity": "严重性",
+    "keywords": "关键词",
+    "packages": "包",
+    "assignee": "负责人",
+    "reporter": "报告人",
+    "creation_date": "创建日期"
+  },
+  "config": {
+    "control_group_only": "⛔ 该命令只能在控制群（ID %[1]d）中使用。"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "menu": {
+    "member": {
+      "help": "Show available commands",
+      "pkg": "Search Gentoo packages",
+      "use": "Show package details and USE flags",
+      "bug": "Look up a Gentoo Bugzilla issue",
+      "news": "Browse or search Gentoo news",
+      "wiki": "Search Gentoo Wiki and ArchWiki",
+      "bbs": "Search Linux forums (Chinese first)",
+      "pkgs": "Compare package versions across distributions",
+      "distro": "Alias for /pkgs",
+      "arm": "Show Gentoo arm64 keyword status",
+      "arm_pkgs": "Compare arm64 support across distributions",
+      "ping": "Show bot status and uptime",
+      "stats": "Show today's approvals and rejections"
+    },
+    "admin": {
+      "start": "[Administrator] Enable join verification",
+      "stop": "[Administrator] Disable join verification",
+      "mute": "[Administrator] Mute the user you replied to (default: 1h)",
+      "unmute": "[Administrator] Unmute the user you replied to",
+      "purge": "[Administrator] Ban the user you replied to and delete all messages",
+      "ban": "[Administrator] Ban and remove the user you replied to",
+      "warn": "[Administrator] Warn the user you replied to (removed after %[1]d warnings)",
+      "clear_warn": "[Administrator] Clear warnings for the user you replied to",
+      "channel": "[Administrator] Manage sender-channel blocking",
+      "rich_text": "[Administrator] Toggle rich text for /pkg and /use",
+      "name_spoiler": "[Administrator] Toggle name hiding for new members",
+      "verification_mode": "[Administrator] Change verification mode",
+      "auto_delete": "[Administrator] Toggle automatic result deletion",
+      "ban_time": "[Administrator] Set ban duration"
+    }
+  },
+  "lifecycle": {
+    "unauthorized_chat": "🚪 Automatically left unauthorized chat: %[1]s (ID: %[2]d, type: %[3]s)."
+  },
+  "direct_message": {
+    "auto_reply": "👋 This bot handles join verification for the Gentoo Chinese community and provides Gentoo/Linux lookup commands.\n\n• To join: submit a join request in the group. If you have started this bot before, it sends the verification challenge here immediately. Otherwise, select “✅ Start verification” in the bot's group message.\n• Lookup commands (/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs) also work in direct messages. Direct messages are limited to %[1]d queries per minute; group chats are not rate-limited.\n• Review and administration commands only work in the group."
+  },
+  "registration": {
+    "owner_claimed": "Deployer ownership is now bound to this account. You can add groups.",
+    "owner_claim_refused": "This owner-claim link is invalid, used, or expired.",
+    "owner_claim_save_failed": "Could not save the owner claim. Restore write access to the service state directory, then retry the same link.",
+    "enrollment_owner_only": "Only the bot owner can create group-enrollment links.",
+    "enrollment_link": "Group-enrollment link (valid for %[1]d minutes and one use):\n%[2]s",
+    "enrollment_refused": "This group-enrollment link is invalid, used, or expired. The bot will leave this group.",
+    "registration_pending": "Registration is authorized for group “%[1]s”. Promote the bot to administrator and grant the required permissions. Registration finishes automatically after promotion.",
+    "group_registered": "Registered group “%[1]s”. Run /settings in that group.",
+    "registration_save_failed": "Could not persist group registration. The bot will leave this group; check the service state directory.",
+    "unregister_owner_only": "Only the bot owner can unregister runtime groups.",
+    "unregister_refused": "Could not unregister that group. Use /unregister <group-id> with a runtime-registered group ID.",
+    "unregister_save_failed": "Could not persist group removal. Restore write access to the service state directory, then retry.",
+    "group_unregistered": "Unregistered group “%[1]s” and removed its runtime settings."
+  }
+}

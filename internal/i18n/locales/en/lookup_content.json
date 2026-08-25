@@ -1,0 +1,80 @@
+{
+  "bug": {
+    "usage": "Usage: /bug <number>. Example: /bug 900000.",
+    "not_found": "❓ Bug %[1]s does not exist. Check the bug number and try again.",
+    "unavailable": "❓ Bug %[1]s details are temporarily unavailable. Try again later or view the bug directly: %[2]s",
+    "heading": "🐞 <a href=\"%[1]s\">Bug %[2]s</a>\n%[3]s\n",
+    "details": {
+      "resolution_separator": " · ",
+      "status": "Status: %[1]s",
+      "severity": " · Severity: %[1]s",
+      "product_component": "Product / component: %[1]s"
+    },
+    "status": {
+      "unconfirmed": "UNCONFIRMED",
+      "confirmed": "CONFIRMED",
+      "in_progress": "IN_PROGRESS",
+      "resolved": "RESOLVED",
+      "verified": "VERIFIED"
+    },
+    "resolution": {
+      "fixed": "FIXED",
+      "wont_fix": "WONTFIX",
+      "cant_fix": "CANTFIX",
+      "duplicate": "DUPLICATE",
+      "invalid": "INVALID",
+      "works_for_me": "WORKSFORME",
+      "obsolete": "OBSOLETE",
+      "upstream": "UPSTREAM",
+      "package_removed": "PKGREMOVED",
+      "need_info": "NEEDINFO",
+      "test_request": "TEST-REQUEST",
+      "pending_upstream": "PENDING-UPSTREAM"
+    },
+    "severity": {
+      "blocker": "Blocker",
+      "critical": "Critical",
+      "major": "Major",
+      "normal": "Normal",
+      "minor": "Minor",
+      "trivial": "Trivial",
+      "enhancement": "Enhancement"
+    },
+    "priority": {
+      "highest": "Highest",
+      "high": "High",
+      "normal": "Normal",
+      "low": "Low",
+      "lowest": "Lowest"
+    }
+  },
+  "news": {
+    "latest_heading": "📰 Latest Gentoo news:",
+    "search_heading": "📰 Gentoo news results for “%[1]s”:",
+    "no_matches": "No matching news found. Try different keywords.",
+    "unavailable": "The news list is temporarily unavailable. Try again later.",
+    "stale": "The news list could not be refreshed. These results may be incomplete; try again later."
+  },
+  "wiki": {
+    "usage": "Usage: /wiki <keywords>. Example: /wiki systemd boot. Search the Gentoo Wiki and ArchWiki, prioritizing English pages.",
+    "heading": "📚 Wiki results for <b>%[1]s</b>",
+    "sources_unavailable": "\n\nThe following sources are temporarily unavailable, so results may be incomplete: %[1]s. Try again later.",
+    "source_join": " and ",
+    "no_matches": "\n\nNo matching pages found. Try different keywords."
+  },
+  "bbs": {
+    "usage": "Usage: /bbs <keywords>. Example: /bbs nvidia black screen. Search Linux forums, showing Chinese results first.",
+    "heading": "💬 Forum results for <b>%[1]s</b>",
+    "arch_cn_heading": "\n\n<b>Arch Linux CN Forum</b>",
+    "arch_cn_unavailable": "\n\nArch Linux CN Forum results are temporarily unavailable. Try again later.",
+    "arch_cn_no_matches": "\n\nNo matching results in the Arch Linux CN Forum. Select a button below to search another forum.",
+    "other_forums": "\n\nOther forums (select a button to search):",
+    "gentoo_forum": "Gentoo Forums",
+    "arch_bbs": "Arch BBS",
+    "ubuntu_forum": "Ubuntu Forums",
+    "debian_forum": "Debian Forums"
+  },
+  "transport": {
+    "private_rate_limited": "⏳ Too many queries. Direct messages are limited to %[1]d queries per minute. Wait 1 minute and try again; group chats are not limited."
+  }
+}
