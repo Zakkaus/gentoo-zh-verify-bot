@@ -11,7 +11,7 @@ func privMsg(text string) telego.Update {
 	return telego.Update{Message: &telego.Message{Chat: telego.Chat{Type: "private"}, Text: text}}
 }
 
-func TestDMRouting(t *testing.T) {
+func TestPrivateNonStartPredicate(t *testing.T) {
 	handled := []string{
 		"/pkg vim", "/use vim", "/bug 1", "/news", "/wiki x", "/bbs x",
 		"/pkgs firefox", "/distro firefox", "/arm htop", "/armpkgs htop",
@@ -28,7 +28,7 @@ func TestDMRouting(t *testing.T) {
 			t.Errorf("%q should get the auto-reply", m)
 		}
 	}
-	// a non-private chat never matches privateNonStart
+	// Non-private messages never match the generic DM predicate.
 	if privateNonStart(context.TODO(), telego.Update{Message: &telego.Message{Chat: telego.Chat{Type: "supergroup"}, Text: "/pkg x"}}) {
 		t.Errorf("group message should not match privateNonStart")
 	}

@@ -68,7 +68,11 @@ func (s *Service) Register(bh *th.BotHandler) {
 	}))
 	// Channel-sender filtering runs before handlers.
 	bh.Use(s.moderation.FilterChannelSenders)
-	for _, route := range s.handlerRoutes() {
+	registerHandlerRoutes(bh, s.handlerRoutes())
+}
+
+func registerHandlerRoutes(bh *th.BotHandler, routes []handlerRoute) {
+	for _, route := range routes {
 		bh.Handle(route.handler, route.predicates...)
 	}
 }

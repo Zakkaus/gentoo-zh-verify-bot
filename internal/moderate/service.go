@@ -188,6 +188,7 @@ func (s *Service) isGroupAdmin(ctx context.Context, chatID, userID int64) bool {
 func (s *Service) notify(ctx context.Context, chatID int64, text string) {
 	s.telegram.Notify(ctx, chatID, text, s.cfg.NotifyTTLSeconds)
 }
+
 func (s *Service) groupLanguage(groupID int64) i18n.Lang {
 	if s.settings != nil {
 		if group, ok := s.settings.Group(groupID); ok {
@@ -372,7 +373,11 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 	// Delete the offending message only after the restriction succeeds.
 	if err := s.telegram.Mute(requestCtx, groupID, target.ID, seconds); err != nil {
 		log.Printf("/mute user=%d in %d: %v", target.ID, groupID, err)
-		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Mute.Failed.For(l))
+		failure := i18n.Messages.Moderate.Mute.Failed.For(l)
+		s.notify(requestCtx, groupID, failure)
+		alert := failure + "\n" + i18n.Messages.Moderate.Mute.Alert.Render(
+			l, banDurationStatus(l, seconds), groupID, target.ID, displayName(target), displayName(msg.From))
+		s.telegram.FailAlert(requestCtx, s.cfg.AdminLogChatID, groupID, alert)
 		return nil
 	}
 	s.telegram.Delete(requestCtx, groupID, msg.ReplyToMessage.MessageID)

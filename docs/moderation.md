@@ -26,7 +26,7 @@ If the bot lacks Ban users/Restrict members or Telegram rejects the ban, the bot
 
 `/unmute` restores the group’s default permissions when Telegram supplies them; otherwise it sends the explicit unrestricted permission set. It can target an administrator because it skips the target-admin guard. A Telegram error produces a failure notice and no success message. Neither command retries.
 
-Missing Restrict members causes the Bot API operation to fail. For `/mute`, the target message remains; for `/unmute`, permissions remain unchanged. Command deletion and notices still depend independently on Delete messages and Send messages.
+Missing Restrict members causes the Bot API operation to fail. For `/mute`, the target message remains and a contextual operator alert goes to `admin_log_chat_id`, or to the group when no admin log is configured. For `/unmute`, permissions remain unchanged. Command deletion and notices still depend independently on Delete messages and Send messages.
 
 ## Warnings and automatic kick
 

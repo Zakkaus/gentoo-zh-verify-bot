@@ -90,10 +90,16 @@ type registrationService struct {
 	onUnregistered      func(int64)
 
 	transitions registrationTransitionLocks
+	background  sync.WaitGroup
 	waitingMu   sync.Mutex
 	waiting     map[int64]time.Time
 	reportMu    sync.Mutex
 	reportAfter map[int64]time.Time
+}
+type registrationRoute struct {
+	name       string
+	handler    th.Handler
+	predicates []th.Predicate
 }
 
 func newRegistrationService(
@@ -131,13 +137,26 @@ func newRegistrationService(
 	return s
 }
 
+// Wait blocks until every registration timer has observed shutdown.
+func (s *registrationService) Wait() {
+	s.background.Wait()
+}
+
 func (s *registrationService) Register(handler *th.BotHandler) {
-	handler.Handle(s.onOwnerClaim, th.And(th.CommandEqual("start"), startPayloadPrefix("owner_"), privateMessage))
-	handler.Handle(s.onEnrollmentStart, th.And(th.CommandEqual("start"), startPayloadPrefix("enroll_")))
-	handler.Handle(s.onEnrollmentCommand, th.And(th.CommandEqual("enroll"), privateMessage))
-	handler.Handle(s.onUnregisterCommand, th.And(th.CommandEqual("unregister"), privateMessage))
-	handler.Handle(s.onMyChatMember, s.registrationMembershipUpdate)
-	handler.Handle(s.onEffectiveMembershipUpdate, s.effectiveMembershipUpdate)
+	for _, route := range s.handlerRoutes() {
+		handler.Handle(route.handler, route.predicates...)
+	}
+}
+
+func (s *registrationService) handlerRoutes() []registrationRoute {
+	return []registrationRoute{
+		{name: "registration.owner_claim", handler: s.onOwnerClaim, predicates: []th.Predicate{th.And(th.CommandEqual("start"), startPayloadPrefix("owner_"), privateMessage)}},
+		{name: "registration.enrollment_start", handler: s.onEnrollmentStart, predicates: []th.Predicate{th.And(th.CommandEqual("start"), startPayloadPrefix("enroll_"))}},
+		{name: "registration.enrollment_command", handler: s.onEnrollmentCommand, predicates: []th.Predicate{th.And(th.CommandEqual("enroll"), privateMessage)}},
+		{name: "registration.unregister_command", handler: s.onUnregisterCommand, predicates: []th.Predicate{th.And(th.CommandEqual("unregister"), privateMessage)}},
+		{name: "registration.unknown_membership", handler: s.onMyChatMember, predicates: []th.Predicate{s.registrationMembershipUpdate}},
+		{name: "registration.effective_membership", handler: s.onEffectiveMembershipUpdate, predicates: []th.Predicate{s.effectiveMembershipUpdate}},
+	}
 }
 
 func privateMessage(_ context.Context, update telego.Update) bool {
@@ -309,7 +328,12 @@ func (s *registrationService) onEnrollmentStart(ctx *th.Context, update telego.U
 		ctx.Context(), message.Chat.ID, message.From.ID, groupTitle(message.Chat), nonce,
 	)
 	if err != nil {
-		s.refuseEnrollment(ctx.Context(), message.Chat, message.From.ID, err.Error())
+		if errors.Is(err, errEnrollmentInvalid) || errors.Is(err, errBotMembershipUnreadable) ||
+			errors.Is(err, errBotMembershipIneligible) {
+			s.refuseEnrollment(ctx.Context(), message.Chat, message.From.ID, err.Error())
+		} else {
+			s.registrationPersistenceFailure(ctx.Context(), message.Chat, *message.From)
+		}
 		return nil
 	}
 	if result.registered {
@@ -932,7 +956,9 @@ func (s *registrationService) scheduleUnknownLeave(groupID int64, title string, 
 	s.waiting[groupID] = deadline
 	s.waitingMu.Unlock()
 
+	s.background.Add(1)
 	go func() {
+		defer s.background.Done()
 		delay := time.Until(deadline)
 		if delay < 0 {
 			delay = 0

@@ -198,6 +198,131 @@ func TestSettingsCommandReportsWriteFailure(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingsCommandHandlersPersistAndRespond(t *testing.T) {
+	tests := []struct {
+		name        string
+		text        string
+		handler     func(*Panel) th.Handler
+		wantText    func(i18n.Lang) string
+		assertState func(*testing.T, *verify.Service, int64)
+	}{
+		{
+			name:    "stop",
+			text:    "/stop",
+			handler: func(panel *Panel) th.Handler { return panel.OnStop },
+			wantText: func(l i18n.Lang) string {
+				return i18n.Messages.Panel.Verification.Stopped.For(l)
+			},
+			assertState: func(t *testing.T, service *verify.Service, groupID int64) {
+				t.Helper()
+				if service.IsEnabled(groupID) {
+					t.Fatal("/stop handler left verification enabled")
+				}
+			},
+		},
+		{
+			name:    "spoiler",
+			text:    "/spoiler",
+			handler: func(panel *Panel) th.Handler { return panel.OnSpoiler },
+			wantText: func(l i18n.Lang) string {
+				return i18n.Messages.Panel.NameSpoiler.Disabled.For(l)
+			},
+			assertState: func(t *testing.T, service *verify.Service, groupID int64) {
+				t.Helper()
+				if service.NameSpoilerOn(groupID) {
+					t.Fatal("/spoiler handler did not disable default name hiding")
+				}
+			},
+		},
+		{
+			name:    "vmode parses mixed",
+			text:    "/vmode MIXED",
+			handler: func(panel *Panel) th.Handler { return panel.OnVMode },
+			wantText: func(l i18n.Lang) string {
+				return i18n.Messages.Panel.VerificationMode.Set.Render(l, verify.ModeName(l, config.ModeMixed))
+			},
+			assertState: func(t *testing.T, service *verify.Service, groupID int64) {
+				t.Helper()
+				if got := service.EffectiveMode(groupID); got != config.ModeMixed {
+					t.Fatalf("/vmode handler mode = %q, want %q", got, config.ModeMixed)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := runtimeSettingsTestConfig()
+			cfg.NotifyTTLSeconds = -1
+			groupID := cfg.GroupIDs[0]
+			baseline := testSettingsBaseline(t, cfg)
+			path := filepath.Join(t.TempDir(), "settings.json")
+			settings, err := store.NewSettings(path, baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake := newFakeAdminBot()
+			fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+			bot := newAPITestBot(t, fake)
+			administration, verification := newAdminTestApplication(cfg, settings, bot)
+			t.Cleanup(verification.Shutdown)
+
+			runFakeHandler(t, bot, test.handler(administration), telego.Update{Message: &telego.Message{
+				MessageID: 1,
+				Chat:      telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 7},
+				Text:      test.text,
+			}})
+			l := i18n.LangZH
+			if got, want := fake.lastSendText, test.wantText(l); got != want {
+				t.Fatalf("%s handler response = %q, want catalogue text %q", test.name, got, want)
+			}
+			test.assertState(t, verification, groupID)
+
+			restoredSettings, err := store.NewSettings(path, baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, restored := newAdminTestApplication(cfg, restoredSettings, bot)
+			t.Cleanup(restored.Shutdown)
+			test.assertState(t, restored, groupID)
+		})
+	}
+}
+
+func TestSettingsCommandUsesFreshAdminMembership(t *testing.T) {
+	cfg := runtimeSettingsTestConfig()
+	cfg.NotifyTTLSeconds = -1
+	groupID := cfg.GroupIDs[0]
+	settings, err := store.NewSettings("", testSettingsBaseline(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeAdminBot()
+	fake.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+	bot := newAPITestBot(t, fake)
+	administration, verification := newAdminTestApplication(cfg, settings, bot)
+	t.Cleanup(verification.Shutdown)
+	message := &telego.Message{
+		MessageID: 1,
+		Chat:      telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 7},
+		Text:      "/help",
+	}
+
+	runFakeHandler(t, bot, administration.OnHelp, telego.Update{Message: message})
+	fake.member = &telego.ChatMemberMember{Status: telego.MemberStatusMember}
+	message.Text = "/stop"
+	runFakeHandler(t, bot, administration.OnStop, telego.Update{Message: message})
+
+	if !verification.IsEnabled(groupID) {
+		t.Fatal("cached administrator status bypassed the fresh settings-command gate")
+	}
+	want := i18n.Messages.Panel.Error.AdminOnly.For(i18n.LangZH)
+	if fake.lastSendText != want {
+		t.Fatalf("fresh-admin refusal = %q, want catalogue text %q", fake.lastSendText, want)
+	}
+}
+
 func TestSettingsBaselineProvenance(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	data := []byte(`{

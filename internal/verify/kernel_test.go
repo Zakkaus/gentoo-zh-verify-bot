@@ -729,16 +729,25 @@ func TestCopiedSampleBounced(t *testing.T) {
 }
 
 func TestKernelPromptLocalised(t *testing.T) {
-	zh := kernelPromptHTML(&i18n.Messages, i18n.LangZH, kernelQuestion(&i18n.Messages, i18n.LangZH), 3, "abc123", true)
-	if !strings.Contains(zh, "剩余 3 次机会") || !strings.Contains(zh, "AGENT-ABC123") {
-		t.Errorf("zh prompt missing its wording or token: %s", zh)
+	zhQuestion := kernelQuestion(&i18n.Messages, i18n.LangZH)
+	zhPrompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(i18n.LangZH, zhQuestion, 3)
+	zhTrap := i18n.Messages.Verification.Challenge.AgentTrap.Render(i18n.LangZH, aiTrapToken("abc123"))
+	zh := kernelPromptHTML(&i18n.Messages, i18n.LangZH, zhQuestion, 3, "abc123", true)
+	if !strings.Contains(zh, zhPrompt) || !strings.Contains(zh, zhTrap) {
+		t.Errorf("zh prompt missing catalogue wording or token: %s", zh)
 	}
-	if !strings.Contains(kernelPromptHTML(&i18n.Messages, i18n.LangZHHant, kernelQuestion(&i18n.Messages, i18n.LangZHHant), 3, "n", true), "剩餘 3 次機會") {
-		t.Error("zh-hant prompt should use Traditional wording")
+
+	zhHantQuestion := kernelQuestion(&i18n.Messages, i18n.LangZHHant)
+	zhHantPrompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(i18n.LangZHHant, zhHantQuestion, 3)
+	if !strings.Contains(kernelPromptHTML(&i18n.Messages, i18n.LangZHHant, zhHantQuestion, 3, "n", true), zhHantPrompt) {
+		t.Error("zh-hant prompt should use its catalogue wording")
 	}
-	en := kernelPromptHTML(&i18n.Messages, i18n.LangEN, kernelQuestion(&i18n.Messages, i18n.LangEN), 2, "n", true)
-	if !strings.Contains(en, "2 attempts remain") || !strings.Contains(en, "uname -r") {
-		t.Errorf("en prompt missing its wording: %s", en)
+
+	enQuestion := kernelQuestion(&i18n.Messages, i18n.LangEN)
+	enPrompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(i18n.LangEN, enQuestion, 2)
+	en := kernelPromptHTML(&i18n.Messages, i18n.LangEN, enQuestion, 2, "n", true)
+	if !strings.Contains(en, enPrompt) {
+		t.Errorf("en prompt missing catalogue wording: %s", en)
 	}
 	for _, locale := range i18n.Languages() {
 		prompt := kernelPromptHTML(&i18n.Messages, locale, kernelQuestion(&i18n.Messages, locale), 3, "n", true)
@@ -748,12 +757,12 @@ func TestKernelPromptLocalised(t *testing.T) {
 	}
 	// The collapsed quote is Bot API 7.4; the fallback rendering drops it but must keep every word,
 	// so an old self-hosted API server that rejects the entity still gets a complete question.
-	plain := kernelPromptHTML(&i18n.Messages, i18n.LangZH, kernelQuestion(&i18n.Messages, i18n.LangZH), 3, "abc123", false)
+	plain := kernelPromptHTML(&i18n.Messages, i18n.LangZH, zhQuestion, 3, "abc123", false)
 	if strings.Contains(plain, "<blockquote") {
 		t.Error("the fallback rendering must not use the blockquote entity")
 	}
-	if !strings.Contains(plain, "AGENT-ABC123") || !strings.Contains(plain, "剩余 3 次机会") {
-		t.Errorf("the fallback rendering lost content: %s", plain)
+	if !strings.Contains(plain, zhPrompt) || !strings.Contains(plain, zhTrap) {
+		t.Errorf("the fallback rendering lost catalogue content: %s", plain)
 	}
 }
 

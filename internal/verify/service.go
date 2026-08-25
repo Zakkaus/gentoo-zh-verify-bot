@@ -1248,19 +1248,23 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.CannotApprove.For(l)))
 			return nil
 		}
-		// Acknowledge the pending action; failures reopen the request and alert admins.
+		// Acknowledge the pending action; failures reopen the request, tell the group, and alert admins.
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Approving.For(l)))
-		v.executeApprove(c, bot, gid, target, p)
+		if !v.executeApprove(c, bot, gid, target, p) {
+			_, _ = bot.SendMessage(c, tu.Message(tu.ID(gid), admin.ActionFailed.For(l)))
+		}
 	case "ban":
 		p, ok := v.consume(gid, target)
 		if !ok {
 			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.AlreadyHandled.For(l)))
 			return nil
 		}
-		// Acknowledge the pending action; failures remain visible and the request stays declined.
+		// Acknowledge the pending action; failures retain the request and evidence.
 		duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(gid))
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Banning.Render(l, duration)))
-		v.executeBan(c, bot, gid, target, p)
+		if !v.executeBan(c, bot, gid, target, p) {
+			_, _ = bot.SendMessage(c, tu.Message(tu.ID(gid), admin.ActionFailed.For(l)))
+		}
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 	}
@@ -1572,10 +1576,10 @@ func (v *Service) timeoutResultText(groupID, userID int64, l i18n.Lang, banned b
 // Bot-caused failures receive a meaningful strike-free retry window.
 const noFaultGrace = 60 * time.Second
 
-// Timeouts and wrong answers strike; delivery, approval, restart, and recovery failures do not.
+// Timeouts and wrong answers strike; delivery, settlement, restart, and recovery failures do not.
 func strikesUser(reason string) bool {
 	switch reason {
-	case "approve-retry", "decline-retry", "restart-lapsed", "recovered", "challenge-post-failed":
+	case "approve-retry", "ban-retry", "decline-retry", "restart-lapsed", "recovered", "challenge-post-failed":
 		return false
 	default:
 		return true
@@ -1649,7 +1653,7 @@ func (v *Service) finishTerminal(gid, uid int64, p *pending) {
 	v.mu.Unlock()
 }
 
-// banApplicant reports ban failure honestly even though the join request is still declined.
+// banApplicant preserves the request for retry when either required Telegram action is unconfirmed.
 func (v *Service) banApplicant(c context.Context, bot verifyBot, gid, uid int64) (handled, banned bool) {
 	p, ok := v.consume(gid, uid)
 	if !ok {
@@ -1658,22 +1662,30 @@ func (v *Service) banApplicant(c context.Context, bot verifyBot, gid, uid int64)
 	return true, v.executeBan(c, bot, gid, uid, p)
 }
 
-// executeBan settles an already-claimed pending; ban failure remains visible after callback ACK.
-func (v *Service) executeBan(c context.Context, bot verifyBot, gid, uid int64, p *pending) (banned bool) {
-	_ = bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
-	banned = true
-	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil { // Honor /bantime like the other ban paths.
-		banned = false
+// executeBan confirms the ban before declining so an unconfirmed ban retains the request and its evidence.
+func (v *Service) executeBan(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
+	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil {
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
 		admin := &v.messages.Verification.Admin
 		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		v.reopenPending(bot, gid, uid, p, "ban-retry")
+		v.save()
+		return false
+	}
+	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+		log.Printf("decline after ban %d in %d: %v", uid, gid, err)
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		v.reopenPending(bot, gid, uid, p, "ban-retry")
+		v.save()
+		return false
 	}
 	v.deleteChallenge(c, bot, gid, p.groupMsgID)
 	v.recordDecision(false)
 	v.finishTerminal(gid, uid, p)
 	v.save()
-	log.Printf("banApplicant user=%d group=%d banned=%v (admin report)", uid, gid, banned)
-	return banned
+	log.Printf("banApplicant user=%d group=%d banned=true (admin report)", uid, gid)
+	return true
 }
 
 // Challenge selection uses crypto/rand; failure degrades to deterministic index zero.

@@ -143,18 +143,22 @@ func TestUbuntuRelabelStandardSupportEnd(t *testing.T) {
 	})
 
 	tests := []struct {
-		raw  string
-		want string
+		raw, officialSuffix  string
+		standardSupportEnded bool
 	}{
-		{raw: "18.04", want: "18.04 LTS · 标准支持已结束"},
-		{raw: "22.10", want: "22.10 · 标准支持已结束"},
-		{raw: "24.04", want: "24.04 LTS"},
-		{raw: "99.99", want: "99.99"},
+		{raw: "18.04", officialSuffix: " LTS", standardSupportEnded: true},
+		{raw: "22.10", standardSupportEnded: true},
+		{raw: "24.04", officialSuffix: " LTS"},
+		{raw: "99.99"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.raw, func(t *testing.T) {
-			if got := ubuntuRelabel(i18n.LangZH, tt.raw); got != tt.want {
-				t.Errorf("ubuntuRelabel(%q) = %q, want %q", tt.raw, got, tt.want)
+			want := tt.raw + tt.officialSuffix
+			if tt.standardSupportEnded {
+				want += i18n.Messages.LookupDistros.Release.StandardSupportEnded.For(i18n.LangZH)
+			}
+			if got := ubuntuRelabel(i18n.LangZH, tt.raw); got != want {
+				t.Errorf("ubuntuRelabel(%q) = %q, want catalogue rendering %q", tt.raw, got, want)
 			}
 		})
 	}

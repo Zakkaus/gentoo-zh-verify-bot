@@ -43,8 +43,10 @@ func TestRecordAgentTally(t *testing.T) {
 		t.Errorf("gpt-5 count = %d, want 3", v.agents.Counts["gpt-5"])
 	}
 	line := v.AgentStatsText(i18n.LangZH)
-	if !strings.Contains(line, "5 次") || !strings.HasPrefix(strings.TrimPrefix(line, "🤖 拦截 AI 代答：5 次（"), "gpt-5 3") {
-		t.Errorf("stats line should lead with the busiest model: %q", line)
+	wantLine := v.messages.Verification.Admin.AgentStats.Render(
+		i18n.LangZH, 5, "gpt-5 3、claude-opus-4.5 1、gemini 1")
+	if line != wantLine {
+		t.Errorf("stats line = %q, want catalogue rendering %q", line, wantLine)
 	}
 
 	// key cap: unknown models fold into "other" once the map is full

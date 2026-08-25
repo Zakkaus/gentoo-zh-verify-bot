@@ -12,7 +12,7 @@ import (
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 )
 
-func TestRuntimeSettingsGroupCommandsPersist(t *testing.T) {
+func TestRuntimeSettingsDirectSettersPersist(t *testing.T) {
 	cfg := runtimeSettingsTestConfig()
 	groupID := cfg.GroupIDs[0]
 	path := filepath.Join(t.TempDir(), "settings.json")

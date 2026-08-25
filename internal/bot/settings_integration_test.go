@@ -125,7 +125,7 @@ func TestBuiltInPrivateReplyUsesCatalogue(t *testing.T) {
 		}
 	}
 
-	const customReply = "Contact a group administrator."
+	customReply := i18n.Messages.Bot.DirectMessage.AutoReply.Render(i18n.LangEN, 99)
 	if isBuiltInPrivateReply(customReply) {
 		t.Fatal("custom private reply was recognized as built-in")
 	}

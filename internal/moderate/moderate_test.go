@@ -52,6 +52,20 @@ type fakeModBot struct {
 	lastBanSeconds    int
 	lastBannedUserID  int64
 	lastDeletedChatID int64
+	deletedMessageIDs []int
+	notifications     []fakeModNotification
+	failAlerts        []fakeModFailAlert
+}
+
+type fakeModNotification struct {
+	chatID int64
+	text   string
+}
+
+type fakeModFailAlert struct {
+	adminLogChatID int64
+	groupID        int64
+	text           string
 }
 
 func newFakeMod() *fakeModBot { return &fakeModBot{} }
@@ -114,15 +128,17 @@ func (b *fakeModBot) adminStatus(ctx context.Context, chatID, userID int64) (boo
 	return status == telego.MemberStatusCreator || status == telego.MemberStatusAdministrator, nil
 }
 
-func (b *fakeModBot) Delete(_ context.Context, chatID int64, _ int) {
+func (b *fakeModBot) Delete(_ context.Context, chatID int64, messageID int) {
 	b.deletes++
 	b.lastDeletedChatID = chatID
+	b.deletedMessageIDs = append(b.deletedMessageIDs, messageID)
 }
 
 func (b *fakeModBot) Notify(_ context.Context, chatID int64, text string, _ int) {
 	b.sends++
 	b.lastSendChat = chatID
 	b.lastSendText = text
+	b.notifications = append(b.notifications, fakeModNotification{chatID: chatID, text: text})
 }
 
 func (b *fakeModBot) Alert(_ context.Context, chatID int64, text string) {
@@ -130,16 +146,23 @@ func (b *fakeModBot) Alert(_ context.Context, chatID int64, text string) {
 		b.sends++
 		b.lastSendChat = chatID
 		b.lastSendText = text
+		b.notifications = append(b.notifications, fakeModNotification{chatID: chatID, text: text})
 	}
 }
 
 func (b *fakeModBot) FailAlert(_ context.Context, adminLogChatID, groupID int64, text string) {
+	b.failAlerts = append(b.failAlerts, fakeModFailAlert{
+		adminLogChatID: adminLogChatID,
+		groupID:        groupID,
+		text:           text,
+	})
 	if adminLogChatID == 0 {
 		adminLogChatID = groupID
 	}
 	b.sends++
 	b.lastSendChat = adminLogChatID
 	b.lastSendText = text
+	b.notifications = append(b.notifications, fakeModNotification{chatID: adminLogChatID, text: text})
 }
 
 func (b *fakeModBot) Ban(_ context.Context, _ int64, userID int64, seconds int, revoke bool) error {
@@ -273,6 +296,56 @@ func runFakeHandler(t *testing.T, bot *telego.Bot, handler th.Handler, update te
 		t.Fatalf("bot handler returned %v", err)
 	}
 }
+
+func moderationCommand(groupID int64, text string) *telego.Message {
+	return &telego.Message{
+		MessageID: 11,
+		Chat:      telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 7, FirstName: "Admin"},
+		Text:      text,
+		ReplyToMessage: &telego.Message{
+			MessageID: 10,
+			From:      &telego.User{ID: 8, FirstName: "Member"},
+		},
+	}
+}
+
+func assertModerationCommandCleanup(t *testing.T, telegram *fakeModBot) {
+	t.Helper()
+	if len(telegram.deletedMessageIDs) != 1 || telegram.deletedMessageIDs[0] != 11 {
+		t.Fatalf("deleted message IDs = %v, want only command message 11", telegram.deletedMessageIDs)
+	}
+}
+
+func assertModerationNotifications(t *testing.T, telegram *fakeModBot, want ...fakeModNotification) {
+	t.Helper()
+	if len(telegram.notifications) != len(want) {
+		t.Fatalf("notifications = %#v, want %#v", telegram.notifications, want)
+	}
+	for index, wantNotification := range want {
+		if got := telegram.notifications[index]; got != wantNotification {
+			t.Errorf("notification %d = %#v, want %#v", index, got, wantNotification)
+		}
+	}
+}
+
+func assertFailAlert(t *testing.T, telegram *fakeModBot, adminLogChatID, groupID int64, text string) {
+	t.Helper()
+	if len(telegram.failAlerts) != 1 {
+		t.Fatalf("failure alerts = %#v, want one", telegram.failAlerts)
+	}
+	if got := telegram.failAlerts[0]; got != (fakeModFailAlert{
+		adminLogChatID: adminLogChatID,
+		groupID:        groupID,
+		text:           text,
+	}) {
+		t.Errorf("failure alert = %#v, want %#v", got, fakeModFailAlert{
+			adminLogChatID: adminLogChatID,
+			groupID:        groupID,
+			text:           text,
+		})
+	}
+}
 func TestGroupSetupReportPermissionsAndChannelReadability(t *testing.T) {
 	const (
 		groupID   = int64(-100)
@@ -328,7 +401,7 @@ func TestGroupSetupReportPermissionsAndChannelReadability(t *testing.T) {
 		{
 			name: "plain channel member", groupMember: completeAdmin(), requiredChannel: true,
 			channelMember: &telego.ChatMemberMember{Status: telego.MemberStatusMember},
-			wantText:      "plain membership", wantLookups: 2,
+			wantText:      i18n.Messages.Moderate.Setup.ChannelAdmin.Render(i18n.LangEN, "Required Channel", channelID), wantLookups: 2,
 		},
 		{
 			name: "channel administrator", groupMember: completeAdmin(), requiredChannel: true,
@@ -342,7 +415,7 @@ func TestGroupSetupReportPermissionsAndChannelReadability(t *testing.T) {
 		},
 		{
 			name: "channel lookup failure", groupMember: completeAdmin(), requiredChannel: true,
-			channelErr: errors.New("forbidden"), wantText: "plain membership", wantLookups: 2,
+			channelErr: errors.New("forbidden"), wantText: i18n.Messages.Moderate.Setup.ChannelAdmin.Render(i18n.LangEN, "Required Channel", channelID), wantLookups: 2,
 		},
 	}
 	for _, test := range tests {
@@ -604,4 +677,203 @@ func TestMuteAndUnmuteHandlers(t *testing.T) {
 	if telegram.unmutes != 1 {
 		t.Fatalf("unmute calls = %d, want 1", telegram.unmutes)
 	}
+}
+
+func TestBanRejectionRetainsEvidenceAndAlertsConfiguredLog(t *testing.T) {
+	const (
+		groupID    = int64(-100)
+		adminLogID = int64(-200)
+	)
+	telegram := newFakeMod()
+	telegram.banErr = errors.New("telegram rejected ban")
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	service := newTestService(t, &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		AdminLogChatID:   adminLogID,
+		Lang:             "en",
+		NotifyTTLSeconds: -1,
+	}, telegram, "")
+	message := moderationCommand(groupID, "/ban")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnBan, telego.Update{Message: message})
+
+	if telegram.bans != 1 || telegram.lastBannedUserID != message.ReplyToMessage.From.ID {
+		t.Fatalf("ban calls = %d for user %d, want one rejection for target %d", telegram.bans, telegram.lastBannedUserID, message.ReplyToMessage.From.ID)
+	}
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	wantAlert := i18n.Messages.Moderate.Ban.FailureAlert.Render(l, "/ban", groupID, message.ReplyToMessage.From.ID, displayName(message.ReplyToMessage.From), displayName(message.From))
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: i18n.Messages.Moderate.Ban.Failed.For(l)},
+		fakeModNotification{chatID: adminLogID, text: wantAlert},
+	)
+	assertFailAlert(t, telegram, adminLogID, groupID, wantAlert)
+}
+
+func TestBanRejectionFallsBackToGroupWithoutAdminLog(t *testing.T) {
+	const groupID = int64(-100)
+	telegram := newFakeMod()
+	telegram.banErr = errors.New("telegram rejected ban")
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	service := newTestService(t, &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		Lang:             "en",
+		NotifyTTLSeconds: -1,
+	}, telegram, "")
+	message := moderationCommand(groupID, "/ban")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnBan, telego.Update{Message: message})
+
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	wantAlert := i18n.Messages.Moderate.Ban.FailureAlert.Render(l, "/ban", groupID, message.ReplyToMessage.From.ID, displayName(message.ReplyToMessage.From), displayName(message.From))
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: i18n.Messages.Moderate.Ban.Failed.For(l)},
+		fakeModNotification{chatID: groupID, text: wantAlert},
+	)
+	assertFailAlert(t, telegram, 0, groupID, wantAlert)
+}
+
+func TestMuteRejectionRetainsEvidenceAndAlertsConfiguredLog(t *testing.T) {
+	const (
+		groupID    = int64(-100)
+		adminLogID = int64(-200)
+	)
+	telegram := newFakeMod()
+	telegram.muteErr = errors.New("telegram rejected mute")
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	service := newTestService(t, &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		AdminLogChatID:   adminLogID,
+		Lang:             "en",
+		MuteSeconds:      3600,
+		NotifyTTLSeconds: -1,
+	}, telegram, "")
+	message := moderationCommand(groupID, "/mute")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnMute, telego.Update{Message: message})
+
+	if telegram.mutes != 1 || telegram.lastMuteSeconds != 3600 {
+		t.Fatalf("mute calls = %d for %d seconds, want one rejected 3600-second mute", telegram.mutes, telegram.lastMuteSeconds)
+	}
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	wantFailure := i18n.Messages.Moderate.Mute.Failed.For(l)
+	wantAlert := wantFailure + "\n" + i18n.Messages.Moderate.Mute.Alert.Render(
+		l, banDurationStatus(l, 3600), groupID, message.ReplyToMessage.From.ID,
+		displayName(message.ReplyToMessage.From), displayName(message.From))
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: wantFailure},
+		fakeModNotification{chatID: adminLogID, text: wantAlert},
+	)
+	assertFailAlert(t, telegram, adminLogID, groupID, wantAlert)
+}
+
+func TestMuteRejectionFallsBackToGroupWithoutAdminLog(t *testing.T) {
+	const groupID = int64(-100)
+	telegram := newFakeMod()
+	telegram.muteErr = errors.New("telegram rejected mute")
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	service := newTestService(t, &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		Lang:             "en",
+		MuteSeconds:      3600,
+		NotifyTTLSeconds: -1,
+	}, telegram, "")
+	message := moderationCommand(groupID, "/mute")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnMute, telego.Update{Message: message})
+
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	wantFailure := i18n.Messages.Moderate.Mute.Failed.For(l)
+	wantAlert := wantFailure + "\n" + i18n.Messages.Moderate.Mute.Alert.Render(
+		l, banDurationStatus(l, 3600), groupID, message.ReplyToMessage.From.ID,
+		displayName(message.ReplyToMessage.From), displayName(message.From))
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: wantFailure},
+		fakeModNotification{chatID: groupID, text: wantAlert},
+	)
+	assertFailAlert(t, telegram, 0, groupID, wantAlert)
+}
+
+func TestWarnLimitRejectionRetainsCountAndAlertsConfiguredLog(t *testing.T) {
+	const (
+		groupID    = int64(-100)
+		adminLogID = int64(-200)
+	)
+	telegram := newFakeMod()
+	telegram.banErr = errors.New("telegram rejected warning-limit kick")
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	service := newTestService(t, &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		AdminLogChatID:   adminLogID,
+		Lang:             "en",
+		WarnLimit:        1,
+		NotifyTTLSeconds: -1,
+	}, telegram, "")
+	message := moderationCommand(groupID, "/warn")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnWarn, telego.Update{Message: message})
+
+	if telegram.bans != 1 || telegram.unbans != 0 {
+		t.Fatalf("warning-limit kick calls = bans %d unbans %d, want one rejected ban", telegram.bans, telegram.unbans)
+	}
+	if got := service.warnings.counters[warningKey{groupID: groupID, userID: message.ReplyToMessage.From.ID}]; got != 1 {
+		t.Fatalf("warning count after rejected limit kick = %d, want 1", got)
+	}
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	wantAlert := i18n.Messages.Moderate.Warning.LimitKickAlert.Render(l, displayName(message.ReplyToMessage.From), 1, displayName(message.From))
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: i18n.Messages.Moderate.Warning.LimitKickFailed.For(l)},
+		fakeModNotification{chatID: adminLogID, text: wantAlert},
+	)
+	assertFailAlert(t, telegram, adminLogID, groupID, wantAlert)
+}
+
+func TestWarnLimitRejectionFallsBackToGroupWithoutAdminLog(t *testing.T) {
+	const groupID = int64(-100)
+	telegram := newFakeMod()
+	telegram.banErr = errors.New("telegram rejected warning-limit kick")
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	service := newTestService(t, &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		Lang:             "en",
+		WarnLimit:        1,
+		NotifyTTLSeconds: -1,
+	}, telegram, "")
+	message := moderationCommand(groupID, "/warn")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnWarn, telego.Update{Message: message})
+
+	if got := service.warnings.counters[warningKey{groupID: groupID, userID: message.ReplyToMessage.From.ID}]; got != 1 {
+		t.Fatalf("warning count after rejected limit kick = %d, want 1", got)
+	}
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	wantAlert := i18n.Messages.Moderate.Warning.LimitKickAlert.Render(l, displayName(message.ReplyToMessage.From), 1, displayName(message.From))
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: i18n.Messages.Moderate.Warning.LimitKickFailed.For(l)},
+		fakeModNotification{chatID: groupID, text: wantAlert},
+	)
+	assertFailAlert(t, telegram, 0, groupID, wantAlert)
 }

@@ -534,20 +534,22 @@ func TestLoadQuickRestartKeepsWindow(t *testing.T) {
 
 func TestOutageText(t *testing.T) {
 	cases := map[time.Duration]string{
-		45 * time.Second: "45 秒",
-		3 * time.Minute:  "3 分钟",
-		8 * time.Hour:    "8 小时",
+		45 * time.Second: i18n.Messages.Verification.Recovery.OutageSeconds.Render(i18n.LangZH, 45),
+		3 * time.Minute:  i18n.Messages.Verification.Recovery.OutageMinutes.Render(i18n.LangZH, 3),
+		8 * time.Hour:    i18n.Messages.Verification.Recovery.OutageHours.Render(i18n.LangZH, 8),
 	}
 	for d, want := range cases {
 		if got := outageText(&i18n.Messages, i18n.LangZH, d); got != want {
-			t.Errorf("outageText(zh, %v) = %q, want %q", d, got, want)
+			t.Errorf("outageText(zh, %v) = %q, want catalogue rendering %q", d, got, want)
 		}
 	}
-	if got := outageText(&i18n.Messages, i18n.LangZHHant, 3*time.Minute); got != "3 分鐘" {
-		t.Errorf("outageText(zh-hant, 3m) = %q, want %q", got, "3 分鐘")
+	wantTraditional := i18n.Messages.Verification.Recovery.OutageMinutes.Render(i18n.LangZHHant, 3)
+	if got := outageText(&i18n.Messages, i18n.LangZHHant, 3*time.Minute); got != wantTraditional {
+		t.Errorf("outageText(zh-hant, 3m) = %q, want catalogue rendering %q", got, wantTraditional)
 	}
-	if got := outageText(&i18n.Messages, i18n.LangEN, 8*time.Hour); got != "8 hours" {
-		t.Errorf("outageText(en, 8h) = %q, want %q", got, "8 hours")
+	wantEnglish := i18n.Messages.Verification.Recovery.OutageHours.Render(i18n.LangEN, 8)
+	if got := outageText(&i18n.Messages, i18n.LangEN, 8*time.Hour); got != wantEnglish {
+		t.Errorf("outageText(en, 8h) = %q, want catalogue rendering %q", got, wantEnglish)
 	}
 }
 

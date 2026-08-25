@@ -66,6 +66,10 @@ type Service struct {
 	bot      *telego.Bot
 	feeds    []*config.FeedConfig
 	stateDir string
+
+	// Lifecycle hooks default to the production poller and permission probe.
+	poll  func(context.Context, *telego.Bot, []*config.FeedConfig, map[int64]*feedState, string, time.Time, map[int64]time.Time)
+	probe func(context.Context, *telego.Bot, []*config.FeedConfig)
 }
 
 // New constructs a feed service from its Telegram bot, destination configs, and state directory.
@@ -79,6 +83,7 @@ var (
 	feedSendPause       = time.Second
 	feedTelegramTimeout = 15 * time.Second
 	feedFetchTimeout    = 30 * time.Second
+	feedStateWrite      = store.Write
 )
 
 // feedState is the on-disk dedup cursor so a restart doesn't re-post or miss items. Tracked
@@ -366,7 +371,7 @@ func saveFeedState(path string, st feedState) {
 	if path == "" || st.writeDisabled {
 		return
 	}
-	_ = store.Write(path, st)
+	_ = feedStateWrite(path, st)
 }
 
 // postFeed sends one feed item and returns the sent message id (0 on failure) plus classifications
@@ -932,16 +937,24 @@ func (s *Service) Run(ctx context.Context) {
 		states[f.ChatID] = &st
 	}
 	nextDue := map[int64]time.Time{} // zero => every feed is due on the first poll
+	doPoll := pollAll
+	if s.poll != nil {
+		doPoll = s.poll
+	}
+	doProbe := probeFeedPerms
+	if s.probe != nil {
+		doProbe = s.probe
+	}
 	safePoll := func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("feed: poll panicked (recovered, feeds continue): %v", r)
 			}
 		}()
-		pollAll(ctx, s.bot, s.feeds, states, s.stateDir, time.Now(), nextDue)
+		doPoll(ctx, s.bot, s.feeds, states, s.stateDir, time.Now(), nextDue)
 	}
 	log.Printf("feed: %d destination(s), tick %s, per-feed interval honoured (shared fetch)", len(s.feeds), tick)
-	probeFeedPerms(ctx, s.bot, s.feeds)
+	doProbe(ctx, s.bot, s.feeds)
 	safePoll()
 	t := time.NewTicker(tick)
 	defer t.Stop()

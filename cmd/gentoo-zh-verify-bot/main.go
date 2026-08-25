@@ -132,6 +132,90 @@ func alertRetentionOutage(
 // A live context means the update stream died unexpectedly; exit non-zero so systemd restarts it.
 func streamEndedUnexpectedly(ctxErr error) bool { return ctxErr == nil }
 
+type runtimeLifecycle struct {
+	handlerDone       <-chan error
+	stopHandlers      func(context.Context) error
+	waitRegistration  func()
+	heartbeatDone     <-chan struct{}
+	flushVerification func()
+	feedDone          <-chan struct{}
+	notifierDone      <-chan error
+	shutdownDeadline  time.Duration
+}
+
+func runRuntimeLifecycle(ctx context.Context, lifecycle runtimeLifecycle) error {
+	var handlerErr error
+	handlerStopped := false
+	select {
+	case handlerErr = <-lifecycle.handlerDone:
+		handlerStopped = true
+	case <-ctx.Done():
+	}
+	if handlerStopped && streamEndedUnexpectedly(ctx.Err()) {
+		if handlerErr != nil {
+			return fmt.Errorf("handler stopped unexpectedly: %w", handlerErr)
+		}
+		return fmt.Errorf("update stream ended without a shutdown signal — exiting non-zero so systemd restarts us")
+	}
+
+	deadline := lifecycle.shutdownDeadline
+	if deadline <= 0 {
+		deadline = shutdownDeadline
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), deadline)
+	defer shutdownCancel()
+	log.Printf("shutdown: waiting up to %s to drain fetched updates and in-flight update handlers", deadline)
+	if !handlerStopped {
+		select {
+		case handlerErr = <-lifecycle.handlerDone:
+			handlerStopped = true
+		case <-shutdownCtx.Done():
+			log.Printf("shutdown: fetched updates did not drain before deadline: %v", shutdownCtx.Err())
+		}
+	}
+	if handlerStopped && handlerErr != nil {
+		log.Printf("shutdown: handler loop stopped: %v", handlerErr)
+	}
+	if lifecycle.stopHandlers != nil {
+		if err := lifecycle.stopHandlers(shutdownCtx); err != nil {
+			log.Printf("shutdown: update handlers did not stop cleanly: %v", err)
+		}
+	}
+	if lifecycle.waitRegistration != nil {
+		registrationDone := make(chan struct{})
+		go func() {
+			lifecycle.waitRegistration()
+			close(registrationDone)
+		}()
+		waitForShutdownComponent(shutdownCtx, "registration timers", registrationDone)
+	}
+	waitForShutdownComponent(shutdownCtx, "Telegram heartbeat", lifecycle.heartbeatDone)
+
+	log.Printf("shutdown: flushing verification state")
+	if lifecycle.flushVerification != nil {
+		lifecycle.flushVerification()
+	}
+	waitForShutdownComponent(shutdownCtx, "feed state flush", lifecycle.feedDone)
+
+	if lifecycle.notifierDone != nil {
+		select {
+		case err := <-lifecycle.notifierDone:
+			if err != nil {
+				log.Printf("shutdown: systemd notification failed: %v", err)
+			}
+		case <-shutdownCtx.Done():
+			log.Printf("shutdown: systemd notifier did not stop before deadline: %v", shutdownCtx.Err())
+		}
+	}
+	return nil
+}
+
+func exitOnRuntimeError(err error) {
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
 func main() {
 	configPath := flag.String("config", "/etc/gentoo-zh-verify-bot/config.json", "path to config.json")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -272,51 +356,16 @@ func main() {
 	log.Printf("verify bot @%s (%s) started — groups=%d", identity.Username, version, len(runtimeSettings.GroupIDs()))
 	close(startupComplete)
 
-	var handlerErr error
-	handlerStopped := false
-	select {
-	case handlerErr = <-handlerDone:
-		handlerStopped = true
-	case <-ctx.Done():
-	}
-	if handlerStopped && streamEndedUnexpectedly(ctx.Err()) {
-		if handlerErr != nil {
-			log.Fatalf("handler stopped unexpectedly: %v", handlerErr)
-		}
-		log.Fatal("update stream ended without a shutdown signal — exiting non-zero so systemd restarts us")
-	}
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownDeadline)
-	defer shutdownCancel()
-	log.Printf("shutdown: waiting up to %s to drain fetched updates and in-flight update handlers", shutdownDeadline)
-	if !handlerStopped {
-		select {
-		case handlerErr = <-handlerDone:
-			handlerStopped = true
-		case <-shutdownCtx.Done():
-			log.Printf("shutdown: fetched updates did not drain before deadline: %v", shutdownCtx.Err())
-		}
-	}
-	if handlerStopped && handlerErr != nil {
-		log.Printf("shutdown: handler loop stopped: %v", handlerErr)
-	}
-	if err := bh.StopWithContext(shutdownCtx); err != nil {
-		log.Printf("shutdown: update handlers did not stop cleanly: %v", err)
-	}
-	waitForShutdownComponent(shutdownCtx, "Telegram heartbeat", heartbeatDone)
-
-	log.Printf("shutdown: flushing verification state")
-	verification.Shutdown()
-	waitForShutdownComponent(shutdownCtx, "feed state flush", feedDone)
-
-	select {
-	case err := <-notifierDone:
-		if err != nil {
-			log.Printf("shutdown: systemd notification failed: %v", err)
-		}
-	case <-shutdownCtx.Done():
-		log.Printf("shutdown: systemd notifier did not stop before deadline: %v", shutdownCtx.Err())
-	}
+	exitOnRuntimeError(runRuntimeLifecycle(ctx, runtimeLifecycle{
+		handlerDone:       handlerDone,
+		stopHandlers:      bh.StopWithContext,
+		waitRegistration:  registration.Wait,
+		heartbeatDone:     heartbeatDone,
+		flushVerification: verification.Shutdown,
+		feedDone:          feedDone,
+		notifierDone:      notifierDone,
+		shutdownDeadline:  shutdownDeadline,
+	}))
 }
 
 func prepareUpdateHandler(

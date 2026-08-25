@@ -330,11 +330,13 @@ func TestSettingsLauncherOpensGroupPickerWithoutVerification(t *testing.T) {
 	if verifier.challengeCalls != 0 {
 		t.Fatalf("panel deep link launched verification %d times", verifier.challengeCalls)
 	}
-	if session.messageID == 0 || session.screen != "gl" ||
-		!strings.Contains(caller.lastSendText, "Settings groups") ||
-		!strings.Contains(caller.lastSendText, fmt.Sprintf("%d", panelTestGroupA)) ||
-		!strings.Contains(caller.lastSendText, fmt.Sprintf("%d", panelTestGroupB)) {
-		t.Fatalf("group picker did not render: message=%q session=%+v", caller.lastSendText, session)
+	groupA := i18n.Messages.Panel.Settings.Value.GroupButton.Render(
+		i18n.LangEN, fmt.Sprintf("Group %d", panelTestGroupA), panelTestGroupA)
+	groupB := i18n.Messages.Panel.Settings.Value.GroupButton.Render(
+		i18n.LangEN, fmt.Sprintf("Group %d", panelTestGroupB), panelTestGroupB)
+	wantPicker := i18n.Messages.Panel.Settings.Screen.Groups.Render(i18n.LangEN, 1, groupA+"\n"+groupB)
+	if session.messageID == 0 || session.screen != "gl" || caller.lastSendText != wantPicker {
+		t.Fatalf("group picker = %q session=%+v, want catalogue screen %q", caller.lastSendText, session, wantPicker)
 	}
 }
 
@@ -453,26 +455,8 @@ func TestPanelDMFirstTogglePersistsAndRejectsStaleRevision(t *testing.T) {
 	}
 }
 
-func TestPanelBuildsEverySettingsScreen(t *testing.T) {
-	panel, settings, _, bot := newSettingsPanelTest(t, "")
-	session := addPanelSession(t, panel, settings, panelTestGroupA, "gh")
-	token := "0123456789abcdef"
-	for _, screen := range []string{"gl", "gh", "rt", "ls", "li", "vp", "ct", "qb", "qd", "fb", "fd", "ch", "cf", "in"} {
-		session.screen = screen
-		session.page = 0
-		session.listKind = inputKnownChat
-		session.quiz = &quizDraft{question: config.Question{Q: "Question", Options: []string{"A", "B"}, Answer: 0}, revision: session.revision}
-		session.fallback = &fallbackDraft{question: config.ShortQuestion{Q: "Question", Answers: []string{"Answer"}}, revision: session.revision}
-		session.confirm = &confirmation{kind: "channel", revision: session.revision}
-		session.pending = &pendingInput{kind: inputTimeout, parent: "vp", expectedRevision: session.revision}
-		text, keyboard, err := panel.buildScreen(context.Background(), bot, session, panelTestGroupA, token)
-		if err != nil {
-			t.Fatalf("build screen %s: %v", screen, err)
-		}
-		if text == "" || keyboard == nil || len(keyboard.InlineKeyboard) == 0 {
-			t.Fatalf("screen %s is incomplete: text=%q keyboard=%+v", screen, text, keyboard)
-		}
-	}
+func TestPanelSettingsScreensExposeCatalogueValuesAndCallbacks(t *testing.T) {
+	testSettingsScreenContracts(t)
 }
 
 func TestPanelCallbackCodecWorstCase(t *testing.T) {

@@ -206,6 +206,8 @@ type VerificationAdminCatalog struct {
 	Approving Text
 	// Banning formats a decline and ban in progress.
 	Banning Format
+	// ActionFailed tells the acting group that an acknowledged settlement failed.
+	ActionFailed Text
 	// ChannelFailOpen describes the configured fail-open action.
 	ChannelFailOpen Text
 	// ChannelFailClosed describes the configured fail-closed action.

@@ -97,8 +97,15 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 	}}
 
 	runFakeHandler(t, newAPITestBot(t, bot), v.OnJoinRequest, update)
-	if !strings.Contains(bot.lastSendText, "申请加入") || strings.Contains(bot.lastSendText, "申請加入") {
-		t.Fatalf("group challenge did not use the configured zh language: %q", bot.lastSendText)
+	wantGroup := v.messages.Verification.Group.Body.Render(
+		i18n.LangZH,
+		joinerLabel(userID, applicantDisplayName(&update.ChatJoinRequest.From), v.NameSpoilerOn(groupID)),
+		"",
+		int(v.timeout(groupID)/time.Second),
+		"",
+	)
+	if got := bot.lastSendText; got != wantGroup {
+		t.Fatalf("group challenge = %q, want zh catalogue rendering %q", got, wantGroup)
 	}
 	p := v.pend[pkey{groupID, userID}]
 	if p == nil || p.lang != i18n.LangZHHant {
@@ -106,8 +113,10 @@ func TestJoinResolvesApplicantAndGroupLanguagesSeparately(t *testing.T) {
 	}
 
 	v.sendQuizzes(context.Background(), bot, userID)
-	if !strings.Contains(bot.lastSendText, "完成加入群組驗證") {
-		t.Fatalf("applicant DM did not retain zh-Hant: %q", bot.lastSendText)
+	wantPrompt := v.messages.Verification.Challenge.KernelPrompt.Render(p.lang, p.qText, kernelMaxTries-p.tries)
+	wantTrap := v.messages.Verification.Challenge.AgentTrap.Render(p.lang, aiTrapToken(p.nonce))
+	if !strings.Contains(bot.lastSendText, wantPrompt) || !strings.Contains(bot.lastSendText, wantTrap) {
+		t.Fatalf("applicant DM did not retain zh-Hant catalogue rendering: %q", bot.lastSendText)
 	}
 	if p.timer != nil {
 		p.timer.Stop()
@@ -683,25 +692,31 @@ func TestAdminCallbackReportsActionInProgress(t *testing.T) {
 	const gid, uid, adminID = int64(-100), int64(5), int64(9)
 	tests := []struct {
 		action       string
-		wantText     string
+		wantText     func(*Service) string
 		wantApproves int
 		wantBans     int
+		wantDeclines int
 	}{
 		{
 			action:       "pass",
-			wantText:     i18n.Messages.Verification.Admin.Approving.For(i18n.LangZH),
+			wantText:     func(_ *Service) string { return i18n.Messages.Verification.Admin.Approving.For(i18n.LangZH) },
 			wantApproves: 1,
 		},
 		{
-			action:   "ban",
-			wantText: i18n.Messages.Verification.Admin.Banning.Render(i18n.LangZH, "1 小时"),
-			wantBans: 1,
+			action: "ban",
+			wantText: func(v *Service) string {
+				duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
+				return i18n.Messages.Verification.Admin.Banning.Render(i18n.LangZH, duration)
+			},
+			wantBans:     1,
+			wantDeclines: 1,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.action, func(t *testing.T) {
 			v := newTestService(&config.Config{BanSeconds: 3600})
-			v.pend[pkey{gid, uid}] = livePending(42)
+			key := pkey{gid, uid}
+			v.pend[key] = livePending(42)
 			bot := newFakeVerifyBot()
 			bot.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
 			update := telego.Update{CallbackQuery: &telego.CallbackQuery{
@@ -711,15 +726,154 @@ func TestAdminCallbackReportsActionInProgress(t *testing.T) {
 
 			runFakeHandler(t, newAPITestBot(t, bot), v.OnAdminAction, update)
 
-			if bot.approves != tt.wantApproves || bot.bans != tt.wantBans {
-				t.Errorf("actions = approve %d, ban %d; want %d, %d",
-					bot.approves, bot.bans, tt.wantApproves, tt.wantBans)
+			if bot.approves != tt.wantApproves || bot.bans != tt.wantBans || bot.declines != tt.wantDeclines {
+				t.Errorf("actions = approve %d, ban %d, decline %d; want %d, %d, %d",
+					bot.approves, bot.bans, bot.declines, tt.wantApproves, tt.wantBans, tt.wantDeclines)
 			}
 			if len(bot.callbackAnswers) != 1 {
 				t.Fatalf("callback answers = %d, want 1", len(bot.callbackAnswers))
 			}
-			if got := bot.callbackAnswers[0].Text; got != tt.wantText {
-				t.Errorf("callback text = %q, want in-progress text %q", got, tt.wantText)
+			if got, want := bot.callbackAnswers[0].Text, tt.wantText(v); got != want {
+				t.Errorf("callback text = %q, want in-progress text %q", got, want)
+			}
+			if bot.deletes != 1 {
+				t.Errorf("successful action deleted %d challenge messages, want 1", bot.deletes)
+			}
+			if _, retained := v.pend[key]; retained {
+				t.Error("successful action retained its challenge evidence")
+			}
+		})
+	}
+}
+
+func TestOnAdminActionTelegramFailureAfterAcknowledgement(t *testing.T) {
+	const gid, uid, adminID = int64(-100), int64(5), int64(9)
+	errTelegram := errors.New("Forbidden: test transport failure")
+	tests := []struct {
+		name           string
+		action         string
+		adminLogChatID int64
+		telegramMethod string
+		newBot         func() *fakeVerifyBot
+		wantCallback   func(*Service) string
+		wantAlert      func(*Service, error) string
+		wantAlertChat  int64
+		wantApproves   int
+		wantBans       int
+		wantDeclines   int
+	}{
+		{
+			name:           "approval failure falls back to the group",
+			action:         "pass",
+			telegramMethod: "approveChatJoinRequest",
+			newBot:         func() *fakeVerifyBot { return &fakeVerifyBot{approveErr: errTelegram} },
+			wantCallback:   func(_ *Service) string { return i18n.Messages.Verification.Admin.Approving.For(i18n.LangZH) },
+			wantAlert: func(v *Service, err error) string {
+				return v.messages.Verification.Admin.ApproveFailed.Render(i18n.LangZH, uid, gid, err)
+			},
+			wantAlertChat: gid,
+			wantApproves:  1,
+		},
+		{
+			name:           "ban failure uses the configured admin log",
+			action:         "ban",
+			adminLogChatID: -999,
+			telegramMethod: "banChatMember",
+			newBot:         func() *fakeVerifyBot { return &fakeVerifyBot{banErr: errTelegram} },
+			wantCallback: func(v *Service) string {
+				duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
+				return v.messages.Verification.Admin.Banning.Render(i18n.LangZH, duration)
+			},
+			wantAlert: func(v *Service, err error) string {
+				return v.messages.Verification.Admin.BanFailed.Render(i18n.LangZH, uid, gid, err)
+			},
+			wantAlertChat: -999,
+			wantBans:      1,
+		},
+		{
+			name:           "ban failure falls back to the group without an admin log",
+			action:         "ban",
+			telegramMethod: "banChatMember",
+			newBot:         func() *fakeVerifyBot { return &fakeVerifyBot{banErr: errTelegram} },
+			wantCallback: func(v *Service) string {
+				duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
+				return v.messages.Verification.Admin.Banning.Render(i18n.LangZH, duration)
+			},
+			wantAlert: func(v *Service, err error) string {
+				return v.messages.Verification.Admin.BanFailed.Render(i18n.LangZH, uid, gid, err)
+			},
+			wantAlertChat: gid,
+			wantBans:      1,
+		},
+		{
+			name:           "decline failure after a confirmed ban retains the evidence",
+			action:         "ban",
+			telegramMethod: "declineChatJoinRequest",
+			newBot:         func() *fakeVerifyBot { return &fakeVerifyBot{declineErr: errTelegram} },
+			wantCallback: func(v *Service) string {
+				duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
+				return v.messages.Verification.Admin.Banning.Render(i18n.LangZH, duration)
+			},
+			wantAlert: func(v *Service, err error) string {
+				return v.messages.Verification.Admin.DeclineFailed.Render(i18n.LangZH, uid, gid, err)
+			},
+			wantAlertChat: gid,
+			wantBans:      1,
+			wantDeclines:  1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newTestService(&config.Config{AdminLogChatID: tt.adminLogChatID, BanSeconds: 3600})
+			key := pkey{gid, uid}
+			p := livePending(42)
+			v.pend[key] = p
+			bot := tt.newBot()
+			bot.member = &telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator}
+			update := telego.Update{CallbackQuery: &telego.CallbackQuery{
+				ID:   "admin-failure",
+				From: telego.User{ID: adminID},
+				Data: AdminCallbackPrefix + tt.action + ":-100:5",
+			}}
+
+			runFakeHandler(t, newAPITestBot(t, bot), v.OnAdminAction, update)
+
+			if bot.approves != tt.wantApproves || bot.bans != tt.wantBans || bot.declines != tt.wantDeclines {
+				t.Errorf("actions = approve %d, ban %d, decline %d; want %d, %d, %d",
+					bot.approves, bot.bans, bot.declines, tt.wantApproves, tt.wantBans, tt.wantDeclines)
+			}
+			if len(bot.callbackAnswers) != 1 {
+				t.Fatalf("callback answers = %d, want 1", len(bot.callbackAnswers))
+			}
+			if got, want := bot.callbackAnswers[0].Text, tt.wantCallback(v); got != want {
+				t.Errorf("callback text = %q, want truthful catalogue acknowledgement %q", got, want)
+			}
+			if bot.callbackAnswers[0].ShowAlert {
+				t.Error("in-progress callback acknowledgement must not claim a terminal alert")
+			}
+			if cur, ok := v.pend[key]; !ok || cur != p || p.done || p.timer == nil {
+				t.Fatalf("failure pending = %+v, want original evidence reopened and re-armed", cur)
+			}
+			t.Cleanup(func() { p.timer.Stop() })
+			if _, claimed := v.terminal[key]; claimed {
+				t.Error("failed action left the pending terminally claimed")
+			}
+			if bot.deletes != 0 || p.groupMsgID != 42 {
+				t.Errorf("failure cleanup = deletes:%d message:%d, want retained evidence", bot.deletes, p.groupMsgID)
+			}
+			if bot.sends != 2 {
+				t.Fatalf("failure messages = %d, want one operator alert and one group result", bot.sends)
+			}
+			handlerErr := fmt.Errorf("telego: %s: internal execution: request call: %w", tt.telegramMethod, errTelegram)
+			wantAlert := tt.wantAlert(v, handlerErr)
+			if bot.sendChats[0] != tt.wantAlertChat || bot.sendTexts[0] != wantAlert {
+				t.Errorf("operator alert = chat %d text %q, want chat %d catalogue failure %q",
+					bot.sendChats[0], bot.sendTexts[0], tt.wantAlertChat, wantAlert)
+			}
+			wantGroupResult := v.messages.Verification.Admin.ActionFailed.For(i18n.LangZH)
+			if bot.sendChats[1] != gid || bot.sendTexts[1] != wantGroupResult {
+				t.Errorf("group result = chat %d text %q, want chat %d catalogue result %q",
+					bot.sendChats[1], bot.sendTexts[1], gid, wantGroupResult)
 			}
 		})
 	}
@@ -734,10 +888,9 @@ func TestFailureCopyNamesDecisionAndRetry(t *testing.T) {
 	})
 
 	retry := v.wrongAnswerText(gid, i18n.LangZH, false)
-	for _, want := range []string{"入群申请已被拒绝", "600 秒后"} {
-		if !strings.Contains(retry, want) {
-			t.Errorf("wrong-answer retry omits %q: %s", want, retry)
-		}
+	wantRetry := v.messages.Verification.Result.WrongRetry.Render(i18n.LangZH, 600)
+	if retry != wantRetry {
+		t.Errorf("wrong-answer retry = %q, want catalogue result %q", retry, wantRetry)
 	}
 	banned := v.wrongAnswerText(gid, i18n.LangZH, true)
 	duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
@@ -746,10 +899,9 @@ func TestFailureCopyNamesDecisionAndRetry(t *testing.T) {
 		t.Errorf("ban result = %q, want catalogue result %q", banned, wantBanned)
 	}
 	agent := v.agentCaughtText(gid, i18n.LangEN, false)
-	for _, want := range []string{"automated-answer check", "join request was declined", "600 seconds"} {
-		if !strings.Contains(agent, want) {
-			t.Errorf("automated-answer result omits %q: %s", want, agent)
-		}
+	wantAgent := v.messages.Verification.Result.AICaught.Render(i18n.LangEN, 600)
+	if agent != wantAgent {
+		t.Errorf("automated-agent result = %q, want catalogue result %q", agent, wantAgent)
 	}
 }
 
@@ -866,11 +1018,19 @@ func TestBanApplicant(t *testing.T) {
 		t.Error("banApplicant should consume the pending")
 	}
 
-	v.pend[key] = livePending(0)
+	failed := livePending(0)
+	v.pend[key] = failed
 	fbFail := &fakeVerifyBot{banErr: errors.New("not enough rights")}
 	if _, banned := v.banApplicant(context.Background(), fbFail, -100, 5); banned {
 		t.Error("a failed BanChatMember must report banned=false (honest feedback)")
 	}
+	if cur, ok := v.pend[key]; !ok || cur != failed || failed.done || failed.timer == nil {
+		t.Fatalf("failed ban pending = %+v, want retryable evidence", cur)
+	}
+	if fbFail.declines != 0 || fbFail.deletes != 0 {
+		t.Errorf("failed ban must not decline or delete evidence, got declines=%d deletes=%d", fbFail.declines, fbFail.deletes)
+	}
+	t.Cleanup(func() { failed.timer.Stop() })
 }
 
 func TestClaimThenExecuteApprove(t *testing.T) {
@@ -1354,8 +1514,9 @@ func TestDeclineFailureAlertsAdmins(t *testing.T) {
 	if fb.sends != 1 || fb.lastSendChat != -200 {
 		t.Fatalf("admin alert sends/chat = %d/%d, want 1/-200", fb.sends, fb.lastSendChat)
 	}
-	if !strings.Contains(fb.lastSendText, "missing can_invite_users") {
-		t.Errorf("admin alert must name the decline failure, got %q", fb.lastSendText)
+	wantAlert := v.messages.Verification.Admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, fb.declineErr)
+	if got := fb.lastSendText; got != wantAlert {
+		t.Errorf("admin alert = %q, want catalogue failure %q", got, wantAlert)
 	}
 	if p.timer != nil {
 		p.timer.Stop()

@@ -1,14 +1,19 @@
 package moderate
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"github.com/mymmrac/telego"
 )
 
 const (
@@ -25,9 +30,13 @@ func TestWarningsPersistence(t *testing.T) {
 	service.warnings.counters[warningKey{groupID: -100, userID: 8}] = 3
 	service.warnings.counters[warningKey{groupID: -200, userID: 7}] = 2
 	service.warnings.counters[cleared] = 4
-	service.warnings.save()
+	if err := service.warnings.save(); err != nil {
+		t.Fatal(err)
+	}
 	delete(service.warnings.counters, cleared)
-	service.warnings.save()
+	if err := service.warnings.save(); err != nil {
+		t.Fatal(err)
+	}
 
 	restored := newTestService(t, &config.Config{}, newFakeMod(), stateDirectory)
 	for _, test := range []struct {
@@ -79,7 +88,9 @@ func TestWarningGoldenCompatibility(t *testing.T) {
 			if test.roundTrip {
 				out := filepath.Join(t.TempDir(), "warns.json")
 				service.warnings.path = out
-				service.warnings.save()
+				if err := service.warnings.save(); err != nil {
+					t.Fatal(err)
+				}
 				got, err := os.ReadFile(out)
 				if err != nil {
 					t.Fatal(err)
@@ -98,6 +109,66 @@ func TestWarningReadErrorDisablesWrites(t *testing.T) {
 	service := newTestService(t, &config.Config{}, newFakeMod(), stateDirectory)
 	if service.warnings.path != "" {
 		t.Errorf("write path remains %q after read failure", service.warnings.path)
+	}
+}
+
+func TestWarnStateWriteFailureKeepsLiveCountAndLogsWithConfiguredAdminLog(t *testing.T) {
+	testWarnStateWriteFailure(t, -200)
+}
+
+func TestWarnStateWriteFailureKeepsLiveCountAndLogsWithoutAdminLog(t *testing.T) {
+	testWarnStateWriteFailure(t, 0)
+}
+
+func testWarnStateWriteFailure(t *testing.T, adminLogID int64) {
+	t.Helper()
+	const groupID = int64(-100)
+	stateDirectory := t.TempDir()
+	telegram := newFakeMod()
+	telegram.memberByID = map[int64]telego.ChatMember{
+		7: &telego.ChatMemberAdministrator{},
+		8: &telego.ChatMemberMember{},
+	}
+	cfg := &config.Config{
+		GroupIDs:         []int64{groupID},
+		Groups:           []config.GroupConfig{{ID: groupID}},
+		AdminLogChatID:   adminLogID,
+		Lang:             "en",
+		WarnLimit:        2,
+		NotifyTTLSeconds: -1,
+	}
+	service := newTestService(t, cfg, telegram, stateDirectory)
+	path := filepath.Join(stateDirectory, "warns.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	message := moderationCommand(groupID, "/warn")
+	runFakeHandler(t, newAPITestBot(t, telegram), service.OnWarn, telego.Update{Message: message})
+
+	key := warningKey{groupID: groupID, userID: message.ReplyToMessage.From.ID}
+	if got := service.warnings.counters[key]; got != 1 {
+		t.Fatalf("in-memory warning count after write failure = %d, want 1", got)
+	}
+	assertModerationCommandCleanup(t, telegram)
+	l := i18n.LangEN
+	assertModerationNotifications(t, telegram,
+		fakeModNotification{chatID: groupID, text: i18n.Messages.Moderate.Warning.Issued.Render(l, displayName(message.ReplyToMessage.From), 1, cfg.WarnLimit, cfg.WarnLimit, displayName(message.From))},
+	)
+	if len(telegram.failAlerts) != 0 {
+		t.Fatalf("warning state write failure sent misleading Telegram alerts: %#v", telegram.failAlerts)
+	}
+	if output := logs.String(); !strings.Contains(output, "state: rename "+path) {
+		t.Fatalf("warning state write failure was not logged for %q: %q", path, output)
+	}
+
+	restarted := newTestService(t, cfg, newFakeMod(), stateDirectory)
+	if got := restarted.warnings.counters[key]; got != 0 {
+		t.Fatalf("warning count after restart = %d, want 0 after failed write", got)
 	}
 }
 
@@ -140,7 +211,9 @@ func TestGenerateWarningFixture(t *testing.T) {
 		{groupID: stateCompatGroupA, userID: 7102}: 2,
 		{groupID: stateCompatGroupB, userID: 7101}: 4,
 	}
-	service.warnings.save()
+	if err := service.warnings.save(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func warningFixtureWithUnknown(t *testing.T, fixture []byte) []byte {

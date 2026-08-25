@@ -2,7 +2,6 @@ package moderate
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
@@ -42,7 +41,7 @@ func TestControlGroupAllowed(t *testing.T) {
 		wantNotice  string
 	}{
 		{name: "control group", controlID: -100, chatID: -100, wantAllowed: true},
-		{name: "satellite refused", controlID: -100, chatID: -200, wantNotice: "⛔ 该命令只能在控制群（ID -100）中使用。"},
+		{name: "satellite refused", controlID: -100, chatID: -200, wantNotice: i18n.Messages.Feed.Config.ControlGroupOnly.Render(i18n.LangZH, -100)},
 		{name: "unset preserves legacy policy", chatID: -200, wantAllowed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -154,6 +153,7 @@ func TestFilterChannelSendersUsesTelegramTransport(t *testing.T) {
 		Groups:              []config.GroupConfig{{ID: groupID}},
 		BlockChannelSenders: true,
 		AdminLogChatID:      -200,
+		Lang:                "zh",
 	}
 	telegram := newFakeMod()
 	service := newTestService(t, cfg, telegram, "")
@@ -168,7 +168,8 @@ func TestFilterChannelSendersUsesTelegramTransport(t *testing.T) {
 	if telegram.deletes != 1 || telegram.senderBans != 1 {
 		t.Fatalf("filter actions = deletes %d, sender bans %d", telegram.deletes, telegram.senderBans)
 	}
-	if telegram.lastSendChat != cfg.AdminLogChatID || !strings.Contains(telegram.lastSendText, "Spam Channel") {
-		t.Fatalf("operator alert = chat %d text %q", telegram.lastSendChat, telegram.lastSendText)
+	wantAlert := i18n.Messages.Moderate.Antispam.SenderBannedAlert.Render(i18n.LangZH, "Spam Channel", senderID, groupID, senderID)
+	if telegram.lastSendChat != cfg.AdminLogChatID || telegram.lastSendText != wantAlert {
+		t.Fatalf("operator alert = chat %d text %q, want chat %d text %q", telegram.lastSendChat, telegram.lastSendText, cfg.AdminLogChatID, wantAlert)
 	}
 }

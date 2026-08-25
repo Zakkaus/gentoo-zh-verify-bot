@@ -60,11 +60,11 @@ func (w *warningState) load() {
 	}
 }
 
-func (w *warningState) save() {
+func (w *warningState) save() error {
 	if w.path == "" {
-		return
+		return nil
 	}
-	_ = store.Save(w.path, func() any {
+	return store.Save(w.path, func() any {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		records := make([]warningRecord, 0, len(w.counters))

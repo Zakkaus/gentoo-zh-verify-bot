@@ -84,6 +84,10 @@ All notable changes to this project are documented here. The format is based on
   Telegram confirms them; private and fallback prompt completion is bound to the exact pending;
   rolling-window strikes use the failure event time; and recovery keeps the previous group
   challenge unless a current replacement post succeeds.
+- **Failure handling now preserves retry evidence and reports the durable result.** Administrator
+  decline-and-ban actions retain pending verification until Telegram confirms both calls; failed
+  mutes alert the configured operator destination or affected group; and enrollment commit failures
+  use the persistence-specific response.
 - **Closed feed bugs no longer always display a green check.** `FIXED` resolves to ✅; `INVALID`,
   `WONTFIX`, `DUPLICATE`, and other closed-without-a-fix resolutions display ❌.
 - Auto-feed polling now drains multi-page Bugzilla backlogs without advancing across undelivered
