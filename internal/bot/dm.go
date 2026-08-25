@@ -27,7 +27,7 @@ type dmHandler struct {
 // Per-user throttling prevents DMs from amplifying into Telegram send floods.
 const dmReplyCooldown = 30 * time.Second
 
-// Clear the cooldown map before untrusted user IDs can grow it without bound.
+// Keep the cooldown map bounded before untrusted user IDs can grow it indefinitely.
 const dmMapMax = 10000
 
 var legacyPrivateReplySHA256 = [sha256.Size]byte{
@@ -90,14 +90,23 @@ func (v *dmHandler) onPrivateDM(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	v.mu.Lock()
-	if last, ok := v.last[msg.From.ID]; ok && time.Since(last) < dmReplyCooldown {
+	now := time.Now()
+	if last, ok := v.last[msg.From.ID]; ok && now.Sub(last) < dmReplyCooldown {
 		v.mu.Unlock()
 		return nil // within cooldown: stay silent rather than reply to every flooded message
 	}
 	if len(v.last) >= dmMapMax {
-		v.last = map[int64]time.Time{}
+		cutoff := now.Add(-dmReplyCooldown)
+		for userID, last := range v.last {
+			if !last.After(cutoff) {
+				delete(v.last, userID)
+			}
+		}
+		if len(v.last) >= dmMapMax {
+			v.last = map[int64]time.Time{}
+		}
 	}
-	v.last[msg.From.ID] = time.Now()
+	v.last[msg.From.ID] = now
 	v.mu.Unlock()
 	// Invalid admin-supplied HTML falls back to plain text.
 	l := i18n.FromTelegram(msg.From.LanguageCode)

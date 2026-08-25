@@ -569,10 +569,14 @@ refresh:
 			tb.EditFails = 0
 			if wasUnconfirmed && !bugResolved(b) && !strings.EqualFold(b.Status, "UNCONFIRMED") && !bugSilent(f, b) {
 				// The silent UNCONFIRMED post moved OUT of UNCONFIRMED (but not straight to resolved) —
-				// owe the non-silent notice the silent original never gave. The edit already landed;
-				// retry the ping over a bounded number of cycles, then give up (best-effort) and advance
-				// state — so an edits-work-but-sends-fail outage can't pin this bug into an endless loop.
-				if _, ok, rl, _ := postFeed(ctx, bot, f.ChatID, confirmNotice(b, l), false, tb.MsgID); ok {
+				// owe the non-silent notice the silent original never gave. The edit already landed.
+				// Abandon a permanently rejected notice immediately; retry other failures over a
+				// bounded number of cycles so an outage cannot pin this bug into an endless loop.
+				if _, ok, rl, permanent := postFeed(ctx, bot, f.ChatID, confirmNotice(b, l), false, tb.MsgID); ok {
+					tb.ConfirmTries = 0
+					tb.State = cur
+				} else if permanent {
+					log.Printf("feed: skip permanently rejected confirm ping for bug %d in %d", id, f.ChatID)
 					tb.ConfirmTries = 0
 					tb.State = cur
 				} else {
@@ -688,8 +692,14 @@ func postFeedItems(ctx context.Context, bot feedBot, f *config.FeedConfig, l i18
 					continue
 				}
 				text, silent := formatNewBug(b, l, bugSilent(f, b))
-				mid, ok, _, _ := postFeed(ctx, bot, f.ChatID, text, silent, 0)
+				mid, ok, _, permanent := postFeed(ctx, bot, f.ChatID, text, silent, 0)
 				if !ok {
+					if permanent {
+						log.Printf("feed: skip permanently rejected bug %d in %d", b.ID, f.ChatID)
+						st.LastBugID = b.ID
+						processed++
+						continue
+					}
 					break // do not advance across an undelivered bug
 				}
 				st.LastBugID = b.ID

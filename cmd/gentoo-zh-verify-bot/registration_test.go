@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -73,11 +75,14 @@ type registrationCaller struct {
 	left            []int64
 	commandScopeIDs []int64
 	events          chan string
+	memberLookups   chan [2]int64
+	lookupBlocks    map[[2]int64]<-chan struct{}
+	leaveStarted    chan int64
+	releaseLeave    <-chan struct{}
+	botID           int64
 }
 
 func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.RequestData) (*ta.Response, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	method := endpoint[strings.LastIndexByte(endpoint, '/')+1:]
 	switch method {
 	case "getChatMember":
@@ -88,9 +93,19 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
 			return nil, err
 		}
-		member := c.members[[2]int64{params.ChatID, params.UserID}]
+		key := [2]int64{params.ChatID, params.UserID}
+		c.mu.Lock()
+		member := c.members[key]
+		block := c.lookupBlocks[key]
+		c.mu.Unlock()
 		if member == nil {
 			return nil, fmt.Errorf("no member response for chat %d user %d", params.ChatID, params.UserID)
+		}
+		if c.memberLookups != nil {
+			c.memberLookups <- key
+		}
+		if block != nil {
+			<-block
 		}
 		if c.events != nil {
 			c.events <- method
@@ -104,14 +119,17 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 		if err := json.Unmarshal(data.BodyRaw, &wire); err != nil {
 			return nil, err
 		}
+		c.mu.Lock()
 		c.sent = append(c.sent, telego.SendMessageParams{
 			ChatID: telego.ChatID{ID: wire.ChatID},
 			Text:   wire.Text,
 		})
+		messageID := len(c.sent)
+		c.mu.Unlock()
 		if c.events != nil {
 			c.events <- method
 		}
-		return registrationAPIResponse(&telego.Message{MessageID: len(c.sent)})
+		return registrationAPIResponse(&telego.Message{MessageID: messageID})
 	case "leaveChat":
 		var params struct {
 			ChatID int64 `json:"chat_id"`
@@ -119,7 +137,23 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
 			return nil, err
 		}
+		if c.leaveStarted != nil {
+			c.leaveStarted <- params.ChatID
+		}
+		if c.releaseLeave != nil {
+			<-c.releaseLeave
+		}
+		c.mu.Lock()
 		c.left = append(c.left, params.ChatID)
+		botID := c.botID
+		if botID == 0 {
+			botID = testBotID
+		}
+		c.members[[2]int64{params.ChatID, botID}] = &telego.ChatMemberLeft{
+			Status: telego.MemberStatusLeft,
+			User:   telego.User{ID: botID},
+		}
+		c.mu.Unlock()
 		if c.events != nil {
 			c.events <- method
 		}
@@ -136,7 +170,9 @@ func (c *registrationCaller) Call(_ context.Context, endpoint string, data *ta.R
 			return nil, err
 		}
 		if params.Scope.ChatID != 0 {
+			c.mu.Lock()
 			c.commandScopeIDs = append(c.commandScopeIDs, params.Scope.ChatID)
+			c.mu.Unlock()
 		}
 		return registrationAPIResponse(true)
 	default:
@@ -160,6 +196,18 @@ func (c *registrationCaller) sentTo(chatID int64) int {
 		}
 	}
 	return count
+}
+
+func (c *registrationCaller) messagesTo(chatID int64) []telego.SendMessageParams {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var messages []telego.SendMessageParams
+	for _, message := range c.sent {
+		if message.ChatID.ID == chatID {
+			messages = append(messages, message)
+		}
+	}
+	return messages
 }
 
 func (c *registrationCaller) hasCommandScope(groupID int64) bool {
@@ -197,10 +245,19 @@ func runRegistrationUpdate(t *testing.T, bot *telego.Bot, service *registrationS
 	if err != nil {
 		t.Fatal(err)
 	}
+	processed := make(chan error, 1)
+	handler.Use(func(ctx *th.Context, update telego.Update) error {
+		err := ctx.Next(update)
+		processed <- err
+		return err
+	})
 	service.Register(handler)
 	started := make(chan error, 1)
 	go func() { started <- handler.Start() }()
 	updates <- update
+	if err := <-processed; err != nil {
+		t.Fatalf("handler returned %v", err)
+	}
 	close(updates)
 	if err := <-started; err != nil {
 		t.Fatalf("handler returned %v", err)
@@ -307,7 +364,7 @@ func TestOwnerClaimIsFirstUserSingleUse(t *testing.T) {
 	bot := newRegistrationBot(t, caller)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil)
+	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
 	service.now = func() time.Time { return now }
 
 	logs := newSynchronizedLog()
@@ -347,7 +404,7 @@ func TestEnrollmentNoncePromotionReplayAndExpiry(t *testing.T) {
 	bot := newRegistrationBot(t, caller)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil)
+	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
 	service.now = func() time.Time { return now }
 
 	const (
@@ -419,13 +476,16 @@ func TestOwnerPromotionRegistersFirstControlGroup(t *testing.T) {
 	bindTestOwner(t, settings, now)
 	const groupID = int64(-1901)
 	caller := &registrationCaller{
-		members: map[[2]int64]telego.ChatMember{{groupID, testOwner}: adminMember(testOwner)},
-		events:  make(chan string, 16),
+		members: map[[2]int64]telego.ChatMember{
+			{groupID, testOwner}: adminMember(testOwner),
+			{groupID, testBotID}: adminMember(testBotID),
+		},
+		events: make(chan string, 16),
 	}
 	bot := newRegistrationBot(t, caller)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil)
+	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
 	service.now = func() time.Time { return now }
 	runRegistrationUpdate(t, bot, service, telego.Update{MyChatMember: &telego.ChatMemberUpdated{
 		Chat:          telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Owner Group"},
@@ -468,8 +528,7 @@ func TestRegistrationCompletedMessageLocales(t *testing.T) {
 			cfg, settings := registrationFixture(t)
 			caller := &registrationCaller{members: make(map[[2]int64]telego.ChatMember)}
 			bot := newRegistrationBot(t, caller)
-			service := newRegistrationService(
-				context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil)
+			service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
 			service.registrationCompleted(context.Background(),
 				telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: title},
 				telego.User{ID: testOwner, LanguageCode: test.code})
@@ -502,7 +561,7 @@ func TestNonOwnerPromotionAttemptLeaves(t *testing.T) {
 	bot := newRegistrationBot(t, caller)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil)
+	service := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
 	service.now = func() time.Time { return now }
 	runRegistrationUpdate(t, bot, service, telego.Update{MyChatMember: &telego.ChatMemberUpdated{
 		Chat:          telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Unauthorized"},
@@ -526,7 +585,7 @@ func TestUnknownGroupGraceExpiry(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		service := newRegistrationService(ctx, newRegistrationBot(t, caller), settings, cfg, "verify_test_bot", testBotID, nil)
+		service := newRegistrationService(ctx, newRegistrationBot(t, caller), settings, cfg, "verify_test_bot", testBotID, nil, nil)
 		return service, caller
 	}
 
@@ -545,7 +604,9 @@ func TestUnknownGroupGraceExpiry(t *testing.T) {
 	t.Run("registered group is retained", func(t *testing.T) {
 		const groupID = int64(-3002)
 		service, caller := newFixture(t)
-		if err := service.registerGroup(groupID, testOwner, "Registered"); err != nil {
+		state := service.settings.Registrations()
+		state.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: testOwner, Title: "Registered"}}
+		if _, err := service.settings.CommitRegistrations(state.Revision, state); err != nil {
 			t.Fatal(err)
 		}
 		service.scheduleUnknownLeave(groupID, "Registered", time.Now().Add(-time.Second))
@@ -572,4 +633,398 @@ func TestUnknownGroupGraceExpiry(t *testing.T) {
 			t.Fatalf("duplicate deadline leaves = %v, want [%d]", left, groupID)
 		}
 	})
+}
+
+func TestRegistrationAndUnknownLeaveAreSerialized(t *testing.T) {
+	cfg, settings := registrationFixture(t)
+	now := time.Unix(2_000_000_000, 0)
+	bindTestOwner(t, settings, now)
+	const (
+		actor   = int64(77)
+		groupID = int64(-4001)
+	)
+	nonce, err := settings.IssueEnrollmentNonce(testOwner, now, enrollmentLifetime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseLeave := make(chan struct{})
+	releaseActorLookup := make(chan struct{})
+	caller := &registrationCaller{
+		members: map[[2]int64]telego.ChatMember{
+			{groupID, actor}:     adminMember(actor),
+			{groupID, testBotID}: adminMember(testBotID),
+		},
+		memberLookups: make(chan [2]int64, 8),
+		lookupBlocks: map[[2]int64]<-chan struct{}{
+			{groupID, actor}: releaseActorLookup,
+		},
+		leaveStarted: make(chan int64, 1),
+		releaseLeave: releaseLeave,
+		events:       make(chan string, 8),
+	}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
+	service.now = func() time.Time { return now }
+
+	leaveDone := make(chan struct{})
+	go func() {
+		service.leaveUnknown(context.Background(), telego.Chat{
+			ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Race",
+		}, actor, "test race")
+		close(leaveDone)
+	}()
+	if leftGroup := <-caller.leaveStarted; leftGroup != groupID {
+		t.Fatalf("leave started for %d, want %d", leftGroup, groupID)
+	}
+
+	updates := make(chan telego.Update, 1)
+	handler, err := th.NewBotHandler(bot, updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processed := make(chan error, 1)
+	handler.Use(func(ctx *th.Context, update telego.Update) error {
+		err := ctx.Next(update)
+		processed <- err
+		return err
+	})
+	service.Register(handler)
+	handlerDone := make(chan error, 1)
+	go func() { handlerDone <- handler.Start() }()
+	updates <- telego.Update{Message: &telego.Message{
+		Chat: telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Race"},
+		From: &telego.User{ID: actor, LanguageCode: "en"},
+		Text: "/start enroll_" + nonce.Nonce,
+	}}
+	if lookup := <-caller.memberLookups; lookup != [2]int64{groupID, actor} {
+		t.Fatalf("first membership lookup = %v, want actor lookup", lookup)
+	}
+	close(releaseLeave)
+	<-leaveDone
+	close(releaseActorLookup)
+	if err := <-processed; err != nil {
+		t.Fatal(err)
+	}
+	close(updates)
+	if err := <-handlerDone; err != nil {
+		t.Fatal(err)
+	}
+	if settings.IsGroup(groupID) {
+		t.Fatalf("group %d was registered from membership observed before LeaveChat completed", groupID)
+	}
+}
+
+func TestUnknownGroupLeaveSurvivesRestart(t *testing.T) {
+	const (
+		actor   = int64(78)
+		groupID = int64(-4002)
+	)
+	configPath := filepath.Join(t.TempDir(), "missing-config.json")
+	stateDirectory := t.TempDir()
+	cfg, settings, err := loadRuntimeState(configPath, stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	bindTestOwner(t, settings, now)
+	caller := &registrationCaller{members: map[[2]int64]telego.ChatMember{
+		{groupID, actor}:     adminMember(actor),
+		{groupID, testBotID}: plainMember(testBotID),
+	}}
+	firstRoot, cancelFirst := context.WithCancel(context.Background())
+	first := newRegistrationService(firstRoot, newRegistrationBot(t, caller), settings, cfg, "verify_test_bot", testBotID, nil, nil)
+	first.now = func() time.Time { return now }
+	runRegistrationUpdate(t, first.bot, first, telego.Update{MyChatMember: &telego.ChatMemberUpdated{
+		Chat:          telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Restart"},
+		From:          telego.User{ID: actor, LanguageCode: "en"},
+		OldChatMember: &telego.ChatMemberLeft{Status: telego.MemberStatusLeft, User: telego.User{ID: testBotID}},
+		NewChatMember: plainMember(testBotID),
+	}})
+	cancelFirst()
+
+	settingsPath := filepath.Join(stateDirectory, "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	leaves, ok := state["unknown_group_leaves"].([]any)
+	if !ok || len(leaves) != 1 {
+		t.Fatalf("persisted unknown-group leaves = %#v, want one cleanup record", state["unknown_group_leaves"])
+	}
+	record, ok := leaves[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unknown-group leave record = %#v", leaves[0])
+	}
+	record["expires_at"] = time.Now().Add(-time.Second).Unix()
+	raw, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reloadedCfg, reloadedSettings, err := loadRuntimeState(configPath, stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedCaller := &registrationCaller{
+		members: make(map[[2]int64]telego.ChatMember),
+		events:  make(chan string, 4),
+	}
+	secondRoot, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	_ = newRegistrationService(secondRoot, newRegistrationBot(t, restartedCaller), reloadedSettings, reloadedCfg, "verify_test_bot", testBotID, nil, nil)
+	waitForRegistrationMethod(t, restartedCaller, "leaveChat")
+	if left := restartedCaller.leftChats(); len(left) != 1 || left[0] != groupID {
+		t.Fatalf("restart leaves = %v, want [%d]", left, groupID)
+	}
+}
+
+func TestEffectiveGroupDemotionRunsOneSetupReport(t *testing.T) {
+	cfg, settings := registrationFixture(t)
+	const groupID = int64(-4003)
+	state := settings.Registrations()
+	state.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: testOwner}}
+	if _, err := settings.CommitRegistrations(state.Revision, state); err != nil {
+		t.Fatal(err)
+	}
+	reports := make(chan int64, 2)
+	caller := &registrationCaller{members: make(map[[2]int64]telego.ChatMember)}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, func(_ context.Context, reportedGroupID int64) { reports <- reportedGroupID })
+	update := telego.Update{MyChatMember: &telego.ChatMemberUpdated{
+		Chat:          telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Demoted"},
+		From:          telego.User{ID: 79, LanguageCode: "en"},
+		OldChatMember: adminMember(testBotID),
+		NewChatMember: plainMember(testBotID),
+	}}
+	runRegistrationUpdate(t, bot, service, update)
+	select {
+	case reportedGroupID := <-reports:
+		if reportedGroupID != groupID {
+			t.Fatalf("setup report group = %d, want %d", reportedGroupID, groupID)
+		}
+	default:
+		t.Fatal("effective-group demotion did not run the setup report")
+	}
+	runRegistrationUpdate(t, bot, service, update)
+	select {
+	case reportedGroupID := <-reports:
+		t.Fatalf("flapping group produced an unthrottled second report for %d", reportedGroupID)
+	default:
+	}
+	if !settings.IsGroup(groupID) {
+		t.Fatal("membership loss automatically erased an owner registration")
+	}
+}
+
+func TestOwnerCanUnregisterRuntimeGroupAndDropOverrides(t *testing.T) {
+	const groupID = int64(-4004)
+	configPath := filepath.Join(t.TempDir(), "missing-config.json")
+	stateDirectory := t.TempDir()
+	cfg, settings, err := loadRuntimeState(configPath, stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(2_000_000_000, 0)
+	bindTestOwner(t, settings, now)
+	state := settings.Registrations()
+	state.RegisteredGroups = []store.RegisteredGroup{{ID: groupID, RegisteredBy: testOwner, Title: "Remove"}}
+	state.ControlGroupID = groupID
+	if _, err := settings.CommitRegistrations(state.Revision, state); err != nil {
+		t.Fatal(err)
+	}
+	group, ok := settings.Group(groupID)
+	if !ok {
+		t.Fatal("registered group is not effective")
+	}
+	overrides := group.Overrides()
+	disabled := false
+	overrides.Enabled = &disabled
+	if _, err := settings.CommitGroup(groupID, group.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
+	caller := &registrationCaller{
+		members: make(map[[2]int64]telego.ChatMember),
+		events:  make(chan string, 8),
+	}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
+	command := func(userID int64) telego.Update {
+		return telego.Update{Message: &telego.Message{
+			Chat: telego.Chat{ID: userID, Type: telego.ChatTypePrivate},
+			From: &telego.User{ID: userID, LanguageCode: "en"},
+			Text: fmt.Sprintf("/unregister %d", groupID),
+		}}
+	}
+	runRegistrationUpdate(t, bot, service, command(testOwner+1))
+	if !settings.IsGroup(groupID) {
+		t.Fatal("non-owner unregistered a runtime group")
+	}
+	nonOwnerMessages := caller.messagesTo(testOwner + 1)
+	if len(nonOwnerMessages) != 1 {
+		t.Fatalf("non-owner unregister messages = %d, want 1", len(nonOwnerMessages))
+	}
+	wantOwnerOnly := i18n.Messages.Bot.Registration.UnregisterOwnerOnly.For(i18n.LangEN)
+	if nonOwnerMessages[0].Text != wantOwnerOnly {
+		t.Fatalf("non-owner unregister message = %q, want catalogue text %q", nonOwnerMessages[0].Text, wantOwnerOnly)
+	}
+	runRegistrationUpdate(t, bot, service, command(testOwner))
+	waitForRegistrationMethod(t, caller, "leaveChat")
+	if settings.IsGroup(groupID) {
+		t.Fatal("owner unregister did not remove the runtime group")
+	}
+	if left := caller.leftChats(); len(left) != 1 || left[0] != groupID {
+		t.Fatalf("unregister leaves = %v, want [%d]", left, groupID)
+	}
+	ownerMessages := caller.messagesTo(testOwner)
+	if len(ownerMessages) != 1 {
+		t.Fatalf("owner unregister messages = %d, want 1", len(ownerMessages))
+	}
+	wantRemoved := i18n.Messages.Bot.Registration.GroupUnregistered.Render(i18n.LangEN, "Remove")
+	if ownerMessages[0].Text != wantRemoved {
+		t.Fatalf("owner unregister message = %q, want catalogue text %q", ownerMessages[0].Text, wantRemoved)
+	}
+	registration := settings.Registrations()
+	if registration.ControlGroupID != 0 || len(registration.RegisteredGroups) != 0 ||
+		len(registration.UnknownGroupLeaves) != 0 {
+		t.Fatalf("registration state after unregister = %+v", registration)
+	}
+	raw, err := os.ReadFile(filepath.Join(stateDirectory, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted struct {
+		Groups map[string]json.RawMessage `json:"groups"`
+	}
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := persisted.Groups[fmt.Sprint(groupID)]; ok {
+		t.Fatalf("orphaned override for group %d remained in settings.json", groupID)
+	}
+}
+
+func TestOwnerClaimPersistenceFailureUsesClaimMessage(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "missing-config.json")
+	stateDirectory := t.TempDir()
+	cfg, settings, err := loadRuntimeState(configPath, stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(2_000_000_000, 0)
+	caller := &registrationCaller{
+		members: make(map[[2]int64]telego.ChatMember),
+		events:  make(chan string, 4),
+	}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
+	service.now = func() time.Time { return now }
+	if err := service.EnsureOwnerClaim(); err != nil {
+		t.Fatal(err)
+	}
+	claim := settings.Registrations().OwnerClaimNonce
+	if err := os.RemoveAll(stateDirectory); err != nil {
+		t.Fatal(err)
+	}
+	runRegistrationUpdate(t, bot, service, telego.Update{Message: &telego.Message{
+		Chat: telego.Chat{ID: testOwner, Type: telego.ChatTypePrivate},
+		From: &telego.User{ID: testOwner, LanguageCode: "en"},
+		Text: "/start owner_" + claim,
+	}})
+	waitForRegistrationMethod(t, caller, "sendMessage")
+	messages := caller.messagesTo(testOwner)
+	if len(messages) != 1 {
+		t.Fatalf("owner-claim failure messages = %d, want 1", len(messages))
+	}
+	want := i18n.Messages.Bot.Registration.OwnerClaimSaveFailed.For(i18n.LangEN)
+	if messages[0].Text != want {
+		t.Fatalf("owner-claim persistence failure message = %q, want catalogue text %q", messages[0].Text, want)
+	}
+}
+
+func TestUnknownCleanupRecordCannotAuthorizePromotion(t *testing.T) {
+	const (
+		actor   = int64(80)
+		groupID = int64(-4005)
+	)
+	cfg, settings := registrationFixture(t)
+	now := time.Unix(2_000_000_000, 0)
+	bindTestOwner(t, settings, now)
+	state := settings.Registrations()
+	state.UnknownGroupLeaves = []store.UnknownGroupLeave{{
+		GroupID: groupID, Title: "Cleanup only", ExpiresAt: now.Add(registrationPending).Unix(),
+	}}
+	if _, err := settings.CommitRegistrations(state.Revision, state); err != nil {
+		t.Fatal(err)
+	}
+	caller := &registrationCaller{members: map[[2]int64]telego.ChatMember{
+		{groupID, actor}: adminMember(actor),
+	}}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
+	service.now = func() time.Time { return now }
+	runRegistrationUpdate(t, bot, service, telego.Update{MyChatMember: &telego.ChatMemberUpdated{
+		Chat:          telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup, Title: "Cleanup only"},
+		From:          telego.User{ID: actor, LanguageCode: "en"},
+		OldChatMember: plainMember(testBotID),
+		NewChatMember: adminMember(testBotID),
+	}})
+	if settings.IsGroup(groupID) {
+		t.Fatal("unknown-group cleanup record authorized registration")
+	}
+	if left := caller.leftChats(); len(left) != 1 || left[0] != groupID {
+		t.Fatalf("cleanup-only promotion leaves = %v, want [%d]", left, groupID)
+	}
+}
+
+func TestOwnerClaimLifetimePinAndOpenStateLog(t *testing.T) {
+	cfg, settings := registrationFixture(t)
+	cfg.OwnerClaimLifetimeSeconds = 45
+	cfg.OwnerClaimUserID = testOwner
+	now := time.Unix(2_000_000_000, 0)
+	caller := &registrationCaller{members: make(map[[2]int64]telego.ChatMember)}
+	bot := newRegistrationBot(t, caller)
+	service := newRegistrationService(context.Background(), bot, settings, cfg, "verify_test_bot", testBotID, nil, nil)
+	service.now = func() time.Time { return now }
+
+	logs := newSynchronizedLog()
+	oldLog := log.Writer()
+	log.SetOutput(logs)
+	defer log.SetOutput(oldLog)
+	if err := service.EnsureOwnerClaim(); err != nil {
+		t.Fatal(err)
+	}
+	state := settings.Registrations()
+	if state.OwnerClaimExpiresAt != now.Add(45*time.Second).Unix() {
+		t.Fatalf("owner claim expiry = %d, want %d", state.OwnerClaimExpiresAt, now.Add(45*time.Second).Unix())
+	}
+	if !strings.Contains(logs.String(), "OWNER UNCLAIMED") {
+		t.Fatalf("open owner claim was not visible in the journal: %s", logs.String())
+	}
+	claimUpdate := func(userID int64) telego.Update {
+		return telego.Update{Message: &telego.Message{
+			Chat: telego.Chat{ID: userID, Type: telego.ChatTypePrivate},
+			From: &telego.User{ID: userID, LanguageCode: "en"},
+			Text: "/start owner_" + state.OwnerClaimNonce,
+		}}
+	}
+	runRegistrationUpdate(t, bot, service, claimUpdate(testOwner+1))
+	if got := settings.Registrations(); got.OwnerID != 0 || got.OwnerClaimNonce == "" {
+		t.Fatalf("unmatched pinned claimant changed owner state: %+v", got)
+	}
+	refused := caller.messagesTo(testOwner + 1)
+	wantRefused := i18n.Messages.Bot.Registration.OwnerClaimRefused.For(i18n.LangEN)
+	if len(refused) != 1 || refused[0].Text != wantRefused {
+		t.Fatalf("pinned claimant refusal = %+v, want catalogue text %q", refused, wantRefused)
+	}
+	runRegistrationUpdate(t, bot, service, claimUpdate(testOwner))
+	if got := settings.Registrations(); got.OwnerID != testOwner || got.OwnerClaimNonce != "" {
+		t.Fatalf("pinned owner claim state = %+v", got)
+	}
 }

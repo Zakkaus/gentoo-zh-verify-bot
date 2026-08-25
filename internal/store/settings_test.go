@@ -698,6 +698,7 @@ func TestSettingsRegistrationRoundTripAndRuntimeOnlyPolicy(t *testing.T) {
 	registration.RegisteredGroups = []RegisteredGroup{{ID: -1009000000003, RegisteredBy: 42, Title: "Runtime"}}
 	registration.EnrollmentNonces = []EnrollmentNonce{{Nonce: "enroll", IssuedBy: 42, ExpiresAt: 1000}}
 	registration.PendingRegistrations = []PendingRegistration{{GroupID: -1009000000004, RegisteredBy: 42, Title: "Pending", ExpiresAt: 2000}}
+	registration.UnknownGroupLeaves = []UnknownGroupLeave{{GroupID: -1009000000005, Title: "Cleanup", ExpiresAt: 3000}}
 	committed, err := settings.CommitRegistrations(registration.Revision, registration)
 	if err != nil {
 		t.Fatal(err)
@@ -720,12 +721,22 @@ func TestSettingsRegistrationRoundTripAndRuntimeOnlyPolicy(t *testing.T) {
 		t.Fatalf("effective groups after reload = %v", got)
 	}
 	metadata := reloaded.Registrations()
-	if metadata.Revision != 1 || metadata.OwnerID != 42 || metadata.OwnerClaimNonce != "" || len(metadata.EnrollmentNonces) != 1 || len(metadata.PendingRegistrations) != 1 {
+	if metadata.Revision != 1 || metadata.OwnerID != 42 || metadata.OwnerClaimNonce != "" ||
+		len(metadata.EnrollmentNonces) != 1 || len(metadata.PendingRegistrations) != 1 ||
+		len(metadata.UnknownGroupLeaves) != 1 {
 		t.Fatalf("registration metadata after reload = %+v", metadata)
 	}
 	runtimeGroup, _ = reloaded.Group(-1009000000003)
 	if runtimeGroup.TimeoutSeconds().Value != 900 || runtimeGroup.TimeoutSeconds().Source != SourceRuntime {
 		t.Fatalf("runtime group timeout after reload = %+v", runtimeGroup.TimeoutSeconds())
+	}
+
+	invalid := metadata
+	invalid.UnknownGroupLeaves = []UnknownGroupLeave{{
+		GroupID: metadata.PendingRegistrations[0].GroupID, ExpiresAt: 3000,
+	}}
+	if _, err := reloaded.CommitRegistrations(metadata.Revision, invalid); err == nil {
+		t.Fatal("one group was accepted as both authorized pending registration and unknown cleanup")
 	}
 }
 

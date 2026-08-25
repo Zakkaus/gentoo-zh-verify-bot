@@ -249,3 +249,34 @@ func TestDMReplyThrottle(t *testing.T) {
 		t.Fatalf("DM replies = %d, want one per user during the cooldown", caller.sendMessages)
 	}
 }
+
+func TestDMReplyCapacityKeepsActiveCooldown(t *testing.T) {
+	caller := &recordingCaller{}
+	telegramBot := testBot(t, caller)
+	now := time.Now()
+	const activeUID int64 = 1
+	dm := &dmHandler{
+		cfg:            &config.Config{PrivateQueryPerMin: 3},
+		telegram:       tg.New(telegramBot),
+		last:           make(map[int64]time.Time, dmMapMax),
+		catalogueReply: true,
+	}
+	dm.last[activeUID] = now
+	for uid := int64(2); uid <= dmMapMax; uid++ {
+		dm.last[uid] = now.Add(-dmReplyCooldown - time.Second)
+	}
+	message := func(userID int64) telego.Update {
+		return telego.Update{Message: &telego.Message{
+			Chat: telego.Chat{ID: userID, Type: "private"},
+			From: &telego.User{ID: userID},
+			Text: "hello",
+		}}
+	}
+
+	runHandlerUpdates(t, telegramBot, dm.onPrivateDM, []telego.Update{message(dmMapMax + 1)})
+	runHandlerUpdates(t, telegramBot, dm.onPrivateDM, []telego.Update{message(activeUID)})
+
+	if caller.sendMessages != 1 {
+		t.Errorf("DM replies across capacity event = %d, want only the new user's reply", caller.sendMessages)
+	}
+}

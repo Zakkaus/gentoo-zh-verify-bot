@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,14 +52,15 @@ func (v *panelVerifierStub) ToggleNameSpoiler(int64) (bool, error)          { re
 func (v *panelVerifierStub) ToggleRich() (bool, error)                      { return false, nil }
 
 type panelAPICaller struct {
-	admin          bool
-	memberCalls    int
-	lastEditText   string
-	lastAnswerText string
-	lastSendText   string
-	lastURL        string
-	messageID      int
-	senderUnbans   []telego.UnbanChatSenderChatParams
+	admin                bool
+	memberCalls          atomic.Int32
+	lastEditText         string
+	lastAnswerText       string
+	lastSendText         string
+	lastURL              string
+	messageID            int
+	replyKeyboardRemoved bool
+	senderUnbans         []telego.UnbanChatSenderChatParams
 }
 
 func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.RequestData) (*ta.Response, error) {
@@ -74,7 +77,7 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 		}
 		return panelAPIResponse(&telego.ChatFullInfo{ID: request.ChatID, Type: "supergroup", Title: fmt.Sprintf("Group %d", request.ChatID)})
 	case "getChatMember":
-		c.memberCalls++
+		c.memberCalls.Add(1)
 		if c.admin {
 			return panelAPIResponse(&telego.ChatMemberAdministrator{Status: telego.MemberStatusAdministrator})
 		}
@@ -104,6 +107,7 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 				InlineKeyboard [][]struct {
 					URL string `json:"url"`
 				} `json:"inline_keyboard"`
+				RemoveKeyboard bool `json:"remove_keyboard"`
 			} `json:"reply_markup"`
 		}
 		if err := json.Unmarshal(data.BodyRaw, &request); err != nil {
@@ -113,6 +117,7 @@ func (c *panelAPICaller) Call(_ context.Context, endpoint string, data *ta.Reque
 		if len(request.ReplyMarkup.InlineKeyboard) > 0 && len(request.ReplyMarkup.InlineKeyboard[0]) > 0 {
 			c.lastURL = request.ReplyMarkup.InlineKeyboard[0][0].URL
 		}
+		c.replyKeyboardRemoved = c.replyKeyboardRemoved || request.ReplyMarkup.RemoveKeyboard
 		c.messageID++
 		return panelAPIResponse(&telego.Message{MessageID: c.messageID})
 	case "deleteMessage":
@@ -137,7 +142,101 @@ func panelAPIResponse(value any) (*ta.Response, error) {
 	return &ta.Response{Ok: true, Result: raw}, nil
 }
 
+type blockingPanelCaller struct {
+	delegate ta.Caller
+
+	memberCalls     atomic.Int32
+	blockMemberCall atomic.Int32
+	memberStarted   chan struct{}
+	releaseMember   chan struct{}
+
+	editCalls     atomic.Int32
+	blockEditCall atomic.Int32
+	editStarted   chan struct{}
+	releaseEdit   chan struct{}
+
+	sendCalls     atomic.Int32
+	blockSendCall atomic.Int32
+	sendStarted   chan struct{}
+	releaseSend   chan struct{}
+}
+
+func newBlockingPanelCaller(delegate ta.Caller) *blockingPanelCaller {
+	return &blockingPanelCaller{
+		delegate:      delegate,
+		memberStarted: make(chan struct{}), releaseMember: make(chan struct{}),
+		editStarted: make(chan struct{}), releaseEdit: make(chan struct{}),
+		sendStarted: make(chan struct{}), releaseSend: make(chan struct{}),
+	}
+}
+
+func (c *blockingPanelCaller) Call(ctx context.Context, endpoint string, data *ta.RequestData) (*ta.Response, error) {
+	method := endpoint[strings.LastIndexByte(endpoint, '/')+1:]
+	switch method {
+	case "getChatMember":
+		call := c.memberCalls.Add(1)
+		if call == c.blockMemberCall.Load() {
+			c.memberStarted <- struct{}{}
+			<-c.releaseMember
+		}
+	case "editMessageText":
+		call := c.editCalls.Add(1)
+		if call == c.blockEditCall.Load() {
+			c.editStarted <- struct{}{}
+			<-c.releaseEdit
+		}
+	case "sendMessage":
+		call := c.sendCalls.Add(1)
+		if call == c.blockSendCall.Load() {
+			c.sendStarted <- struct{}{}
+			<-c.releaseSend
+		}
+	}
+	return c.delegate.Call(ctx, endpoint, data)
+}
+
+func waitForExpiredTombstonePrune(t *testing.T, panel *Panel, key promptKey) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		panel.panelState.mu.Lock()
+		_, present := panel.panelState.tombstones[key]
+		panel.panelState.mu.Unlock()
+		if !present {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("callback did not resolve its session before the deadline")
+		}
+		runtime.Gosched()
+	}
+}
+
+func waitForUserSessionRemoval(t *testing.T, panel *Panel, userID int64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		panel.panelState.mu.Lock()
+		_, present := panel.panelState.byUser[userID]
+		panel.panelState.mu.Unlock()
+		if !present {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("replacement session did not remove the previous mapping before the deadline")
+		}
+		runtime.Gosched()
+	}
+}
+
 func newSettingsPanelTest(t *testing.T, path string) (*Panel, *store.Settings, *panelAPICaller, *telego.Bot) {
+	t.Helper()
+	caller := &panelAPICaller{admin: true, messageID: 100}
+	panel, settings, bot := newSettingsPanelTestWithCaller(t, path, caller)
+	return panel, settings, caller, bot
+}
+
+func newSettingsPanelTestWithCaller(t *testing.T, path string, caller ta.Caller) (*Panel, *store.Settings, *telego.Bot) {
 	t.Helper()
 	cfg := &config.Config{
 		Groups:           []config.GroupConfig{{ID: panelTestGroupA}, {ID: panelTestGroupB}},
@@ -150,13 +249,12 @@ func newSettingsPanelTest(t *testing.T, path string) (*Panel, *store.Settings, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	caller := &panelAPICaller{admin: true, messageID: 100}
 	bot := newAPITestBot(t, caller)
 	verifier := &panelVerifierStub{}
 	telegram := tg.New(bot)
 	moderation := moderate.New(settings, telegram, cfg, "")
 	panel := New(settings, telegram, cfg, &i18n.Messages, verifier, moderation, nil, "test", time.Now())
-	return panel, settings, caller, bot
+	return panel, settings, bot
 }
 
 func addPanelSession(t *testing.T, panel *Panel, settings *store.Settings, groupID int64, screen string) *panelSession {
@@ -302,6 +400,178 @@ func TestPanelInputPrecedesKernelForSameUser(t *testing.T) {
 	}
 	if _, ok := panel.consumeTombstone(promptKey{userID: panelTestUser, messageID: 71}); !ok {
 		t.Fatal("canceled prompt tombstone was not retained")
+	}
+}
+
+func TestConcurrentCallbackReplayUsesRotatedTokenOnce(t *testing.T) {
+	base := &panelAPICaller{admin: true, messageID: 100}
+	caller := newBlockingPanelCaller(base)
+	caller.blockEditCall.Store(1)
+	panel, settings, bot := newSettingsPanelTestWithCaller(t, "", caller)
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "rt")
+	group, _ := settings.Group(panelTestGroupA)
+	beforeRevision := group.Revision()
+	beforeEnabled := group.Enabled().Value
+	encoded, err := encodeCallback(callbackData{
+		token: session.token, screen: session.screen, group: panelTestGroupA, field: "en", value: "_",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := telego.Update{CallbackQuery: &telego.CallbackQuery{
+		ID: "callback", From: telego.User{ID: panelTestUser, LanguageCode: "en"}, Data: encoded,
+		Message: &telego.Message{MessageID: session.messageID, Chat: telego.Chat{ID: panelTestUser, Type: "private"}},
+	}}
+
+	firstDone := startFakeHandler(t, bot, panel.OnSettingsCallback, update)
+	<-caller.editStarted
+	marker := promptKey{userID: -1, messageID: -1}
+	panel.panelState.mu.Lock()
+	panel.panelState.tombstones[marker] = inputTombstone{expiresAt: time.Now().Add(-time.Second)}
+	panel.panelState.mu.Unlock()
+	secondDone := startFakeHandler(t, bot, panel.OnSettingsCallback, update)
+	waitForExpiredTombstonePrune(t, panel, marker)
+	close(caller.releaseEdit)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+
+	current, _ := settings.Group(panelTestGroupA)
+	if got := current.Revision(); got != beforeRevision+1 {
+		t.Fatalf("concurrent callback revision = %d, want %d", got, beforeRevision+1)
+	}
+	if got := current.Enabled().Value; got == beforeEnabled {
+		t.Fatalf("concurrent callback restored enabled=%v instead of applying one toggle", got)
+	}
+}
+
+func TestPanelInputCancelsWhenKernelStartsDuringAuthorization(t *testing.T) {
+	base := &panelAPICaller{admin: true, messageID: 100}
+	caller := newBlockingPanelCaller(base)
+	caller.blockMemberCall.Store(1)
+	panel, settings, bot := newSettingsPanelTestWithCaller(t, "", caller)
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "vp")
+	group, _ := settings.Group(panelTestGroupA)
+	beforeRevision := group.Revision()
+	beforeTimeout := group.TimeoutSeconds().Value
+	session.pending = &pendingInput{
+		kind: inputTimeout, parent: "vp", promptMessageID: 71, expectedRevision: beforeRevision,
+	}
+	update := telego.Update{Message: &telego.Message{
+		MessageID: 1071, Chat: telego.Chat{ID: panelTestUser, Type: "private"},
+		From: &telego.User{ID: panelTestUser, LanguageCode: "en"}, Text: "600",
+		ReplyToMessage: &telego.Message{MessageID: 71},
+	}}
+	if !panel.PanelInputDM(context.Background(), update) {
+		t.Fatal("exact ForceReply did not match panel input predicate")
+	}
+
+	done := startFakeHandler(t, bot, panel.OnPanelInput, update)
+	<-caller.memberStarted
+	panel.verifier.(*panelVerifierStub).kernelPending = true
+	close(caller.releaseMember)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	current, _ := settings.Group(panelTestGroupA)
+	if current.Revision() != beforeRevision || current.TimeoutSeconds().Value != beforeTimeout {
+		t.Fatalf("kernel activation changed timeout/revision to %d/%d", current.TimeoutSeconds().Value, current.Revision())
+	}
+	if session.pending != nil {
+		t.Fatal("kernel activation retained the panel prompt")
+	}
+	if _, ok := panel.consumeTombstone(promptKey{userID: panelTestUser, messageID: 71}); !ok {
+		t.Fatal("kernel activation did not tombstone the panel prompt")
+	}
+	if !base.replyKeyboardRemoved {
+		t.Fatal("kernel activation did not remove the panel reply keyboard")
+	}
+	want := i18n.Messages.Panel.Settings.Error.InputCanceledVerification.For(i18n.LangEN)
+	if base.lastSendText != want {
+		t.Fatalf("kernel activation notice = %q, want catalogue text %q", base.lastSendText, want)
+	}
+}
+
+func TestPanelInputRejectsSessionReplacedDuringAuthorization(t *testing.T) {
+	base := &panelAPICaller{admin: true, messageID: 100}
+	caller := newBlockingPanelCaller(base)
+	caller.blockMemberCall.Store(1)
+	panel, settings, bot := newSettingsPanelTestWithCaller(t, "", caller)
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "vp")
+	group, _ := settings.Group(panelTestGroupA)
+	beforeRevision := group.Revision()
+	beforeTimeout := group.TimeoutSeconds().Value
+	session.pending = &pendingInput{
+		kind: inputTimeout, parent: "vp", promptMessageID: 72, expectedRevision: beforeRevision,
+	}
+	update := telego.Update{Message: &telego.Message{
+		MessageID: 1072, Chat: telego.Chat{ID: panelTestUser, Type: "private"},
+		From: &telego.User{ID: panelTestUser, LanguageCode: "en"}, Text: "600",
+		ReplyToMessage: &telego.Message{MessageID: 72},
+	}}
+	if !panel.PanelInputDM(context.Background(), update) {
+		t.Fatal("exact ForceReply did not match panel input predicate")
+	}
+
+	handlerDone := startFakeHandler(t, bot, panel.OnPanelInput, update)
+	<-caller.memberStarted
+	replacementDone := make(chan error, 1)
+	go func() {
+		_, err := panel.newSettingsSession(panelTestUser, panelTestGroupA, i18n.LangEN)
+		replacementDone <- err
+	}()
+	waitForUserSessionRemoval(t, panel, panelTestUser)
+	close(caller.releaseMember)
+	if err := <-handlerDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-replacementDone; err != nil {
+		t.Fatal(err)
+	}
+
+	current, _ := settings.Group(panelTestGroupA)
+	if current.Revision() != beforeRevision || current.TimeoutSeconds().Value != beforeTimeout {
+		t.Fatalf("replaced session changed timeout/revision to %d/%d", current.TimeoutSeconds().Value, current.Revision())
+	}
+}
+
+func TestConcurrentPanelStartRejectsRotatedToken(t *testing.T) {
+	base := &panelAPICaller{admin: true, messageID: 100}
+	caller := newBlockingPanelCaller(base)
+	caller.blockSendCall.Store(1)
+	panel, settings, bot := newSettingsPanelTestWithCaller(t, "", caller)
+	session := addPanelSession(t, panel, settings, panelTestGroupA, "gl")
+	session.messageID = 0
+	token := session.token
+	update := telego.Update{Message: &telego.Message{
+		MessageID: 13, Chat: telego.Chat{ID: panelTestUser, Type: "private"},
+		From: &telego.User{ID: panelTestUser, LanguageCode: "en"}, Text: "/start panel_" + token,
+	}}
+
+	firstDone := startFakeHandler(t, bot, panel.OnStart, update)
+	<-caller.sendStarted
+	caller.blockMemberCall.Store(caller.memberCalls.Load() + 1)
+	secondDone := startFakeHandler(t, bot, panel.OnStart, update)
+	<-caller.memberStarted
+	close(caller.releaseMember)
+	close(caller.releaseSend)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+
+	if got := caller.editCalls.Load(); got != 0 {
+		t.Fatalf("replayed panel start rendered %d additional panel edits", got)
+	}
+	want := i18n.Messages.Panel.Settings.Error.Expired.For(i18n.LangEN)
+	if base.lastSendText != want {
+		t.Fatalf("replayed panel start notice = %q, want catalogue text %q", base.lastSendText, want)
 	}
 }
 
@@ -490,8 +760,8 @@ func TestPanelDemotedAdminLosesSession(t *testing.T) {
 	if caller.lastEditText != i18n.Messages.Panel.Settings.Error.AuthorizationLost.For(i18n.LangEN) {
 		t.Fatalf("demotion message = %q", caller.lastEditText)
 	}
-	if caller.memberCalls != 2 {
-		t.Fatalf("membership lookups = %d, want one cached prime and one fresh callback check", caller.memberCalls)
+	if caller.memberCalls.Load() != 2 {
+		t.Fatalf("membership lookups = %d, want one cached prime and one fresh callback check", caller.memberCalls.Load())
 	}
 }
 

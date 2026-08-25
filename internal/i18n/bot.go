@@ -100,6 +100,8 @@ type BotRegistrationCatalog struct {
 	OwnerClaimed Text
 	// OwnerClaimRefused reports an invalid, used, or expired owner claim.
 	OwnerClaimRefused Text
+	// OwnerClaimSaveFailed reports an owner claim that could not be made durable.
+	OwnerClaimSaveFailed Text
 	// EnrollmentOwnerOnly rejects enrollment-link creation by a non-owner.
 	EnrollmentOwnerOnly Text
 	// EnrollmentLink formats a one-use enrollment link and its lifetime.
@@ -112,4 +114,12 @@ type BotRegistrationCatalog struct {
 	GroupRegistered Format
 	// RegistrationSaveFailed reports a registration that could not be made durable.
 	RegistrationSaveFailed Text
+	// UnregisterOwnerOnly rejects runtime-group removal by a non-owner.
+	UnregisterOwnerOnly Text
+	// UnregisterRefused reports invalid syntax or a group outside runtime registration.
+	UnregisterRefused Text
+	// UnregisterSaveFailed reports runtime-group removal that could not be made durable.
+	UnregisterSaveFailed Text
+	// GroupUnregistered formats completed runtime-group removal.
+	GroupUnregistered Format
 }

@@ -88,9 +88,15 @@ sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/gent
 sudo journalctl -u gentoo-zh-verify-bot
 ```
 
-在 Telegram 中打开该链接。第一个打开未过期链接的账号会成为所有者。将机器人添加到群组并提升为管理员，同时开启**邀请用户**、**封禁用户**和**删除消息**权限。机器人会将所有者授权的群组写入 `settings.json`，不会写入 `config.json`。
+在 Telegram 中打开该链接。未使用的链接默认十分钟后过期。认领完成前，任何可读取 journal 的用户都可使用该链接成为所有者。设置 `owner_claim_user_id` 可将认领权限限制为一个账号。
+
+将机器人添加到群组并提升为管理员，同时开启**邀请用户**、**封禁用户**和**删除消息**权限。机器人会将所有者授权的群组写入 `settings.json`，不会写入 `config.json`。
 
 需要委托登记时，所有者在私聊中向机器人发送 `/enroll`，再将生成的一次性群组链接交给群组管理员。链接有效期为十分钟。重复使用链接、使用过期链接，或未经所有者授权便提升机器人，都会使机器人退出未知群组。
+
+需要移除运行时登记的群组时，所有者在私聊中执行 `/unregister <group-id>`。机器人会取消
+登记、删除该群组的运行设置，然后尝试退出群组。仅将机器人移出群组不会删除登记状态；
+如需主动移除，请执行 `/unregister`。
 
 使用必需频道时，须将机器人设为频道管理员。普通频道成员无法读取其他用户的成员身份，因此不能执行成员身份门槛。启动时会为每个已登记群组生成一份合并报告，列出缺少的权限和修正方法。
 
@@ -111,6 +117,8 @@ sudo journalctl -u gentoo-zh-verify-bot
 | `channel_invite_url` | 全局加入链接；私有频道没有 `@handle` 时必填。 | 空。 |
 | `trusted_member_group_ids` | 可信群组成员免验证来源；无法读取成员状态时仍执行常规验证。 | `[]` 表示不启用。 |
 | `known_chat_ids` | 允许机器人停留的其它聊天，不会因此成为受管理群组、必需频道或可信来源。 | `[]`。 |
+| `owner_claim_lifetime_seconds` | 启动时写入 journal 的私有一次性所有者认领链接有效期。 | `0` 变为 600；负数无效；正数不变。 |
+| `owner_claim_user_id` | 可使用首次所有者认领链接的 Telegram 用户 ID。 | `0` 不限制账号，任何取得链接的 journal 读取者均可认领；负数无效。 |
 | `verify_mode` | 全局验证模式：`kernel`、`quiz` 或 `mixed`；按群配置和 `/vmode ...|auto` 可覆盖。 | 空值变为 `kernel`；其它值导致加载失败。 |
 | `timeout_seconds` | 验证时限。 | `<=0` 变为 240；1–29 变为 30；上限 1,800。 |
 | `required_channel_fail_open` | 申请人通过验证后，机器人无法读取必需频道成员状态时的处理方式。两种模式都会通知管理员。 | `true`（默认）批准；`false` 拒绝并允许重试。 |

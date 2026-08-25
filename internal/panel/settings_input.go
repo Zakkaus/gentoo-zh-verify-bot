@@ -418,11 +418,22 @@ func (v *Panel) OnPanelInput(ctx *th.Context, update telego.Update) error {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if v.sessionByUser(message.From.ID) != session {
+		return nil
+	}
 	pending := session.pending
 	if pending == nil || pending.promptMessageID != key.messageID {
 		return nil
 	}
 	if !v.authorizeInput(ctx.Context(), ctx.Bot(), session) {
+		return nil
+	}
+	if v.kernelPending(session.ownerID) {
+		v.rememberCanceledPrompt(session, pending)
+		session.pending = nil
+		v.removeReplyKeyboard(ctx.Context(), ctx.Bot(), session.chatID, session.language)
+		_, _ = ctx.Bot().SendMessage(ctx.Context(), tu.Message(tu.ID(session.chatID),
+			i18n.Messages.Panel.Settings.Error.InputCanceledVerification.For(session.language)))
 		return nil
 	}
 	group, ok := v.settings.Group(session.groupID)
@@ -468,6 +479,9 @@ func (v *Panel) OnPanelChatShared(ctx *th.Context, update telego.Update) error {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if v.sessionByUser(message.From.ID) != session {
+		return nil
+	}
 	pending := session.pending
 	request := message.ChatShared.RequestID
 	if pending == nil || (pending.requestID != request && pending.requestAltID != request) {
@@ -525,7 +539,7 @@ func (v *Panel) authorizeInput(ctx context.Context, bot *telego.Bot, session *pa
 		v.finishSession(ctx, bot, session, i18n.Messages.Panel.Settings.Error.AuthorizationLost.For(session.language))
 		return false
 	}
-	return true
+	return v.sessionByUser(session.ownerID) == session
 }
 
 func (v *Panel) applyTextInput(ctx context.Context, bot *telego.Bot, session *panelSession, group store.GroupView, pending *pendingInput, text string) error {

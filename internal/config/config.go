@@ -179,6 +179,10 @@ type Config struct {
 	TrustedMemberGroupIDs []int64 `json:"trusted_member_group_ids"`
 	// KnownChatIDs prevents auto-leave without granting verification or bypass semantics.
 	KnownChatIDs []int64 `json:"known_chat_ids"`
+	// OwnerClaimLifetimeSeconds limits the one-use journal claim and defaults to 10 minutes.
+	OwnerClaimLifetimeSeconds int `json:"owner_claim_lifetime_seconds"`
+	// OwnerClaimUserID optionally restricts the first owner claim to one Telegram user.
+	OwnerClaimUserID int64 `json:"owner_claim_user_id"`
 	// ChannelInviteURL links a private required channel without a public handle.
 	ChannelInviteURL string `json:"channel_invite_url"`
 	// TimeoutSeconds is the verification deadline.
@@ -391,6 +395,15 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("default runtime group: required_channel_id is set but the channel has no reachable link (set channel_display to an @handle, or channel_invite_url for a private channel)")
 		}
 	}
+	if c.OwnerClaimLifetimeSeconds < 0 {
+		return nil, fmt.Errorf("owner_claim_lifetime_seconds must not be negative")
+	}
+	if c.OwnerClaimUserID < 0 {
+		return nil, fmt.Errorf("owner_claim_user_id must not be negative")
+	}
+	if c.OwnerClaimLifetimeSeconds == 0 {
+		c.OwnerClaimLifetimeSeconds = 10 * 60
+	}
 	if c.TimeoutSeconds <= 0 {
 		c.TimeoutSeconds = 240
 	}
@@ -449,6 +462,14 @@ func LoadConfig(path string) (*Config, error) {
 		log.Printf("WARNING: control_group_id is unset; administrators of any of the %d guarded groups can change process-global settings", len(c.Groups))
 	}
 	return &c, nil
+}
+
+// OwnerClaimLifetime returns the configured first-owner claim lifetime.
+func (c *Config) OwnerClaimLifetime() time.Duration {
+	if c.OwnerClaimLifetimeSeconds <= 0 {
+		return 10 * time.Minute
+	}
+	return time.Duration(c.OwnerClaimLifetimeSeconds) * time.Second
 }
 
 // IsGroup reports whether id is one of the guarded groups.

@@ -1,13 +1,15 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"testing"
-	"time"
-
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+	"log"
+	"strings"
+	"testing"
+	"time"
 )
 
 func setOffline(v *Service) {
@@ -54,6 +56,28 @@ func TestOnExpiryOfflineDefers(t *testing.T) {
 	}
 	if cur.timer != nil {
 		cur.timer.Stop()
+	}
+}
+
+func TestOfflineExpiryDoesNotLogPerPending(t *testing.T) {
+	v := newTestService(&config.Config{TimeoutSeconds: 240})
+	key := pkey{-100, 5}
+	p := &pending{nonce: "n", deadline: time.Now()}
+	v.pend[key] = p
+	var output bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+	})
+
+	v.deferExpiry(newFakeVerifyBot(), key.gid, key.uid, p.nonce, p.epoch, "timeout")
+
+	if strings.TrimSpace(output.String()) != "" {
+		t.Errorf("one offline pending emitted a log line: %q", output.String())
 	}
 }
 

@@ -58,6 +58,7 @@ func TestRuntimeRegistrationActivatesServicesWithoutRebuiltConfig(t *testing.T) 
 	bindTestOwner(t, settings, now)
 	caller := &registrationCaller{members: map[[2]int64]telego.ChatMember{
 		{groupID, testOwner}: adminMember(testOwner),
+		{groupID, testBotID}: adminMember(testBotID),
 	}}
 	bot := newRegistrationBot(t, caller)
 	telegram := tg.New(bot)
@@ -72,13 +73,10 @@ func TestRuntimeRegistrationActivatesServicesWithoutRebuiltConfig(t *testing.T) 
 	menusRefreshed := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	registration := newRegistrationService(
-		ctx, bot, settings, cfg, "verify_test_bot", testBotID,
-		func(callbackCtx context.Context, _ int64) {
-			application.SetupCommands(callbackCtx, bot)
-			close(menusRefreshed)
-		},
-	)
+	registration := newRegistrationService(ctx, bot, settings, cfg, "verify_test_bot", testBotID, func(callbackCtx context.Context, _ int64) {
+		application.SetupCommands(callbackCtx, bot)
+		close(menusRefreshed)
+	}, nil)
 	registration.now = func() time.Time { return now }
 
 	registrationUpdate := telego.Update{MyChatMember: &telego.ChatMemberUpdated{

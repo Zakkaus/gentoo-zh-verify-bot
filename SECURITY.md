@@ -28,6 +28,11 @@ released and your report credited, unless you prefer to stay anonymous.
 - The `$STATE_DIRECTORY` holds runtime state (pending verifications, strikes, feed cursors). It must
   be **private to the bot's service user** and not writable by untrusted users; the provided systemd
   unit's `StateDirectory=` + `DynamicUser=` already enforce this.
+- With no owner bound, startup logs an `OWNER UNCLAIMED` one-use claim link. Until that link is
+  used, **anyone who can read the journal, including a central log collector, can become the bot
+  owner**. The link expires after 10 minutes by default; set `owner_claim_lifetime_seconds` to
+  shorten or extend that window. Set the optional `owner_claim_user_id` to restrict the claim to
+  one Telegram user while retaining zero-touch setup when the key is absent.
 
 ## Static analysis (gosec)
 

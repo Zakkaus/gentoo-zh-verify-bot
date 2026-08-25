@@ -1053,6 +1053,82 @@ func TestSendQuizzesMarksPromptedOnlyAfterDelivery(t *testing.T) {
 	}
 }
 
+func TestDeliveredKernelPromptSurvivesRestart(t *testing.T) {
+	const gid, uid = int64(-100), int64(5)
+	cfg := &config.Config{
+		Groups:         []config.GroupConfig{{ID: gid}},
+		GroupIDs:       []int64{gid},
+		VerifyMode:     config.ModeKernel,
+		TimeoutSeconds: 240,
+	}
+	path := t.TempDir() + "/pending.json"
+	before := newTestService(cfg)
+	before.statePath = path
+	before.pend[pkey{gid, uid}] = &pending{
+		mode:     config.ModeKernel,
+		lang:     i18n.LangEN,
+		qText:    kernelQuestion(&i18n.Messages, i18n.LangEN),
+		nonce:    "n",
+		deadline: time.Now().Add(time.Hour),
+	}
+	before.save()
+	bot := newFakeVerifyBot()
+	before.sendQuizzes(context.Background(), bot, uid)
+
+	after := newTestService(cfg)
+	after.statePath = path
+	after.load(bot)
+	t.Cleanup(after.stopForShutdown)
+	answer := telego.Update{Message: &telego.Message{
+		Chat: telego.Chat{ID: uid, Type: "private"},
+		From: &telego.User{ID: uid},
+		Text: "6.12.3",
+	}}
+	if !after.KernelAnswerDM(context.Background(), answer) {
+		t.Fatal("a delivered prompt was not gradeable after restart")
+	}
+	after.gradeKernelAnswer(context.Background(), bot, gid, uid, answer.Message.Text)
+	if bot.approves != 1 {
+		t.Errorf("correct answer after restart produced %d approvals, want 1", bot.approves)
+	}
+}
+
+func TestChallengeResendCapacityKeepsActiveCooldown(t *testing.T) {
+	v := newTestService(&config.Config{})
+	now := time.Now()
+	const activeUID int64 = 1
+	v.challengeAt[activeUID] = now
+	for uid := int64(2); uid <= challengeResendMapMax; uid++ {
+		v.challengeAt[uid] = now.Add(-challengeResendCooldown - time.Second)
+	}
+
+	if !v.challengeResendOK(challengeResendMapMax + 1) {
+		t.Fatal("new user was unexpectedly throttled")
+	}
+	if v.challengeResendOK(activeUID) {
+		t.Error("capacity event discarded an active challenge resend cooldown")
+	}
+}
+
+func TestChannelAccessAlertPrunesExpiredChannels(t *testing.T) {
+	v := newTestService(&config.Config{})
+	now := time.Now()
+	const activeChannel int64 = -1
+	v.chanAlert[activeChannel] = now
+	for channelID := int64(-2); channelID >= -100; channelID-- {
+		v.chanAlert[channelID] = now.Add(-channelAccessAlertCooldown - time.Second)
+	}
+
+	v.channelAccessAlert(context.Background(), newFakeVerifyBot(), i18n.LangEN, -101)
+
+	if _, ok := v.chanAlert[activeChannel]; !ok {
+		t.Error("pruning discarded an active channel alert cooldown")
+	}
+	if len(v.chanAlert) != 2 {
+		t.Errorf("channel alert throttle retained %d channels, want active and current channels only", len(v.chanAlert))
+	}
+}
+
 func TestPendingCaps(t *testing.T) {
 	tests := []struct {
 		name       string

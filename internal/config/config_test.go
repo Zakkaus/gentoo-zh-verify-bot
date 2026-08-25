@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
@@ -515,5 +516,37 @@ func TestMuteSecondsDefault(t *testing.T) {
 func TestLoadConfigExample(t *testing.T) {
 	if _, err := LoadConfig(filepath.Join("..", "..", "config.example.json")); err != nil {
 		t.Fatalf("load config.example.json: %v", err)
+	}
+}
+
+func TestOwnerClaimSecurityConfig(t *testing.T) {
+	defaults, err := LoadConfig(writeConfig(t, map[string]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.OwnerClaimLifetime() != 10*time.Minute {
+		t.Fatalf("default owner claim lifetime = %s, want 10m", defaults.OwnerClaimLifetime())
+	}
+
+	configured, err := LoadConfig(writeConfig(t, map[string]any{
+		"owner_claim_lifetime_seconds": 45,
+		"owner_claim_user_id":          4242,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.OwnerClaimLifetime() != 45*time.Second || configured.OwnerClaimUserID != 4242 {
+		t.Fatalf("owner claim config = lifetime %s, user %d", configured.OwnerClaimLifetime(), configured.OwnerClaimUserID)
+	}
+
+	for key, value := range map[string]any{
+		"owner_claim_lifetime_seconds": -1,
+		"owner_claim_user_id":          -1,
+	} {
+		t.Run(key, func(t *testing.T) {
+			if _, err := LoadConfig(writeConfig(t, map[string]any{key: value})); err == nil {
+				t.Fatalf("negative %s was accepted", key)
+			}
+		})
 	}
 }

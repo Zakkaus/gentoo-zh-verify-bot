@@ -165,6 +165,103 @@ func TestBugCursorStopsAtUndeliveredItem(t *testing.T) {
 	}
 }
 
+func TestBugPostFailureClassificationControlsCursor(t *testing.T) {
+	tests := []struct {
+		name        string
+		firstErr    error
+		wantCursor  int
+		wantSends   int
+		wantTracked bool
+	}{
+		{
+			name:        "permanent item rejection advances and continues",
+			firstErr:    &telegoapi.Error{ErrorCode: 400, Description: "Bad Request: message is too long"},
+			wantCursor:  1002,
+			wantSends:   2,
+			wantTracked: true,
+		},
+		{
+			name:       "destination failure stops without advancing",
+			firstErr:   &telegoapi.Error{ErrorCode: 400, Description: "Bad Request: chat not found"},
+			wantCursor: 1000,
+			wantSends:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setFeedTestTiming(t, time.Second, time.Second)
+			base := &fakeFeedBot{}
+			bot := &scriptedFeedBot{fakeFeedBot: base, sendErrs: []error{tt.firstErr, nil}}
+			st := &feedState{LastBugID: 1000}
+			bugs := []recentBug{
+				{ID: 1002, Summary: "second", Status: "CONFIRMED"},
+				{ID: 1001, Summary: "first", Status: "CONFIRMED"},
+			}
+
+			postFeedItems(context.Background(), bot, &config.FeedConfig{ChatID: -100, Lang: "en"}, feedLanguage("en"), st, bugs, nil)
+
+			if st.LastBugID != tt.wantCursor {
+				t.Fatalf("bug cursor = %d, want %d", st.LastBugID, tt.wantCursor)
+			}
+			if base.sends != tt.wantSends {
+				t.Fatalf("send attempts = %d, want %d", base.sends, tt.wantSends)
+			}
+			if got := st.Tracked["1002"] != nil; got != tt.wantTracked {
+				t.Fatalf("newer bug tracked = %v, want %v", got, tt.wantTracked)
+			}
+		})
+	}
+}
+
+func TestConfirmPostFailureClassificationControlsRetry(t *testing.T) {
+	tests := []struct {
+		name      string
+		sendErr   error
+		wantState string
+		wantTries int
+	}{
+		{
+			name:      "permanent item rejection abandons confirmation",
+			sendErr:   &telegoapi.Error{ErrorCode: 400, Description: "Bad Request: message is too long"},
+			wantState: "CONFIRMED|",
+		},
+		{
+			name:      "destination failure remains retryable",
+			sendErr:   &telegoapi.Error{ErrorCode: 400, Description: "Bad Request: chat not found"},
+			wantState: "UNCONFIRMED|",
+			wantTries: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setFeedTestTiming(t, time.Second, time.Second)
+			st := &feedState{Tracked: map[string]*trackedBug{
+				"1001": {MsgID: 9, State: "UNCONFIRMED|"},
+			}}
+			fb := &fakeFeedBot{sendErr: tt.sendErr}
+			bug := recentBug{ID: 1001, Summary: "changed", Status: "CONFIRMED"}
+
+			refreshTracked(context.Background(), fb, &config.FeedConfig{ChatID: -100, Lang: "en"}, feedLanguage("en"), st, map[int]recentBug{bug.ID: bug}, true)
+
+			tb := st.Tracked["1001"]
+			if tb == nil {
+				t.Fatal("tracked bug was dropped")
+			}
+			if tb.State != tt.wantState {
+				t.Fatalf("tracked state = %q, want %q", tb.State, tt.wantState)
+			}
+			if tb.ConfirmTries != tt.wantTries {
+				t.Fatalf("confirmation tries = %d, want %d", tb.ConfirmTries, tt.wantTries)
+			}
+			if fb.edits != 1 || fb.sends != 1 {
+				t.Fatalf("operations = %d edits and %d sends, want one each", fb.edits, fb.sends)
+			}
+		})
+	}
+}
+
 func TestFetchRecentBugsUsesCursorBoundedQuery(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -41,11 +41,16 @@
   "registration": {
     "owner_claimed": "Deployer ownership is now bound to this account. You can add groups.",
     "owner_claim_refused": "This owner-claim link is invalid, used, or expired.",
+    "owner_claim_save_failed": "Could not save the owner claim. Restore write access to the service state directory, then retry the same link.",
     "enrollment_owner_only": "Only the bot owner can create group-enrollment links.",
     "enrollment_link": "Group-enrollment link (valid for %[1]d minutes and one use):\n%[2]s",
     "enrollment_refused": "This group-enrollment link is invalid, used, or expired. The bot will leave this group.",
     "registration_pending": "Registration is authorized for group “%[1]s”. Promote the bot to administrator and grant the required permissions. Registration finishes automatically after promotion.",
     "group_registered": "Registered group “%[1]s”. Run /settings in that group.",
-    "registration_save_failed": "Could not persist group registration. The bot will leave this group; check the service state directory."
+    "registration_save_failed": "Could not persist group registration. The bot will leave this group; check the service state directory.",
+    "unregister_owner_only": "Only the bot owner can unregister runtime groups.",
+    "unregister_refused": "Could not unregister that group. Use /unregister <group-id> with a runtime-registered group ID.",
+    "unregister_save_failed": "Could not persist group removal. Restore write access to the service state directory, then retry.",
+    "group_unregistered": "Unregistered group “%[1]s” and removed its runtime settings."
   }
 }

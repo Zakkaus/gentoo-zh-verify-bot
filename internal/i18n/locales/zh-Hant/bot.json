@@ -41,11 +41,16 @@
   "registration": {
     "owner_claimed": "部署者身分已綁定。現在可以新增群組。",
     "owner_claim_refused": "這個擁有者認領連結無效、已使用或已過期。",
+    "owner_claim_save_failed": "無法儲存擁有者認領狀態。請恢復服務狀態目錄的寫入權限，然後重試同一連結。",
     "enrollment_owner_only": "只有機器人擁有者可以建立群組登記連結。",
     "enrollment_link": "群組登記連結（%[1]d 分鐘內有效且只能使用一次）：\n%[2]s",
     "enrollment_refused": "這個群組登記連結無效、已使用或已過期。機器人將退出該群組。",
     "registration_pending": "已授權登記群組「%[1]s」。請將機器人提升為管理員並授予所需權限。提升後會自動完成登記。",
     "group_registered": "已登記群組「%[1]s」。請在該群組中執行 /settings。",
-    "registration_save_failed": "無法持久儲存群組登記。機器人將退出該群組；請檢查服務狀態目錄。"
+    "registration_save_failed": "無法持久儲存群組登記。機器人將退出該群組；請檢查服務狀態目錄。",
+    "unregister_owner_only": "只有機器人擁有者可以取消登記執行階段群組。",
+    "unregister_refused": "無法取消登記該群組。請使用 /unregister <group-id> 指定已登記的執行階段群組 ID。",
+    "unregister_save_failed": "無法持久儲存群組移除結果。請恢復服務狀態目錄的寫入權限，然後重試。",
+    "group_unregistered": "已取消登記群組「%[1]s」，並刪除其執行階段設定。"
   }
 }

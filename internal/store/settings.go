@@ -149,6 +149,13 @@ type PendingRegistration struct {
 	ExpiresAt    int64  `json:"expires_at"`
 }
 
+// UnknownGroupLeave retains cleanup for a group without registration authorization.
+type UnknownGroupLeave struct {
+	GroupID   int64  `json:"group_id"`
+	Title     string `json:"title,omitempty"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
 // RegistrationState is the durable owner and runtime-group metadata transaction.
 type RegistrationState struct {
 	Revision             uint64
@@ -159,6 +166,7 @@ type RegistrationState struct {
 	RegisteredGroups     []RegisteredGroup
 	EnrollmentNonces     []EnrollmentNonce
 	PendingRegistrations []PendingRegistration
+	UnknownGroupLeaves   []UnknownGroupLeave
 }
 
 // PersistenceStatus describes whether setting commits are durable and currently allowed.
@@ -239,6 +247,7 @@ type settingsFile struct {
 	RegisteredGroups     []RegisteredGroup     `json:"registered_groups"`
 	EnrollmentNonces     []EnrollmentNonce     `json:"enrollment_nonces"`
 	PendingRegistrations []PendingRegistration `json:"pending_registrations"`
+	UnknownGroupLeaves   []UnknownGroupLeave   `json:"unknown_group_leaves,omitempty"`
 	Global               globalRecord          `json:"global"`
 	Groups               map[int64]groupRecord `json:"groups"`
 }
@@ -585,6 +594,7 @@ func (s *Settings) CommitRegistrations(expectedRevision uint64, next Registratio
 	candidate.RegisteredGroups = append([]RegisteredGroup(nil), next.RegisteredGroups...)
 	candidate.EnrollmentNonces = append([]EnrollmentNonce(nil), next.EnrollmentNonces...)
 	candidate.PendingRegistrations = append([]PendingRegistration(nil), next.PendingRegistrations...)
+	candidate.UnknownGroupLeaves = append([]UnknownGroupLeave(nil), next.UnknownGroupLeaves...)
 
 	keep := make(map[int64]bool, len(s.baseline.Groups)+len(next.RegisteredGroups))
 	for _, group := range s.baseline.Groups {
@@ -761,6 +771,7 @@ func (s *Settings) newState() settingsFile {
 		RegisteredGroups:     []RegisteredGroup{},
 		EnrollmentNonces:     []EnrollmentNonce{},
 		PendingRegistrations: []PendingRegistration{},
+		UnknownGroupLeaves:   []UnknownGroupLeave{},
 		Groups:               make(map[int64]groupRecord),
 	}
 }
@@ -847,6 +858,7 @@ func (s *Settings) buildSnapshot(state settingsFile) (*settingsSnapshot, error) 
 		RegisteredGroups:     append([]RegisteredGroup(nil), state.RegisteredGroups...),
 		EnrollmentNonces:     append([]EnrollmentNonce(nil), state.EnrollmentNonces...),
 		PendingRegistrations: append([]PendingRegistration(nil), state.PendingRegistrations...),
+		UnknownGroupLeaves:   append([]UnknownGroupLeave(nil), state.UnknownGroupLeaves...),
 	}
 	if err := s.validateRegistrations(registration); err != nil {
 		return nil, err
@@ -1155,6 +1167,19 @@ func (s *Settings) validateRegistrations(state RegistrationState) error {
 		}
 		seenPending[pending.GroupID] = true
 	}
+	seenLeaves := make(map[int64]bool, len(state.UnknownGroupLeaves))
+	for _, leave := range state.UnknownGroupLeaves {
+		if leave.GroupID == 0 || seenLeaves[leave.GroupID] {
+			return fmt.Errorf("unknown-group leave group is zero or duplicated")
+		}
+		if leave.ExpiresAt <= 0 {
+			return fmt.Errorf("unknown-group leave %d has no valid expiry", leave.GroupID)
+		}
+		if seenPending[leave.GroupID] {
+			return fmt.Errorf("group %d cannot be pending registration and unknown-group cleanup", leave.GroupID)
+		}
+		seenLeaves[leave.GroupID] = true
+	}
 	if state.ControlGroupID != 0 && !seenGroups[state.ControlGroupID] {
 		return fmt.Errorf("control group %d is not configured or registered", state.ControlGroupID)
 	}
@@ -1214,6 +1239,7 @@ func normalizeFile(state settingsFile) settingsFile {
 	state.RegisteredGroups = nonNilRegisteredGroups(state.RegisteredGroups)
 	state.EnrollmentNonces = nonNilEnrollmentNonces(state.EnrollmentNonces)
 	state.PendingRegistrations = nonNilPendingRegistrations(state.PendingRegistrations)
+	state.UnknownGroupLeaves = nonNilUnknownGroupLeaves(state.UnknownGroupLeaves)
 	if state.Groups == nil {
 		state.Groups = make(map[int64]groupRecord)
 	}
@@ -1224,6 +1250,7 @@ func normalizeRegistrationState(state RegistrationState) RegistrationState {
 	state.RegisteredGroups = nonNilRegisteredGroups(state.RegisteredGroups)
 	state.EnrollmentNonces = nonNilEnrollmentNonces(state.EnrollmentNonces)
 	state.PendingRegistrations = nonNilPendingRegistrations(state.PendingRegistrations)
+	state.UnknownGroupLeaves = nonNilUnknownGroupLeaves(state.UnknownGroupLeaves)
 	return state
 }
 
@@ -1246,6 +1273,13 @@ func nonNilPendingRegistrations(values []PendingRegistration) []PendingRegistrat
 		return []PendingRegistration{}
 	}
 	return append([]PendingRegistration(nil), values...)
+}
+
+func nonNilUnknownGroupLeaves(values []UnknownGroupLeave) []UnknownGroupLeave {
+	if values == nil {
+		return []UnknownGroupLeave{}
+	}
+	return append([]UnknownGroupLeave(nil), values...)
 }
 
 func cloneSettingsBaseline(value SettingsBaseline) SettingsBaseline {
@@ -1275,6 +1309,7 @@ func cloneSettingsFile(value settingsFile) settingsFile {
 	out.RegisteredGroups = nonNilRegisteredGroups(value.RegisteredGroups)
 	out.EnrollmentNonces = nonNilEnrollmentNonces(value.EnrollmentNonces)
 	out.PendingRegistrations = nonNilPendingRegistrations(value.PendingRegistrations)
+	out.UnknownGroupLeaves = nonNilUnknownGroupLeaves(value.UnknownGroupLeaves)
 	out.Global.GlobalOverrides = cloneGlobalOverrides(value.Global.GlobalOverrides)
 	out.Groups = make(map[int64]groupRecord, len(value.Groups))
 	for id, record := range value.Groups {
@@ -1289,6 +1324,7 @@ func cloneRegistrationState(value RegistrationState) RegistrationState {
 	out.RegisteredGroups = nonNilRegisteredGroups(value.RegisteredGroups)
 	out.EnrollmentNonces = nonNilEnrollmentNonces(value.EnrollmentNonces)
 	out.PendingRegistrations = nonNilPendingRegistrations(value.PendingRegistrations)
+	out.UnknownGroupLeaves = nonNilUnknownGroupLeaves(value.UnknownGroupLeaves)
 	return out
 }
 

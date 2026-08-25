@@ -285,6 +285,9 @@ func (v *Panel) PanelInputDM(_ context.Context, update telego.Update) bool {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if v.sessionByUser(message.From.ID) != session {
+		return false
+	}
 	pending := session.pending
 	if pending == nil || pending.promptMessageID == 0 {
 		return false
@@ -309,6 +312,9 @@ func (v *Panel) PanelChatSharedDM(_ context.Context, update telego.Update) bool 
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if v.sessionByUser(message.From.ID) != session {
+		return false
+	}
 	pending := session.pending
 	if pending == nil || pending.requestID == 0 {
 		return false

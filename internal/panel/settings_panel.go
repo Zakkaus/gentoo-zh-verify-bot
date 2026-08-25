@@ -107,6 +107,10 @@ func (v *Panel) openSettingsStart(ctx *th.Context, message *telego.Message, toke
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if v.sessionByToken(token) != session {
+		_, _ = ctx.Bot().SendMessage(requestCtx, tu.Message(tu.ID(message.Chat.ID), i18n.Messages.Panel.Settings.Error.Expired.For(language)))
+		return true
+	}
 	session.chatID = message.Chat.ID
 	session.language = i18n.FromRequester(message.From.LanguageCode, session.language)
 	session.screen = "gl"
@@ -150,6 +154,10 @@ func (v *Panel) OnSettingsCallback(ctx *th.Context, update telego.Update) error 
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if v.sessionByToken(data.token) != session {
+		v.answerCallback(requestCtx, bot, query.ID, i18n.Messages.Panel.Settings.Error.Expired.For(language), true)
+		return nil
+	}
 	if session.ownerID != query.From.ID || session.screen != data.screen || query.Message == nil ||
 		query.Message.GetChat().Type != "private" || query.Message.GetChat().ID != session.chatID ||
 		query.Message.GetMessageID() != session.messageID {

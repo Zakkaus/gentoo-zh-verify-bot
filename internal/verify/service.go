@@ -692,13 +692,22 @@ func (v *Service) firstPending(uid int64) (gid int64, ul i18n.Lang, ok bool) {
 func (v *Service) challengeResendOK(uid int64) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if last, ok := v.challengeAt[uid]; ok && time.Since(last) < challengeResendCooldown {
+	now := time.Now()
+	if last, ok := v.challengeAt[uid]; ok && now.Sub(last) < challengeResendCooldown {
 		return false
 	}
 	if len(v.challengeAt) >= challengeResendMapMax {
-		v.challengeAt = map[int64]time.Time{}
+		cutoff := now.Add(-challengeResendCooldown)
+		for userID, last := range v.challengeAt {
+			if !last.After(cutoff) {
+				delete(v.challengeAt, userID)
+			}
+		}
+		if len(v.challengeAt) >= challengeResendMapMax {
+			v.challengeAt = map[int64]time.Time{}
+		}
 	}
-	v.challengeAt[uid] = time.Now()
+	v.challengeAt[uid] = now
 	return true
 }
 
@@ -758,6 +767,7 @@ func (v *Service) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 		}
 	}
 	v.mu.Unlock()
+	promptedChanged := false
 	for _, dq := range qs {
 		if dq.mode == (config.ModeKernel) {
 			left := kernelMaxTries - dq.tries
@@ -768,7 +778,9 @@ func (v *Service) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 			if v.sendVerifyDM(c, bot, uid,
 				render(v.messages, dq.lang, dq.text, left, dq.nonce, true),    // collapsed tripwire (Bot API 7.4)
 				render(v.messages, dq.lang, dq.text, left, dq.nonce, false)) { // without the blockquote, for an old API server
-				v.markPrompted(dq.gid, uid) // only a delivered question makes the next DM gradeable
+				if v.markPrompted(dq.gid, uid) {
+					promptedChanged = true
+				}
 			}
 			continue
 		}
@@ -782,15 +794,20 @@ func (v *Service) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
 			v.messages.Verification.Challenge.QuizPrompt.Render(dq.lang, html.EscapeString(dq.text))).
 			WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	}
+	if promptedChanged {
+		v.save()
+	}
 }
 
 // Grade DMs only after successful prompt delivery; stray pre-prompt messages cost nothing.
-func (v *Service) markPrompted(gid, uid int64) {
+func (v *Service) markPrompted(gid, uid int64) bool {
 	v.mu.Lock()
-	if p, ok := v.pend[pkey{gid, uid}]; ok && !p.done {
+	defer v.mu.Unlock()
+	if p, ok := v.pend[pkey{gid, uid}]; ok && !p.done && !p.prompted {
 		p.prompted = true
+		return true
 	}
-	v.mu.Unlock()
+	return false
 }
 
 // Return success only when some rendering was delivered.
@@ -1130,13 +1147,22 @@ func (v *Service) failAlert(c context.Context, bot verifyBot, gid int64, text st
 }
 
 // Throttle unreadable-channel alerts per channel to avoid flooding operators.
+const channelAccessAlertCooldown = 10 * time.Minute
+
 func (v *Service) channelAccessAlert(c context.Context, bot verifyBot, l i18n.Lang, channelID int64) {
 	v.mu.Lock()
-	if last, ok := v.chanAlert[channelID]; ok && time.Since(last) < 10*time.Minute {
+	now := time.Now()
+	if last, ok := v.chanAlert[channelID]; ok && now.Sub(last) < channelAccessAlertCooldown {
 		v.mu.Unlock()
 		return
 	}
-	v.chanAlert[channelID] = time.Now()
+	cutoff := now.Add(-channelAccessAlertCooldown)
+	for id, last := range v.chanAlert {
+		if !last.After(cutoff) {
+			delete(v.chanAlert, id)
+		}
+	}
+	v.chanAlert[channelID] = now
 	v.mu.Unlock()
 	admin := &v.messages.Verification.Admin
 	mode := admin.ChannelFailOpen.For(l)

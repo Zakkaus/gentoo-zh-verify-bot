@@ -88,9 +88,15 @@ Read the private, one-use owner-claim link from the journal:
 sudo journalctl -u gentoo-zh-verify-bot
 ```
 
-Open that link in Telegram. The first account to open the unexpired link becomes the owner. Add the bot to a group, promote it to administrator, and enable **Invite users**, **Ban users**, and **Delete messages**. The owner-authorized group is written to `settings.json`; the bot never writes `config.json`.
+Open that link in Telegram. The unused link expires after 10 minutes by default. Until the claim succeeds, anyone who can read the journal can use the link to become owner. Set `owner_claim_user_id` to restrict the claim to one account.
+
+Add the bot to a group, promote it to administrator, and enable **Invite users**, **Ban users**, and **Delete messages**. The owner-authorized group is written to `settings.json`; the bot never writes `config.json`.
 
 For delegated setup, the owner sends `/enroll` to the bot in a private chat and gives the resulting one-use, ten-minute group link to the group administrator. Reusing an enrollment link, using an expired link, or promoting the bot without owner authorization makes the bot leave the unknown group.
+
+To remove a runtime-registered group, the owner sends `/unregister <group-id>` in a private chat.
+The bot removes the group and its runtime overrides, then attempts to leave the group. Removing the
+bot from a group does not erase registration state; use `/unregister` for deliberate removal.
 
 For a required channel, make the bot a channel administrator. Plain channel membership cannot read other users' membership, so it cannot enforce the membership gate. Startup emits one combined, actionable setup report for each registered group.
 
@@ -111,6 +117,8 @@ For a required channel, make the bot a channel administrator. Plain channel memb
 | `channel_invite_url` | Global join link, required for a private channel without an `@handle`. | Empty. |
 | `trusted_member_group_ids` | Groups whose confirmed members bypass verification. An unreadable membership falls back to normal verification. | `[]`: no bypass. |
 | `known_chat_ids` | Other chats the bot may remain in; they gain no guarded, channel, or trust semantics. | `[]`. |
+| `owner_claim_lifetime_seconds` | Lifetime of the private, one-use first-owner claim logged at startup. | `0` becomes 600; negative is invalid; positive values are unchanged. |
+| `owner_claim_user_id` | Optional Telegram user allowed to use the first-owner claim. | `0`: any journal reader with the link; negative is invalid. |
 | `verify_mode` | Global `kernel`, `quiz`, or `mixed` mode; per-group values and `/vmode ...|auto` may override it. | Empty becomes `kernel`; any other value is a load error. |
 | `timeout_seconds` | Verification window. | `<=0` becomes 240; 1–29 becomes 30; maximum 1,800. |
 | `required_channel_fail_open` | Result when required-channel membership cannot be read after the challenge passes. Admins are alerted in either mode. | `true`: approve; `false`: decline for retry. |

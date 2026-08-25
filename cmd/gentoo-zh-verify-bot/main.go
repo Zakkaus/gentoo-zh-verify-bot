@@ -215,6 +215,9 @@ func main() {
 			moderation.LogGroupSetup(checkCtx, bot, identity.ID, groupID)
 			application.SetupCommands(checkCtx, bot)
 		},
+		func(checkCtx context.Context, groupID int64) {
+			moderation.LogGroupSetup(checkCtx, bot, identity.ID, groupID)
+		},
 	)
 	if err := registration.EnsureOwnerClaim(); err != nil {
 		log.Printf("WARNING: owner claim is unavailable until durable settings storage is restored: %v", err)

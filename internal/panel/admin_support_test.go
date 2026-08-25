@@ -91,3 +91,30 @@ func runFakeHandler(t *testing.T, bot *telego.Bot, handler th.Handler, update te
 		t.Fatalf("bot handler returned %v", err)
 	}
 }
+
+func startFakeHandler(t *testing.T, bot *telego.Bot, handler th.Handler, update telego.Update) <-chan error {
+	t.Helper()
+	updates := make(chan telego.Update, 1)
+	botHandler, err := th.NewBotHandler(bot, updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan error, 1)
+	botHandler.Handle(func(ctx *th.Context, update telego.Update) error {
+		err := handler(ctx, update)
+		handled <- err
+		return err
+	})
+	done := make(chan error, 1)
+	go func() {
+		startErr := botHandler.Start()
+		if handlerErr := <-handled; handlerErr != nil {
+			done <- handlerErr
+			return
+		}
+		done <- startErr
+	}()
+	updates <- update
+	close(updates)
+	return done
+}

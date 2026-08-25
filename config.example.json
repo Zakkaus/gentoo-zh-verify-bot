@@ -18,6 +18,8 @@
   "required_channel_fail_open": true,
   "trusted_member_group_ids": [],
   "known_chat_ids": [],
+  "owner_claim_lifetime_seconds": 600,
+  "owner_claim_user_id": 0,
   "admin_log_chat_id": 0,
   "rich_messages": false,
   "user_agent": "",

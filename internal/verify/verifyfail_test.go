@@ -74,6 +74,94 @@ func TestVerifyStrikeDecay(t *testing.T) {
 	}
 }
 
+func TestSaveVerifyFailsPrunesOnlyFullyExpiredRecords(t *testing.T) {
+	const (
+		shortGroup int64 = -100
+		longGroup  int64 = -200
+	)
+	cfg := &config.Config{
+		Groups:             []config.GroupConfig{{ID: shortGroup}, {ID: longGroup}},
+		GroupIDs:           []int64{shortGroup, longGroup},
+		VerifyMaxFails:     3,
+		VerifyRetrySeconds: 30,
+	}
+	v := newTestService(cfg)
+	group, ok := v.settings.Group(longGroup)
+	if !ok {
+		t.Fatal("long-cooldown group is missing")
+	}
+	overrides := group.Overrides()
+	longRetrySeconds := int((8 * time.Hour) / time.Second)
+	overrides.VerifyRetrySeconds = &longRetrySeconds
+	if _, err := v.settings.CommitGroup(longGroup, group.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	dead := pkey{shortGroup, 1}
+	cooldownLive := pkey{longGroup, 2}
+	historyLive := pkey{shortGroup, 3}
+	v.vfail[dead] = &vfailRec{count: 1, last: now.Add(-7 * time.Hour)}
+	v.vfail[cooldownLive] = &vfailRec{count: 1, last: now.Add(-7 * time.Hour)}
+	v.vfail[historyLive] = &vfailRec{count: 2, last: now.Add(-verifyFailWindow + time.Minute)}
+	v.vfailPath = filepath.Join(t.TempDir(), "verify-fails.json")
+
+	v.saveVerifyFails()
+
+	if _, ok := v.vfail[dead]; ok {
+		t.Error("a record with expired strike and cooldown windows was retained")
+	}
+	if remaining := v.verifyCooldownRemaining(cooldownLive.gid, cooldownLive.uid); remaining <= 0 {
+		t.Errorf("group-specific live cooldown was pruned, remaining = %v", remaining)
+	}
+	if count, ban := v.recordVerifyFail(historyLive.gid, historyLive.uid); count != 3 || !ban {
+		t.Errorf("live ban history after pruning = (%d, %v), want (3, true)", count, ban)
+	}
+
+	restored := newTestService(cfg)
+	restored.vfailPath = v.vfailPath
+	restored.loadVerifyFails()
+	if _, ok := restored.vfail[dead]; ok {
+		t.Error("fully expired record was serialized")
+	}
+}
+
+func TestRecordVerifyFailPrunesExpiredRecordsBeforeInsertion(t *testing.T) {
+	v := newTestService(&config.Config{VerifyRetrySeconds: 30})
+	dead := pkey{-100, 1}
+	v.vfail[dead] = &vfailRec{count: 1, last: time.Now().Add(-verifyFailWindow - time.Minute)}
+
+	v.recordVerifyFail(-100, 2)
+
+	if _, ok := v.vfail[dead]; ok {
+		t.Error("insertion retained a record whose strike and cooldown windows had expired")
+	}
+}
+
+func TestVerifyFailCapacityEvictsOldestWithoutClearingLiveState(t *testing.T) {
+	v := newTestService(&config.Config{VerifyMaxFails: 3, VerifyRetrySeconds: 180})
+	now := time.Now()
+	protected := pkey{-100, 1}
+	oldest := pkey{-100, 2}
+	for uid := int64(1); uid <= vfailMax; uid++ {
+		v.vfail[pkey{-100, uid}] = &vfailRec{count: 1, last: now.Add(-time.Hour)}
+	}
+	v.vfail[protected] = &vfailRec{count: 2, last: now}
+	v.vfail[oldest].last = now.Add(-verifyFailWindow + time.Minute)
+
+	v.recordVerifyFail(-100, vfailMax+1)
+
+	if len(v.vfail) != vfailMax {
+		t.Fatalf("ledger size after capacity insertion = %d, want %d", len(v.vfail), vfailMax)
+	}
+	if _, ok := v.vfail[oldest]; ok {
+		t.Error("oldest remaining strike record was not evicted")
+	}
+	if count, ban := v.recordVerifyFail(protected.gid, protected.uid); count != 3 || !ban {
+		t.Errorf("live cooldown and ban history were lost at capacity: (%d, %v)", count, ban)
+	}
+}
+
 func TestConsumeNonceIdentity(t *testing.T) {
 	v := newTestService(&config.Config{})
 	key := pkey{-100, 42}

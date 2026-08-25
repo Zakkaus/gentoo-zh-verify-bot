@@ -52,9 +52,10 @@ type stateCompatPendingWant struct {
 
 func stateCompatConfig() *config.Config {
 	return &config.Config{Groups: []config.GroupConfig{{ID: stateCompatGroupA}, {ID: stateCompatGroupB}},
-		GroupIDs:       []int64{stateCompatGroupA, stateCompatGroupB},
-		TimeoutSeconds: 240,
-		VerifyMaxFails: 3}
+		GroupIDs:           []int64{stateCompatGroupA, stateCompatGroupB},
+		TimeoutSeconds:     240,
+		VerifyMaxFails:     3,
+		VerifyRetrySeconds: int((60 * 365 * 24 * time.Hour) / time.Second)}
 }
 
 // Regenerate only by explicit request. Historical legacy fixtures are never rewritten.

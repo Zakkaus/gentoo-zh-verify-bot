@@ -190,11 +190,79 @@ type vfailDisk struct {
 	Last    int64 `json:"last"`
 }
 
-// Clear the bounded map wholesale under an exceptional ID flood.
+// Bound retained strike and cooldown state under an exceptional identity flood.
 const vfailMax = 50000
 
 // Only sustained failures within this rolling window accumulate toward a ban.
 const verifyFailWindow = 6 * time.Hour
+
+// Caller holds v.mu. A record remains live while either its strike window or its group's retry
+// cooldown remains active.
+func (v *Service) pruneVerifyFailsLocked(now time.Time) {
+	retryByGroup := make(map[int64]time.Duration)
+	for key, rec := range v.vfail {
+		if rec == nil || rec.count <= 0 {
+			delete(v.vfail, key)
+			continue
+		}
+		elapsed := now.Sub(rec.last)
+		if elapsed < verifyFailWindow {
+			continue
+		}
+		retry, known := retryByGroup[key.gid]
+		if !known {
+			if seconds := v.verifyRetrySeconds(key.gid); seconds > 0 {
+				retry = time.Duration(seconds) * time.Second
+			}
+			retryByGroup[key.gid] = retry
+		}
+		if retry <= 0 || elapsed >= retry {
+			delete(v.vfail, key)
+		}
+	}
+}
+
+// Caller holds v.mu. Remove the oldest records until the requested size is reached.
+func (v *Service) evictOldestVerifyFailsLocked(target int) {
+	remove := len(v.vfail) - target
+	if remove <= 0 {
+		return
+	}
+	if remove == 1 {
+		var oldestKey pkey
+		var oldest time.Time
+		found := false
+		for key, rec := range v.vfail {
+			if !found || rec.last.Before(oldest) {
+				oldestKey, oldest, found = key, rec.last, true
+			}
+		}
+		if found {
+			delete(v.vfail, oldestKey)
+		}
+		return
+	}
+	type entry struct {
+		key  pkey
+		last time.Time
+	}
+	entries := make([]entry, 0, len(v.vfail))
+	for key, rec := range v.vfail {
+		entries = append(entries, entry{key: key, last: rec.last})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].last.Equal(entries[j].last) {
+			return entries[i].last.Before(entries[j].last)
+		}
+		if entries[i].key.gid != entries[j].key.gid {
+			return entries[i].key.gid < entries[j].key.gid
+		}
+		return entries[i].key.uid < entries[j].key.uid
+	})
+	for _, item := range entries[:remove] {
+		delete(v.vfail, item.key)
+	}
+}
 
 func (v *Service) loadVerifyFails() {
 	if v.vfailPath == "" {
@@ -227,6 +295,8 @@ func (v *Service) saveVerifyFails() {
 	_ = store.Save(v.vfailPath, func() any {
 		v.mu.Lock()
 		defer v.mu.Unlock()
+		v.pruneVerifyFailsLocked(time.Now())
+		v.evictOldestVerifyFailsLocked(vfailMax)
 		recs := make([]vfailDisk, 0, len(v.vfail))
 		for k, r := range v.vfail {
 			if r.count > 0 {
@@ -240,21 +310,23 @@ func (v *Service) saveVerifyFails() {
 // Strikes persist across restarts; a negative threshold disables automatic bans.
 func (v *Service) recordVerifyFail(gid, uid int64) (count int, ban bool) {
 	v.mu.Lock()
+	now := time.Now()
+	v.pruneVerifyFailsLocked(now)
 	key := pkey{gid, uid}
 	r := v.vfail[key]
 	if r == nil {
-		r = &vfailRec{}
 		if len(v.vfail) >= vfailMax {
-			v.vfail = map[pkey]*vfailRec{} // bound the map (see vfailMax)
+			v.evictOldestVerifyFailsLocked(vfailMax - 1)
 		}
+		r = &vfailRec{}
 		v.vfail[key] = r
 	}
-	if r.count > 0 && time.Since(r.last) > verifyFailWindow {
+	if r.count > 0 && now.Sub(r.last) >= verifyFailWindow {
 		r.count = 0 // Isolated old failures must not accumulate into a ban.
 		// Only failures inside verifyFailWindow accumulate.
 	}
 	r.count++
-	r.last = time.Now()
+	r.last = now
 	count = r.count
 	v.mu.Unlock()
 	v.saveVerifyFails()
@@ -518,7 +590,6 @@ func (v *Service) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch
 	delay := v.timeout(gid)
 	p.deadline = time.Now().Add(delay)
 	v.armExpiry(bot, p, gid, uid, delay, reason)
-	log.Printf("verify: bot offline — deferred %s for %d in %d, re-armed a fresh window", reason, uid, gid)
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.

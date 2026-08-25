@@ -16,6 +16,9 @@ All notable changes to this project are documented here. The format is based on
   user documentation.
 - Unknown config keys now produce a startup warning with their location. They remain ignored, so
   operators can correct misspellings without a hard startup failure.
+- **Runtime group removal and optional owner-claim pinning.** The owner can use
+  `/unregister <group-id>` in a private chat to remove a runtime-registered group and its
+  overrides. `owner_claim_user_id` can restrict first-owner setup to one Telegram user.
 
 ### Changed
 - **Join floods have bounded memory use.** The pending queue is capped at 2,000 requests across the
@@ -35,6 +38,8 @@ All notable changes to this project are documented here. The format is based on
 - **Telegram duration normalization is explicit.** Positive ban and mute durations below 30 seconds
   become 30 seconds. Ban durations above 366 days become permanent, while mute durations cap at
   366 days; `timeout_seconds` also has a 30-second floor.
+- First-owner claim links now expire after 10 minutes instead of 24 hours. Operators can override
+  the window with `owner_claim_lifetime_seconds`; startup continues to identify an open claim.
 - The build and release gate now uses Go 1.26.7, telego v1.11.2, staticcheck v0.8.1,
   govulncheck v1.7.0, and gosec v2.28.0.
 
@@ -66,6 +71,12 @@ All notable changes to this project are documented here. The format is based on
 - Auto-feed polling now drains multi-page Bugzilla backlogs without advancing across undelivered
   items, bounds network and Telegram operations, and preserves tracked bugs across transient source
   or edit failures.
+- **Group registration now survives restart and serializes same-group transitions.** Unauthorized
+  group leave deadlines are durable but structurally separate from authorized pending
+  registrations. Registration rechecks current bot membership while serialized against auto-leave,
+  and effective-group membership changes trigger a throttled permission report.
+- Owner-claim persistence failures now describe the private claim and tell the claimant to restore
+  state-directory writes before retrying the same link.
 
 ## [3.11.1] - 2026-08-20
 
