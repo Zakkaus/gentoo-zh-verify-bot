@@ -52,12 +52,14 @@ var (
 	kernelDateNumberRe   = regexp.MustCompile(`^(?:[0-9]{1,2}|[0-9]{4})$`)
 	wslKernelOutputRe    = regexp.MustCompile(`(?i)^Windows\s+WSL[0-9]*(?:\s+kernel\s+|\s*,\s*)` + kernelReleasePattern + `$`)
 	// The /proc/version banner is anchored by its own literal prefix and the parenthesised build
-	// info that always follows. The uname -a shape has no such prefix, so it must also carry the
-	// #N build field the real command always prints; without it the trailing wildcard would
-	// accept any words dressed up as kernel output.
+	// info that always follows. The uname -a shape has no such prefix, so it must carry the #N
+	// build field the real command always prints; without it a wildcard would accept any words
+	// dressed up as kernel output. What follows #N is not policed: busybox omits the OS name, so
+	// containers, Alpine and Termux end at the architecture, and requiring a tail would make the
+	// verdict depend on which distribution built the kernel.
 	kernelMultiVersionOutputs = [...]*regexp.Regexp{
 		regexp.MustCompile(`^Linux version ` + kernelReleasePattern + `\s+\(.+$`),
-		regexp.MustCompile(`(?i)^(?:uname\s+-a\s*:?\s*)?Linux\s+\S+\s+` + kernelReleasePattern + `\s+#\d+\b.*\sGNU/Linux$`),
+		regexp.MustCompile(`(?i)^(?:uname\s+-a\s*:?\s*)?Linux\s+\S+\s+` + kernelReleasePattern + `\s+#\d+\b`),
 	}
 )
 
