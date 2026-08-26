@@ -1,18 +1,4 @@
 {
-  "pkgs": {
-    "repology_unavailable": "暫時無法查詢 Repology 中「%[1]s」的跨發行版資訊。請稍後重試。",
-    "repology_not_found": "❓ Repology 中沒有與「%[1]s」相符的跨發行版套件。請嘗試更精確的套件名稱。",
-    "usage": "用法：/pkgs <套件名稱>。範例：/pkgs firefox。比較 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream 和 openSUSE 等發行版的套件版本；Debian 等顯示 stable/testing 通道，RHEL 資料來自 AlmaLinux 和 Rocky Linux。",
-    "no_supported_distro": "未在 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream、EPEL 或 openSUSE 中找到「%[1]s」的套件版本。此套件可能只由其他發行版提供。",
-    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> 跨發行版版本",
-    "closest_match": " <i>（與「%[1]s」最相符的項目）</i>",
-    "plain_heading": "%[1]s：",
-    "release_role": " <i>（%[1]s）</i>",
-    "plain_row": "\n • <b>%[1]s</b>：%[2]s%[3]s",
-    "rich_row": "<li><b>%[1]s</b>：%[2]s%[3]s</li>",
-    "alternatives": "\n其他相符項目：%[1]s",
-    "rich_alternatives": "<details><summary>其他相符項目（共 %[1]d 個）</summary>%[2]s</details>"
-  },
   "armpkgs": {
     "usage": "用法：/armpkgs <套件名稱>。範例：/armpkgs htop。比較此套件在 Gentoo、Debian、Ubuntu、Fedora、Arch Linux ARM 和 AUR 的 arm64（AArch64）支援情況。",
     "heading": "🦾 <b>%[1]s</b> · arm64（AArch64）跨發行版支援",
@@ -39,6 +25,27 @@
     "aur_query_failed": "⚠️ AUR 查詢失敗",
     "not_packaged": "❌ 未封裝",
     "packaged": "✅ 已封裝"
+  },
+  "kernel": {
+    "eol": "（已停止維護）",
+    "footer": "驗證入群時請傳送本機實際執行的版本號，而不是這裡的版本號。",
+    "heading": "🐧 <a href=\"https://www.kernel.org/\">kernel.org</a> 目前發布版本：",
+    "row": "%[1]s <b>%[2]s</b>　%[3]s",
+    "unavailable": "⚠️ 暫時無法讀取 kernel.org 的版本資訊。請稍後重試。"
+  },
+  "pkgs": {
+    "repology_unavailable": "暫時無法查詢 Repology 中「%[1]s」的跨發行版資訊。請稍後重試。",
+    "repology_not_found": "❓ Repology 中沒有與「%[1]s」相符的跨發行版套件。請嘗試更精確的套件名稱。",
+    "usage": "用法：/pkgs <套件名稱>。範例：/pkgs firefox。比較 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream 和 openSUSE 等發行版的套件版本；Debian 等顯示 stable/testing 通道，RHEL 資料來自 AlmaLinux 和 Rocky Linux。",
+    "no_supported_distro": "未在 Gentoo、AUR、Arch、Alpine、Debian、Ubuntu、Nixpkgs、Fedora、RHEL、CentOS Stream、EPEL 或 openSUSE 中找到「%[1]s」的套件版本。此套件可能只由其他發行版提供。",
+    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> 跨發行版版本",
+    "closest_match": " <i>（與「%[1]s」最相符的項目）</i>",
+    "plain_heading": "%[1]s：",
+    "release_role": " <i>（%[1]s）</i>",
+    "plain_row": "\n • <b>%[1]s</b>：%[2]s%[3]s",
+    "rich_row": "<li><b>%[1]s</b>：%[2]s%[3]s</li>",
+    "alternatives": "\n其他相符項目：%[1]s",
+    "rich_alternatives": "<details><summary>其他相符項目（共 %[1]d 個）</summary>%[2]s</details>"
   },
   "release": {
     "standard_support_ended": " · 標準支援已結束"

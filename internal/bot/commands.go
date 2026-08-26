@@ -15,16 +15,17 @@ func memberCommands(l i18n.Lang) []telego.BotCommand {
 	menu := i18n.Messages.Bot.Menu.Member
 	return []telego.BotCommand{
 		{Command: "help", Description: menu.Help.For(l)},
-		{Command: "pkg", Description: menu.Pkg.For(l)},
-		{Command: "use", Description: menu.Use.For(l)},
-		{Command: "bug", Description: menu.Bug.For(l)},
-		{Command: "news", Description: menu.News.For(l)},
+		{Command: gentooPrefix + "pkg", Description: menu.Pkg.For(l)},
+		{Command: gentooPrefix + "use", Description: menu.Use.For(l)},
+		{Command: gentooPrefix + "bug", Description: menu.Bug.For(l)},
+		{Command: gentooPrefix + "news", Description: menu.News.For(l)},
 		{Command: "wiki", Description: menu.Wiki.For(l)},
-		{Command: "bbs", Description: menu.BBS.For(l)},
+		{Command: gentooPrefix + "bbs", Description: menu.BBS.For(l)},
 		{Command: "pkgs", Description: menu.Pkgs.For(l)},
 		{Command: "distro", Description: menu.Distro.For(l)},
-		{Command: "arm", Description: menu.Arm.For(l)},
+		{Command: gentooPrefix + "arm", Description: menu.Arm.For(l)},
 		{Command: "armpkgs", Description: menu.ArmPkgs.For(l)},
+		{Command: "kernel", Description: menu.Kernel.For(l)},
 		{Command: "ping", Description: menu.Ping.For(l)},
 		{Command: "stats", Description: menu.Stats.For(l)},
 	}

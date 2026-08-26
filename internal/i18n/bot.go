@@ -46,6 +46,8 @@ type BotMemberMenuCatalog struct {
 	Arm Text
 	// ArmPkgs describes cross-distribution arm64 lookup.
 	ArmPkgs Text
+	// Kernel labels the kernel.org release listing.
+	Kernel Text
 	// Ping describes bot status.
 	Ping Text
 	// Stats describes daily verification statistics.

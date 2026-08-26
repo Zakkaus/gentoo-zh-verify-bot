@@ -1,19 +1,20 @@
 {
   "menu": {
     "member": {
-      "help": "查看可用命令",
-      "pkg": "搜索 Gentoo 包",
-      "use": "查看包信息和 USE flag",
-      "bug": "查询 Gentoo Bugzilla",
-      "news": "查看或搜索 Gentoo 新闻",
-      "wiki": "搜索 Gentoo Wiki、ArchWiki",
-      "bbs": "搜索 Linux 论坛（中文优先）",
-      "pkgs": "比较各发行版的包版本",
-      "distro": "/pkgs 的别名",
       "arm": "查看 Gentoo arm64 keyword",
       "arm_pkgs": "比较各发行版的 arm64 支持情况",
+      "bbs": "搜索 Linux 论坛（中文优先）",
+      "bug": "查询 Gentoo Bugzilla",
+      "distro": "/pkgs 的别名",
+      "help": "查看可用命令",
+      "kernel": "查询 kernel.org 当前发布的内核版本",
+      "news": "查看或搜索 Gentoo 新闻",
       "ping": "查看机器人状态和运行时长",
-      "stats": "查看今日通过、拒绝人数"
+      "pkg": "搜索 Gentoo 包",
+      "pkgs": "比较各发行版的包版本",
+      "stats": "查看今日通过、拒绝人数",
+      "use": "查看包信息和 USE flag",
+      "wiki": "搜索 Gentoo Wiki、ArchWiki"
     },
     "admin": {
       "start": "【管理】开启入群验证",

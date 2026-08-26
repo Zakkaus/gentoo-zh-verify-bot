@@ -2,7 +2,20 @@
 
 [English](README.md) | 简体中文
 
-`gentoo-zh-verify-bot` 是面向 Gentoo 中文社区群组的 Telegram 入群验证机器人，用于筛除批量提交入群申请的垃圾账号。机器人会保持申请待审，完成验证后再批准或拒绝；同时提供群组管理、Gentoo 与 Linux 查询，以及可选的 Bugzilla 和新闻 Feed。
+面向 Linux 社区群组的 Telegram 验证机器人，用于筛除批量提交入群申请的垃圾账号，由 [Gentoo 中文社区](https://gentoozh.org)开发并运行。申请入群的人在通过或失败之前保持待审；进入未开启审批的群组的人先被禁言，直到完成验证。同时提供群组管理、跨发行版的软件包与文档查询，以及可选的缺陷与新闻推送。
+
+## 两个版本
+
+同一份代码，两个二进制。区别只在于不带前缀的命令名归谁使用。
+
+| | 面向 | Gentoo 查询命令 |
+| --- | --- | --- |
+| `gentoo-zh-verify-bot` | Gentoo 中文社区 | `/pkg` `/use` `/bug` `/news` `/bbs` `/arm` |
+| `gentoo-zhbot` | 一般 Linux 社区 | `/gpkg` `/guse` `/gbug` `/gnews` `/gbbs` `/garm` |
+
+其余完全相同，包括验证、群组管理、设置面板，以及跨发行版查询 `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel`。运行 Arch 或 Debian 的群组因此保留了 `/pkg` 这个名字，同时仍然可以在需要时查询 Gentoo。
+
+Gentoo 版用 `-tags gentoo` 构建，默认构建即通用版。每次发布同时提供两者的 `amd64` 与 `arm64` 二进制。
 
 ## 适用条件与运行开销
 
@@ -109,11 +122,11 @@ systemd unit 使用 `Restart=always`；除 systemd 主动停止外，进程退�
 
 Telegram 不可达时，到期验证会获得新的完整时限，不会被拒绝或增加失败次数。运行中的中断超过 90 秒后，内存中的所有验证都会获得新的时限；重启时，如果 `heartbeat.json` 证明停机超过 90 秒，从 `pending.json` 恢复的验证也会获得新的时限。每次恢复最多尝试重新通知 30 名申请人。Telegram 只为断线机器人保留约 24 小时的 update，因此更长的中断可能丢失机器人从未收到的入群申请。恢复时，如果 `heartbeat.json` 可读，机器人会通知管理员手动检查 Telegram 的待处理申请队列。
 
-## 为其它社区创建 fork
+## 适配到其它社区
 
-群组、验证模式、两种题库、三个现有 locale、overlay、新闻源、Feed 目标和消息策略都可通过配置或设置面板修改，不需要改代码。
+多数社区不需要 fork：运行 `gentoo-zhbot` 版本再配置即可。群组、验证模式、两种题库、三个现有 locale、overlay、新闻源、推送目标和消息策略都可通过 `config.json` 或设置面板修改，不需要改代码。
 
-需要更名或替换 Gentoo 语义时，必须完整修改以下位置：
+若要彻底替换 Gentoo 语义，而不是让它保留在 `g` 前缀之后，必须完整修改以下位置：
 
 - `go.mod` 的 module path 及全部 Go import；
 - `cmd/gentoo-zh-verify-bot`、`deploy/gentoo-zh-verify-bot.service` 和 `.github/workflows/release.yml` 中的命令名、二进制与发布文件名、systemd 路径和状态目录；

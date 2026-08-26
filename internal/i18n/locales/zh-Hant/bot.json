@@ -1,19 +1,20 @@
 {
   "menu": {
     "member": {
-      "help": "查看可用指令",
-      "pkg": "搜尋 Gentoo 套件",
-      "use": "查看套件資訊與 USE flag",
-      "bug": "查詢 Gentoo Bugzilla",
-      "news": "查看或搜尋 Gentoo 新聞",
-      "wiki": "搜尋 Gentoo Wiki、ArchWiki",
-      "bbs": "搜尋 Linux 論壇（中文優先）",
-      "pkgs": "比較各發行版的套件版本",
-      "distro": "/pkgs 的別名",
       "arm": "查看 Gentoo arm64 keyword",
       "arm_pkgs": "比較各發行版的 arm64 支援情況",
+      "bbs": "搜尋 Linux 論壇（中文優先）",
+      "bug": "查詢 Gentoo Bugzilla",
+      "distro": "/pkgs 的別名",
+      "help": "查看可用指令",
+      "kernel": "查詢 kernel.org 目前發布的核心版本",
+      "news": "查看或搜尋 Gentoo 新聞",
       "ping": "查看機器人狀態與運作時間",
-      "stats": "查看今日通過、拒絕人數"
+      "pkg": "搜尋 Gentoo 套件",
+      "pkgs": "比較各發行版的套件版本",
+      "stats": "查看今日通過、拒絕人數",
+      "use": "查看套件資訊與 USE flag",
+      "wiki": "搜尋 Gentoo Wiki、ArchWiki"
     },
     "admin": {
       "start": "【管理】開啟加入群組驗證",

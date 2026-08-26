@@ -6,6 +6,8 @@ type LookupDistrosCatalog struct {
 	Pkgs LookupDistrosPkgsCatalog
 	// Armpkgs contains cross-distribution arm64 lookup text.
 	Armpkgs LookupDistrosArmpkgsCatalog
+	// Kernel contains the kernel.org release listing.
+	Kernel LookupDistrosKernelCatalog
 	// Release contains distribution release-role labels.
 	Release LookupDistrosReleaseCatalog
 }
@@ -39,6 +41,21 @@ type LookupDistrosPkgsCatalog struct {
 }
 
 // LookupDistrosArmpkgsCatalog contains /armpkgs text.
+// LookupDistrosKernelCatalog covers the kernel.org release listing, which every Linux community
+// asks about and which this bot's own verification depends on.
+type LookupDistrosKernelCatalog struct {
+	// Heading introduces the listing.
+	Heading Text
+	// Row formats one release: moniker, version, and release date.
+	Row Format
+	// EOL marks a series that is no longer maintained.
+	EOL Text
+	// Footer reminds applicants to send their own version, not one from the list.
+	Footer Text
+	// Unavailable reports that kernel.org could not be read.
+	Unavailable Text
+}
+
 type LookupDistrosArmpkgsCatalog struct {
 	// Usage explains the command syntax and compared sources.
 	Usage Text
