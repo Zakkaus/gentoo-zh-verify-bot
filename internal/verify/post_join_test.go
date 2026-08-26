@@ -374,3 +374,32 @@ func TestAdmissionLeavesNoWindowToRechallenge(t *testing.T) {
 		})
 	}
 }
+
+// Trusting a group means not asking its members anything. Somebody already inside the group has
+// no join request to approve, so the bypass must not be expressed as an approval: that call
+// fails, and the failure used to put a trusted member through the challenge anyway.
+func TestTrustedMemberJoiningIsNotChallenged(t *testing.T) {
+	cfg := &config.Config{GroupIDs: []int64{-100}, TrustedMemberGroupIDs: []int64{-200}}
+	v := newTestService(cfg)
+	v.botUsername = "bot"
+	fb := &fakeVerifyBot{member: &telego.ChatMemberMember{Status: telego.MemberStatusMember}}
+	t.Cleanup(v.stopForShutdown)
+
+	runFakeHandler(t, newAPITestBot(t, fb), v.OnMemberJoined, joinUpdate(-100, 5, telego.ChatTypeSupergroup, nil))
+
+	v.mu.Lock()
+	pending := len(v.pend)
+	v.mu.Unlock()
+	if pending != 0 {
+		t.Error("a member of a trusted group must not be given a challenge")
+	}
+	if fb.mutes != 0 {
+		t.Errorf("mutes = %d, want 0: a trusted member is not held", fb.mutes)
+	}
+	if fb.approves != 0 {
+		t.Errorf("approveChatJoinRequest calls = %d, want 0: there is no join request for a member", fb.approves)
+	}
+	if !v.recentlyPassed(-100, 5) {
+		t.Error("a trusted member counts as verified, so the next membership update leaves them alone")
+	}
+}

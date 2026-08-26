@@ -707,6 +707,20 @@ func (v *Service) isChatMember(c context.Context, bot modBot, chatID, uid int64)
 // Confirmed members of trusted chats bypass verification and cooldowns.
 // Lookup failure is untrusted and follows normal verification.
 // Approval failure returns trusted=true so normal verification runs without cooldown rejection.
+// trustedMember reports confirmed membership of any group this one trusts. An unreadable lookup
+// is not trust, so verification proceeds.
+func (v *Service) trustedMember(c context.Context, bot modBot, gid, uid int64) bool {
+	for _, src := range v.trustedGroups(gid) {
+		if src == 0 || src == gid {
+			continue
+		}
+		if v.isChatMember(c, bot, src, uid) {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *Service) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) (handled, trusted bool) {
 	for _, src := range v.trustedGroups(gid) {
 		if src == 0 || src == gid {
@@ -1048,7 +1062,14 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	bot := ctx.Bot()
 	c := ctx.Context()
 	applicantLang := i18n.FromTelegram(user.LanguageCode)
-	if handled, _ := v.tryTrustedBypass(c, bot, gid, uid); handled {
+	if v.trustedMember(c, bot, gid, uid) {
+		// Someone already inside the group needs no admitting: trusting them simply means not
+		// asking. Calling approve here would fail — there is no join request — and the failure
+		// would quietly put a trusted member through the challenge anyway.
+		v.clearVerifyFails(gid, uid)
+		v.recordDecision(true)
+		v.notePassed(gid, uid)
+		log.Printf("post-join verify: %d in %d is a member of a trusted group; not challenged", uid, gid)
 		return nil
 	}
 	if v.isGroupAdmin(c, bot, gid, uid) {
