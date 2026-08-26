@@ -102,7 +102,8 @@
       "fallback_detail": "備用問題\n問題：%[1]s\n可接受答案：\n%[2]s",
       "channel": "群組 %[1]d 的必要頻道\nID：%[2]d\n顯示名稱：%[3]s\n邀請連結：%[4]s",
       "confirm": "請確認此操作：\n%[1]s",
-      "input": "正在等待輸入\n%[1]s\n請回覆下方另行傳送的提示訊息。"
+      "input": "正在等待輸入\n%[1]s\n請回覆下方另行傳送的提示訊息。",
+      "moderation": "群組 %[1]d 的管理設定\n頻道身分發言：%[2]s\n禁言時長：%[3]s\n警告上限：%[4]s\n富文字輸出（機器人全域）：%[5]s\n告警聊天（機器人全域）：%[6]s"
     },
     "field": {
       "runtime": "執行階段設定",
@@ -144,7 +145,14 @@
       "reset_builtin": "使用內建問題",
       "set_channel": "設定頻道",
       "set_invite": "設定邀請連結",
-      "clear_invite": "清除邀請連結"
+      "clear_invite": "清除邀請連結",
+      "moderation": "管理設定",
+      "antispam": "切換頻道身分發言攔截",
+      "mute_duration": "禁言時長",
+      "warn_limit": "警告上限",
+      "rich_text": "切換富文字輸出",
+      "alert_chat": "設定告警聊天",
+      "clear_alert_chat": "清除告警聊天"
     },
     "prompt": {
       "ban_duration": "傳送 0 可設為永久，或傳送 30m、12h、7d 等時長。",
@@ -161,7 +169,10 @@
       "channel_whitelist": "選擇要加入允許清單的頻道。",
       "trusted_group": "選擇信任群組。",
       "known_chat": "選擇已知聊天室。",
-      "required_channel": "選擇必要頻道。"
+      "required_channel": "選擇必要頻道。",
+      "mute_duration": "傳送禁言時長，例如 30m、12h、7d。",
+      "warn_limit": "傳送觸發移出群組所需的警告次數。",
+      "alert_chat": "選擇接收維運告警的聊天。"
     },
     "error": {
       "expired": "此面板已過期或狀態失效。請使用 /settings 重新開啟。",
@@ -201,7 +212,8 @@
       "builtins": "內建本地化問題",
       "custom": "自訂問題",
       "required_disabled": "已停用",
-      "invite_missing": "未設定"
+      "invite_missing": "未設定",
+      "alert_fallback": "發生問題的群組"
     }
   }
 }

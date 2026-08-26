@@ -59,14 +59,17 @@
 
 ## DM 中可修改的设置
 
-**实现位置：**`internal/panel` 包；`internal/panel/settings_panel.go` 中的 `(*Panel).dispatchRuntime`、`(*Panel).dispatchList` 和 `(*Panel).dispatchVerificationParameters`；`internal/panel/settings_input.go` 中的 `(*Panel).dispatchChannel`。
+**实现位置：**`internal/panel` 包；`internal/panel/settings_panel.go` 中的 `(*Panel).dispatchRuntime`、`(*Panel).dispatchList`、`(*Panel).dispatchModeration` 和 `(*Panel).dispatchVerificationParameters`；`internal/panel/settings_input.go` 中的 `(*Panel).dispatchChannel`。
 
 面板显示每个值来自运行时覆盖、`config.json` 还是内置默认值，并可修改：
 
 - 运行参数：验证开关、验证题发送方式（`group`、`dm` 或默认的 `both`）、模式、姓名隐藏、封禁时长、查询自动删除及 TTL、群组语言；
 - 列表：频道身份白名单、受信任成员群组、已知或支持群组；
 - 验证参数：30 至 1,800 秒超时、最大失败次数或关闭、冷却时间或关闭，以及全局 DM 查询频率；
+- 管理设置：频道身份发言拦截、`/mute` 时长、`/warn` 上限，以及两项全局开关——富文本输出和告警聊天；
 - 必加频道：选择频道、设置或清除私有邀请、停用频道检查。
+
+管理设置里的禁言时长必须能自行解除，因此不接受 0（永久）；单次 `/mute <时长>` 仍可覆盖该默认值。告警聊天用 Telegram 群组选择器指定，决定运维告警发往哪里；清除后恢复原有行为，即发到出问题的那个群。这两项全局开关只能从控制群修改，改完立即生效，无需重启。
 
 `delivery_mode` 的内置基线为 `both`，也可以在 `config.json` 中设置全局值或按群值。面板中的三个按钮按照当前 revision 提交按群稀疏覆盖值。选择与基线相同的值时，程序删除该覆盖值。其他提交同时修改该群组时，面板按相邻运行参数控件的相同规则结束会话并报告冲突。
 

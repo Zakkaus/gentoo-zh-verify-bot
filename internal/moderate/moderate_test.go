@@ -229,6 +229,8 @@ func testSettings(t *testing.T, cfg *config.Config) *store.Settings {
 		TimeoutSeconds:          store.BaselineValue[int]{Value: 240},
 		VerifyMaxFails:          store.BaselineValue[int]{Value: 3},
 		VerifyRetrySeconds:      store.BaselineValue[int]{Value: 180},
+		MuteSeconds:             store.BaselineValue[int]{Value: cfg.MuteSeconds},
+		WarnLimit:               store.BaselineValue[int]{Value: cfg.WarnLimit},
 		AntispamEnabled:         store.BaselineValue[bool]{Value: cfg.BlockChannelSenders},
 		Lang:                    store.BaselineValue[string]{Value: cfg.Lang},
 		ChannelWhitelist:        store.BaselineValue[[]int64]{Value: append([]int64(nil), cfg.ChannelWhitelist...)},
@@ -244,6 +246,7 @@ func testSettings(t *testing.T, cfg *config.Config) *store.Settings {
 		ControlGroupID: cfg.ControlGroupID,
 		Global: store.GlobalBaseline{
 			PrivateQueryPerMin: store.BaselineValue[int]{Value: 1},
+			AdminLogChatID:     store.BaselineValue[int64]{Value: cfg.AdminLogChatID},
 		},
 	}
 	for _, groupID := range groupIDs {

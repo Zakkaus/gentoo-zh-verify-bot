@@ -149,7 +149,7 @@ func (s *Service) LogGroupSetup(ctx context.Context, bot MemberLookup, selfID, g
 				break
 			}
 		}
-		targets := []int64{registrantID, s.cfg.AdminLogChatID, groupID}
+		targets := []int64{registrantID, s.adminLogChatID(), groupID}
 		seen := make(map[int64]bool, len(targets))
 		for _, target := range targets {
 			if target == 0 || seen[target] {
@@ -183,6 +183,27 @@ func (s *Service) isGroupAdmin(ctx context.Context, chatID, userID int64) bool {
 		return false
 	}
 	return ok
+}
+
+// Both moderation limits follow the group's own setting, falling back to the configured
+// default for a chat the settings store does not know.
+func (s *Service) warnLimit(groupID int64) int {
+	if group, ok := s.settings.Group(groupID); ok {
+		return group.WarnLimit().Value
+	}
+	return s.cfg.WarnLimit
+}
+
+func (s *Service) muteSeconds(groupID int64) int {
+	if group, ok := s.settings.Group(groupID); ok {
+		return group.MuteSeconds().Value
+	}
+	return s.cfg.MuteSeconds
+}
+
+// The alert destination is a live setting, so a panel change takes effect without a restart.
+func (s *Service) adminLogChatID() int64 {
+	return s.settings.Global().AdminLogChatID().Value
 }
 
 func (s *Service) notify(ctx context.Context, chatID int64, text string) {
@@ -248,7 +269,7 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 	if target == nil {
 		return nil
 	}
-	limit := s.cfg.WarnLimit
+	limit := s.warnLimit(groupID)
 	count := s.warnings.increment(groupID, target.ID)
 	// Persist immediately so a failed at-limit kick survives restart. A write failure keeps the
 	// in-memory count authoritative for this process; the store already logged the cause.
@@ -262,7 +283,7 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 			log.Printf("/warn kick %d in %d: %v", target.ID, groupID, err)
 			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Warning.LimitKickFailed.For(l))
 			// A failed limit kick must reach admins even without a configured admin log.
-			s.telegram.FailAlert(requestCtx, s.cfg.AdminLogChatID, groupID,
+			s.telegram.FailAlert(requestCtx, s.adminLogChatID(), groupID,
 				i18n.Messages.Moderate.Warning.LimitKickAlert.Render(l, displayName(target), limit, displayName(msg.From)))
 			return nil
 		}
@@ -275,7 +296,7 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 			outcome = i18n.Messages.Moderate.Warning.KickUnbanFailed.For(l)
 		}
 		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Warning.LimitReached.Render(l, displayName(target), limit, outcome, displayName(msg.From)))
-		s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
+		s.telegram.Alert(requestCtx, s.adminLogChatID(),
 			i18n.Messages.Moderate.Warning.KickAlert.Render(l, groupID, target.ID, displayName(target), displayName(msg.From)))
 		log.Printf("/warn-kick user=%d group=%d by=%d", target.ID, groupID, msg.From.ID)
 		return nil
@@ -338,7 +359,7 @@ func (s *Service) moderate(ctx *th.Context, update telego.Update, command string
 	if err := s.telegram.Ban(requestCtx, groupID, target.ID, seconds, revoke); err != nil {
 		log.Printf("%s ban user=%d in %d: %v", command, target.ID, groupID, err)
 		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Ban.Failed.For(l))
-		s.telegram.FailAlert(requestCtx, s.cfg.AdminLogChatID, groupID,
+		s.telegram.FailAlert(requestCtx, s.adminLogChatID(), groupID,
 			i18n.Messages.Moderate.Ban.FailureAlert.Render(l, command, groupID, target.ID, displayName(target), displayName(msg.From)))
 		return nil
 	}
@@ -349,7 +370,7 @@ func (s *Service) moderate(ctx *th.Context, update telego.Update, command string
 	}
 	action := i18n.Messages.Moderate.Ban.Action.Render(l, verb, banDurationStatus(l, seconds))
 	s.notify(requestCtx, groupID, i18n.Messages.Moderate.Ban.Applied.Render(l, action, displayName(target), target.ID, displayName(msg.From)))
-	s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
+	s.telegram.Alert(requestCtx, s.adminLogChatID(),
 		i18n.Messages.Moderate.Ban.Alert.Render(l, command, action, groupID, target.ID, displayName(target), displayName(msg.From)))
 	log.Printf("%s by admin=%d target=%d group=%d ban_secs=%d", command, msg.From.ID, target.ID, groupID, seconds)
 	return nil
@@ -369,11 +390,11 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 	if target == nil {
 		return nil
 	}
-	seconds := s.cfg.MuteSeconds
+	seconds := s.muteSeconds(groupID)
 	if arg := strings.TrimSpace(commandArg(msg.Text)); arg != "" {
 		parsed, ok := parseBanDuration(arg)
 		if !ok || parsed <= 0 {
-			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Mute.Usage.Render(l, banDurationStatus(l, s.cfg.MuteSeconds)))
+			s.notify(requestCtx, groupID, i18n.Messages.Moderate.Mute.Usage.Render(l, banDurationStatus(l, seconds)))
 			return nil
 		}
 		seconds = parsed
@@ -385,13 +406,13 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 		s.notify(requestCtx, groupID, failure)
 		alert := failure + "\n" + i18n.Messages.Moderate.Mute.Alert.Render(
 			l, banDurationStatus(l, seconds), groupID, target.ID, displayName(target), displayName(msg.From))
-		s.telegram.FailAlert(requestCtx, s.cfg.AdminLogChatID, groupID, alert)
+		s.telegram.FailAlert(requestCtx, s.adminLogChatID(), groupID, alert)
 		return nil
 	}
 	s.telegram.Delete(requestCtx, groupID, msg.ReplyToMessage.MessageID)
 	s.notify(requestCtx, groupID, i18n.Messages.Moderate.Mute.Applied.Render(l,
 		displayName(target), target.ID, banDurationStatus(l, seconds), displayName(msg.From)))
-	s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
+	s.telegram.Alert(requestCtx, s.adminLogChatID(),
 		i18n.Messages.Moderate.Mute.Alert.Render(l, banDurationStatus(l, seconds), groupID, target.ID, displayName(target), displayName(msg.From)))
 	log.Printf("/mute by admin=%d target=%d group=%d secs=%d", msg.From.ID, target.ID, groupID, seconds)
 	return nil

@@ -32,7 +32,7 @@ func (s *Service) channelWhitelisted(groupID, senderID int64) bool {
 }
 
 func (s *Service) isKnownChat(chatID int64) bool {
-	if s.settings.IsGroup(chatID) || s.cfg.AdminLogChatID == chatID {
+	if s.settings.IsGroup(chatID) || s.adminLogChatID() == chatID {
 		return true
 	}
 	for _, feed := range s.cfg.Feeds {
@@ -139,7 +139,7 @@ func (s *Service) FilterChannelSenders(ctx *th.Context, update telego.Update) er
 				banned = false
 				log.Printf("antispam: ban sender_chat %d in %d: %v", sender.ID, msg.Chat.ID, err)
 			}
-			s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
+			s.telegram.Alert(requestCtx, s.adminLogChatID(),
 				channelSenderAlert(l, banned, sender.Title, sender.ID, msg.Chat.ID))
 			log.Printf("antispam: channel sender %d (%q) in group %d deleted, banned=%v", sender.ID, sender.Title, msg.Chat.ID, banned)
 			return nil

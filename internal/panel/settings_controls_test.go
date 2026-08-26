@@ -59,6 +59,18 @@ func expectedVerificationScreen(panel *Panel, settings *store.Settings, group st
 			panel.sourceText(language, global.PrivateQueryPerMin().Source)))
 }
 
+func expectedModerationScreen(panel *Panel, settings *store.Settings, group store.GroupView, language i18n.Lang) string {
+	global := settings.Global()
+	return i18n.Messages.Panel.Settings.Screen.Moderation.Render(language, group.ID(),
+		panel.sourcedBool(language, group.AntispamEnabled()),
+		panel.sourcedSeconds(language, group.MuteSeconds(), false),
+		panel.sourcedLimit(language, group.WarnLimit()),
+		panel.sourcedBool(language, global.RichMessages()),
+		i18n.Messages.Panel.Settings.Value.Sourced.Render(language,
+			panel.alertChatText(language, global.AdminLogChatID().Value),
+			panel.sourceText(language, global.AdminLogChatID().Source)))
+}
+
 func expectedListScreen(panel *Panel, group store.GroupView, language i18n.Lang, kind inputKind) string {
 	values := panel.listValues(group, kind)
 	lines := make([]string, 0, len(values))
@@ -203,7 +215,8 @@ func testSettingsScreenContracts(t *testing.T) {
 				len(questions), len(fallbackQuestions), panel.sourcedLanguage(language, group.Lang())),
 			actions: []string{
 				action(panelTestGroupA, "go", "rt"), action(panelTestGroupA, "go", "ls"),
-				action(panelTestGroupA, "go", "vp"), action(panelTestGroupA, "go", "ct"),
+				action(panelTestGroupA, "go", "md"), action(panelTestGroupA, "go", "vp"),
+				action(panelTestGroupA, "go", "ct"),
 				action(panelTestGroupA, "go", "gl"), action(panelTestGroupA, "rf", "_"), action(panelTestGroupA, "cl", "_"),
 			},
 		},
@@ -241,6 +254,15 @@ func testSettingsScreenContracts(t *testing.T) {
 			actions: []string{
 				action(panelTestGroupA, "to", "_"), action(panelTestGroupA, "mf", "_"),
 				action(panelTestGroupA, "rc", "_"), action(panelTestGroupA, "pr", "_"), action(panelTestGroupA, "go", "gh"),
+			},
+		},
+		{
+			screen: "md", wantText: expectedModerationScreen(panel, settings, group, language),
+			actions: []string{
+				action(panelTestGroupA, "as", "_"), action(panelTestGroupA, "ms", "_"),
+				action(panelTestGroupA, "wl", "_"), action(panelTestGroupA, "rx", "_"),
+				action(panelTestGroupA, "al", "_"), action(panelTestGroupA, "ac", "_"),
+				action(panelTestGroupA, "go", "gh"),
 			},
 		},
 		{
@@ -549,6 +571,24 @@ func TestPanelNumericControlsMutateOnlyTargetRenderAndRejectStale(t *testing.T) 
 			},
 		},
 		{
+			name: "mute duration", screen: "md", field: "ms", input: "2h",
+			setGroup: func(next *store.GroupOverrides) { value := 7200; next.MuteSeconds = &value },
+			check: func(t *testing.T, settings *store.Settings) {
+				if got := panelTestGroup(t, settings).MuteSeconds().Value; got != 7200 {
+					t.Fatalf("mute seconds = %d", got)
+				}
+			},
+		},
+		{
+			name: "warning limit", screen: "md", field: "wl", input: "5",
+			setGroup: func(next *store.GroupOverrides) { value := 5; next.WarnLimit = &value },
+			check: func(t *testing.T, settings *store.Settings) {
+				if got := panelTestGroup(t, settings).WarnLimit().Value; got != 5 {
+					t.Fatalf("warn limit = %d", got)
+				}
+			},
+		},
+		{
 			name: "verification timeout", screen: "vp", field: "to", input: "300",
 			setGroup: func(next *store.GroupOverrides) { value := 300; next.TimeoutSeconds = &value },
 			check: func(t *testing.T, settings *store.Settings) {
@@ -604,8 +644,11 @@ func TestPanelNumericControlsMutateOnlyTargetRenderAndRejectStale(t *testing.T) 
 			assertGlobalOverrides(t, settings, globalWant)
 			tt.check(t, settings)
 			wantScreen := expectedRuntimeScreen(panel, group, i18n.LangEN)
-			if tt.screen == "vp" {
+			switch tt.screen {
+			case "vp":
 				wantScreen = expectedVerificationScreen(panel, settings, group, i18n.LangEN)
+			case "md":
+				wantScreen = expectedModerationScreen(panel, settings, group, i18n.LangEN)
 			}
 			if caller.lastEditText != wantScreen {
 				t.Fatalf("rendered %s screen = %q, want catalogue rendering %q", tt.screen, caller.lastEditText, wantScreen)

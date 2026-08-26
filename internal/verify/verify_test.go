@@ -1540,8 +1540,12 @@ func TestFailAlertFallsBackToGroup(t *testing.T) {
 	if fb.lastSendChat != -555 {
 		t.Errorf("with no admin-log chat, failAlert should post to the group, got chat %d", fb.lastSendChat)
 	}
-	v.cfg.AdminLogChatID = -999
-	v.failAlert(context.Background(), fb, -555, "x")
+	// The destination is a live setting: changing it in the panel must take effect at once.
+	target := int64(-999)
+	if _, err := v.settings.CommitGlobal(v.settings.Global().Revision(), store.GlobalOverrides{AdminLogChatID: &target}); err != nil {
+		t.Fatal(err)
+	}
+	v.failAlert(context.Background(), fb, -555, "y")
 	if fb.lastSendChat != -999 {
 		t.Errorf("with an admin-log chat set, failAlert should post there, got chat %d", fb.lastSendChat)
 	}

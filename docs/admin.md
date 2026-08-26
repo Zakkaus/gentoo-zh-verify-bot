@@ -59,14 +59,17 @@ The group picker lists only effective groups where the bot is still present and 
 
 ## Settings available in DM
 
-**Implementation:** package `internal/panel`, `(*Panel).dispatchRuntime`, `(*Panel).dispatchList`, and `(*Panel).dispatchVerificationParameters` in `internal/panel/settings_panel.go`; `(*Panel).dispatchChannel` in `internal/panel/settings_input.go`.
+**Implementation:** package `internal/panel`, `(*Panel).dispatchRuntime`, `(*Panel).dispatchList`, `(*Panel).dispatchModeration`, and `(*Panel).dispatchVerificationParameters` in `internal/panel/settings_panel.go`; `(*Panel).dispatchChannel` in `internal/panel/settings_input.go`.
 
 The panel exposes source provenance—runtime override, `config.json`, or built-in default—and edits these values:
 
 - runtime: verification enabled, challenge delivery (`group`, `dm`, or the default `both`), mode, name spoiler, ban duration, lookup auto-delete and TTL, and group language;
 - lists: sender-channel whitelist, trusted-member groups, and known/support chats;
 - verification parameters: timeout (30–1,800 seconds), maximum failures or off, cooldown or off, and the bot-wide private-DM query rate;
+- moderation: sender-channel blocking, `/mute` duration, `/warn` limit, and the two bot-wide switches — rich text and the alert chat;
 - required channel: select a channel, set or clear a private invite, or disable the gate.
+
+The moderation screen's mute duration must lift on its own, so a permanent (zero) value is rejected there; `/mute <duration>` still overrides it per call. The alert chat is picked with Telegram's chat picker and decides where operator alerts go; clearing it returns to the previous behaviour of posting in the group where the failure happened. Both bot-wide switches on that screen are editable only from the control group, and both take effect without a restart.
 
 `delivery_mode` has a built-in `both` baseline and can also be set globally or per group in `config.json`. The three panel buttons commit a sparse group override at the revision shown by the panel. Selecting the baseline value removes a baseline-equal override. A concurrent group commit ends the panel with the same conflict handling as the neighboring runtime controls.
 

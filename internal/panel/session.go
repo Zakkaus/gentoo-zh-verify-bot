@@ -36,6 +36,9 @@ const (
 	inputTrustedGroup     inputKind = "tg"
 	inputKnownChat        inputKind = "kc"
 	inputRequiredChannel  inputKind = "ci"
+	inputMuteDuration     inputKind = "md"
+	inputWarnLimit        inputKind = "wl"
+	inputAlertChat        inputKind = "al"
 )
 
 type pendingInput struct {

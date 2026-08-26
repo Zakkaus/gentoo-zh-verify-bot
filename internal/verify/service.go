@@ -1558,14 +1558,19 @@ func (v *Service) deleteChallenges(c context.Context, bot verifyBot, gid, uid in
 	v.deleteChallenge(c, bot, uid, messages.privateMsgID)
 }
 
+// The alert destination is a live setting, so a panel change takes effect without a restart.
+func (v *Service) adminLogChatID() int64 {
+	return v.settings.Global().AdminLogChatID().Value
+}
+
 func (v *Service) adminAlert(c context.Context, bot verifyBot, text string) {
-	v.verificationTransport(bot).Alert(c, v.cfg.AdminLogChatID, text)
+	v.verificationTransport(bot).Alert(c, v.adminLogChatID(), text)
 }
 
 // Failure notices fall back to the acting group when no admin-log chat is configured.
 // This keeps optimistic callback acknowledgements from hiding rare network failures.
 func (v *Service) failAlert(c context.Context, bot verifyBot, gid int64, text string) {
-	v.verificationTransport(bot).FailAlert(c, v.cfg.AdminLogChatID, gid, text)
+	v.verificationTransport(bot).FailAlert(c, v.adminLogChatID(), gid, text)
 }
 
 // Throttle unreadable-channel alerts per channel to avoid flooding operators.

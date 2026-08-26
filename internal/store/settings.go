@@ -71,6 +71,8 @@ type GroupBaseline struct {
 	TimeoutSeconds          BaselineValue[int]
 	VerifyMaxFails          BaselineValue[int]
 	VerifyRetrySeconds      BaselineValue[int]
+	MuteSeconds             BaselineValue[int]
+	WarnLimit               BaselineValue[int]
 	AntispamEnabled         BaselineValue[bool]
 	ChannelWhitelist        BaselineValue[[]int64]
 	TrustedMemberGroupIDs   BaselineValue[[]int64]
@@ -88,6 +90,7 @@ type GroupBaseline struct {
 type GlobalBaseline struct {
 	RichMessages       BaselineValue[bool]
 	PrivateQueryPerMin BaselineValue[int]
+	AdminLogChatID     BaselineValue[int64]
 }
 
 // SettingsBaseline is the immutable config.json and built-in baseline.
@@ -110,6 +113,8 @@ type GroupOverrides struct {
 	TimeoutSeconds          *int                    `json:"timeout_seconds,omitempty"`
 	VerifyMaxFails          *int                    `json:"verify_max_fails,omitempty"`
 	VerifyRetrySeconds      *int                    `json:"verify_retry_seconds,omitempty"`
+	MuteSeconds             *int                    `json:"mute_seconds,omitempty"`
+	WarnLimit               *int                    `json:"warn_limit,omitempty"`
 	AntispamEnabled         *bool                   `json:"antispam_enabled,omitempty"`
 	ChannelWhitelist        *[]int64                `json:"channel_whitelist,omitempty"`
 	TrustedMemberGroupIDs   *[]int64                `json:"trusted_member_group_ids,omitempty"`
@@ -125,8 +130,9 @@ type GroupOverrides struct {
 
 // GlobalOverrides is the sparse bot-wide settings.json record.
 type GlobalOverrides struct {
-	RichMessages       *bool `json:"rich_messages,omitempty"`
-	PrivateQueryPerMin *int  `json:"private_query_per_min,omitempty"`
+	RichMessages       *bool  `json:"rich_messages,omitempty"`
+	PrivateQueryPerMin *int   `json:"private_query_per_min,omitempty"`
+	AdminLogChatID     *int64 `json:"admin_log_chat_id,omitempty"`
 }
 
 // RegisteredGroup records an owner-authorized runtime group.
@@ -271,6 +277,8 @@ type effectiveGroup struct {
 	timeoutSeconds          Setting[int]
 	verifyMaxFails          Setting[int]
 	verifyRetrySeconds      Setting[int]
+	muteSeconds             Setting[int]
+	warnLimit               Setting[int]
 	antispamEnabled         Setting[bool]
 	channelWhitelist        Setting[[]int64]
 	trustedMemberGroupIDs   Setting[[]int64]
@@ -289,6 +297,7 @@ type effectiveGlobal struct {
 	overrides          GlobalOverrides
 	richMessages       Setting[bool]
 	privateQueryPerMin Setting[int]
+	adminLogChatID     Setting[int64]
 }
 
 type settingsSnapshot struct {
@@ -734,6 +743,8 @@ func (v GroupView) LookupAutoDeleteEnabled() Setting[bool] {
 func (v GroupView) TimeoutSeconds() Setting[int]      { return v.group.timeoutSeconds }
 func (v GroupView) VerifyMaxFails() Setting[int]      { return v.group.verifyMaxFails }
 func (v GroupView) VerifyRetrySeconds() Setting[int]  { return v.group.verifyRetrySeconds }
+func (v GroupView) MuteSeconds() Setting[int]         { return v.group.muteSeconds }
+func (v GroupView) WarnLimit() Setting[int]           { return v.group.warnLimit }
 func (v GroupView) AntispamEnabled() Setting[bool]    { return v.group.antispamEnabled }
 func (v GroupView) ChannelDisplay() Setting[string]   { return v.group.channelDisplay }
 func (v GroupView) ChannelInviteURL() Setting[string] { return v.group.channelInviteURL }
@@ -773,6 +784,11 @@ func (v GlobalView) RichMessages() Setting[bool] {
 }
 func (v GlobalView) PrivateQueryPerMin() Setting[int] {
 	return v.global.privateQueryPerMin
+}
+
+// AdminLogChatID is the chat that receives operator alerts; zero falls back to the acting group.
+func (v GlobalView) AdminLogChatID() Setting[int64] {
+	return v.global.adminLogChatID
 }
 func (v GlobalView) Overrides() GlobalOverrides {
 	return cloneGlobalOverrides(v.global.overrides)
@@ -927,6 +943,7 @@ func (s *Settings) buildSnapshot(state settingsFile) (*settingsSnapshot, error) 
 		overrides:          cloneGlobalOverrides(state.Global.GlobalOverrides),
 		richMessages:       resolve(state.Global.RichMessages, s.baseline.Global.RichMessages),
 		privateQueryPerMin: resolve(state.Global.PrivateQueryPerMin, s.baseline.Global.PrivateQueryPerMin),
+		adminLogChatID:     resolve(state.Global.AdminLogChatID, s.baseline.Global.AdminLogChatID),
 	}
 	if global.privateQueryPerMin.Value <= 0 {
 		return nil, fmt.Errorf("private query rate must be positive")
@@ -964,6 +981,8 @@ func buildEffectiveGroup(baseline GroupBaseline, record groupRecord, registered 
 		timeoutSeconds:        resolve(record.TimeoutSeconds, baseline.TimeoutSeconds),
 		verifyMaxFails:        resolve(record.VerifyMaxFails, baseline.VerifyMaxFails),
 		verifyRetrySeconds:    resolve(record.VerifyRetrySeconds, baseline.VerifyRetrySeconds),
+		muteSeconds:           resolve(record.MuteSeconds, baseline.MuteSeconds),
+		warnLimit:             resolve(record.WarnLimit, baseline.WarnLimit),
 		antispamEnabled:       resolve(record.AntispamEnabled, baseline.AntispamEnabled),
 		channelWhitelist:      resolveSlice(record.ChannelWhitelist, baseline.ChannelWhitelist, cloneInt64s),
 		trustedMemberGroupIDs: resolveSlice(record.TrustedMemberGroupIDs, baseline.TrustedMemberGroupIDs, cloneInt64s),
@@ -1040,6 +1059,7 @@ func validateBaselineSources(group GroupBaseline) error {
 		group.Enabled.Source, group.DeliveryMode.Source, group.VerifyMode.Source, group.NameSpoiler.Source,
 		group.BanSeconds.Source, group.LookupTTLSeconds.Source, group.LookupAutoDeleteEnabled.Source,
 		group.TimeoutSeconds.Source, group.VerifyMaxFails.Source, group.VerifyRetrySeconds.Source,
+		group.MuteSeconds.Source, group.WarnLimit.Source,
 		group.AntispamEnabled.Source, group.ChannelWhitelist.Source,
 		group.TrustedMemberGroupIDs.Source, group.KnownChatIDs.Source, group.RequiredChannelID.Source,
 		group.ChannelDisplay.Source, group.ChannelInviteURL.Source, group.Questions.Source,
@@ -1068,6 +1088,14 @@ func validateEffectiveGroup(group *effectiveGroup) error {
 	}
 	if group.lookupTTLSeconds.Source == SourceRuntime && group.lookupTTLSeconds.Value <= 0 {
 		return fmt.Errorf("lookup_ttl_seconds must be positive")
+	}
+	// A mute must stay timed and inside Telegram's range; a permanent mute is not offered.
+	if group.muteSeconds.Source == SourceRuntime &&
+		(group.muteSeconds.Value <= 0 || group.muteSeconds.Value != config.ClampBanSeconds(group.muteSeconds.Value)) {
+		return fmt.Errorf("mute_seconds %d is outside Telegram's supported range", group.muteSeconds.Value)
+	}
+	if group.warnLimit.Source == SourceRuntime && group.warnLimit.Value <= 0 {
+		return fmt.Errorf("warn_limit must be positive")
 	}
 	if group.timeoutSeconds.Source == SourceRuntime && (group.timeoutSeconds.Value < 30 || group.timeoutSeconds.Value > 1800) {
 		return fmt.Errorf("timeout_seconds must be between 30 and 1800")
@@ -1371,6 +1399,8 @@ func cloneGroupOverrides(value GroupOverrides) GroupOverrides {
 	out.VerifyMode = clonePtr(value.VerifyMode)
 	out.NameSpoiler = clonePtr(value.NameSpoiler)
 	out.BanSeconds = clonePtr(value.BanSeconds)
+	out.MuteSeconds = clonePtr(value.MuteSeconds)
+	out.WarnLimit = clonePtr(value.WarnLimit)
 	out.LookupTTLSeconds = clonePtr(value.LookupTTLSeconds)
 	out.LookupAutoDeleteEnabled = clonePtr(value.LookupAutoDeleteEnabled)
 	out.TimeoutSeconds = clonePtr(value.TimeoutSeconds)
@@ -1394,6 +1424,7 @@ func cloneGlobalOverrides(value GlobalOverrides) GlobalOverrides {
 	return GlobalOverrides{
 		RichMessages:       clonePtr(value.RichMessages),
 		PrivateQueryPerMin: clonePtr(value.PrivateQueryPerMin),
+		AdminLogChatID:     clonePtr(value.AdminLogChatID),
 	}
 }
 
@@ -1403,6 +1434,8 @@ func compactGroupOverrides(value GroupOverrides, baseline GroupBaseline) GroupOv
 	value.VerifyMode = omitBaseline(value.VerifyMode, baseline.VerifyMode.Value)
 	value.NameSpoiler = omitBaseline(value.NameSpoiler, baseline.NameSpoiler.Value)
 	value.BanSeconds = omitBaseline(value.BanSeconds, baseline.BanSeconds.Value)
+	value.MuteSeconds = omitBaseline(value.MuteSeconds, baseline.MuteSeconds.Value)
+	value.WarnLimit = omitBaseline(value.WarnLimit, baseline.WarnLimit.Value)
 	value.LookupTTLSeconds = omitBaseline(value.LookupTTLSeconds, baseline.LookupTTLSeconds.Value)
 	value.LookupAutoDeleteEnabled = omitBaseline(value.LookupAutoDeleteEnabled, baseline.LookupAutoDeleteEnabled.Value)
 	value.TimeoutSeconds = omitBaseline(value.TimeoutSeconds, baseline.TimeoutSeconds.Value)
@@ -1425,6 +1458,7 @@ func compactGroupOverrides(value GroupOverrides, baseline GroupBaseline) GroupOv
 func compactGlobalOverrides(value GlobalOverrides, baseline GlobalBaseline) GlobalOverrides {
 	value.RichMessages = omitBaseline(value.RichMessages, baseline.RichMessages.Value)
 	value.PrivateQueryPerMin = omitBaseline(value.PrivateQueryPerMin, baseline.PrivateQueryPerMin.Value)
+	value.AdminLogChatID = omitBaseline(value.AdminLogChatID, baseline.AdminLogChatID.Value)
 	return value
 }
 
