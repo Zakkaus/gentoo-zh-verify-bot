@@ -471,6 +471,35 @@ func (v *Service) timeout(groupID int64) time.Duration {
 	return v.gateTimeout(groupID, gateRequest)
 }
 
+// livePending returns the unfinished verification for this exact group and member, if any.
+func (v *Service) livePending(gid, uid int64) (*pending, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	if !ok || p.done {
+		return nil, false
+	}
+	return p, true
+}
+
+// removeDuringCooldown takes a member out again without starting a verification they are not yet
+// allowed to attempt. The notice is throttled: a rejoin loop must not become a direct-message
+// loop, and the removal alone already conveys the answer.
+func (v *Service) removeDuringCooldown(c context.Context, bot modBot, gid, uid int64, l i18n.Lang, wait time.Duration) {
+	if err := v.removeMember(c, bot, gid, uid); err != nil {
+		log.Printf("post-join verify: cannot remove %d from %d during cooldown: %v", uid, gid, err)
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		return
+	}
+	log.Printf("post-join verify: %d rejoined %d during the failure cooldown (%s left); removed again", uid, gid, wait.Round(time.Second))
+	if !v.challengeResendOK(gid, uid) {
+		return
+	}
+	text := v.messages.Verification.Held.CooldownActive.Render(l, durationSecondsCeil(wait))
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
+}
+
 // verifyInvited reports whether a member somebody else added still has to verify here.
 func (v *Service) verifyInvited(groupID int64) bool {
 	group, ok := v.groupSettings(groupID)
@@ -543,6 +572,9 @@ func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID
 	seconds := int(v.gateTimeout(groupID, gateMute)/time.Second) + muteGraceSeconds
 	if err := v.verificationTransport(bot).Mute(ctx, groupID, userID, seconds); err != nil {
 		log.Printf("post-join verify: cannot mute %d in %d (%v); the challenge continues unheld", userID, groupID, err)
+		return
+	}
+	if p == nil {
 		return
 	}
 	v.mu.Lock()
@@ -1021,6 +1053,21 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	invited := member.From.ID != uid
 	if invited && !v.verifyInvited(gid) {
 		log.Printf("post-join verify: %d was invited into %d and invited members are exempt here", uid, gid)
+		return nil
+	}
+	// A member already being verified must not be re-challenged by a second arrival: rejoining
+	// would otherwise post a fresh notice and question every time. Re-apply the hold, since
+	// leaving the group clears it, and leave the running deadline alone so nobody can extend
+	// their own window by walking in and out.
+	if live, ok := v.livePending(gid, uid); ok {
+		v.holdMember(c, bot, gid, uid, member.Chat.Type == telego.ChatTypeSupergroup, live)
+		log.Printf("post-join verify: %d rejoined %d while still being verified; kept the running challenge", uid, gid)
+		return nil
+	}
+	// The bot tells a removed member how long to wait. Honour it, or that promise means nothing
+	// and every rejoin costs a fresh notice and question.
+	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
+		v.removeDuringCooldown(c, bot, gid, uid, applicantLang, wait)
 		return nil
 	}
 	supergroup := member.Chat.Type == telego.ChatTypeSupergroup
@@ -1974,18 +2021,25 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 		// group rather than announcing an outcome the bot did not produce.
 		log.Printf("approve %d in %d: join request is already gone: %v", uid, gid, err)
 		member, known := v.chatMemberState(c, bot, gid, uid)
+		if known && member {
+			v.notePassed(gid, uid) // before the terminal marker goes, as in the confirmed path
+		}
 		v.finishTerminal(gid, uid, p)
 		v.deleteChallenges(c, bot, gid, uid, p.messages())
 		if known && member {
 			v.clearVerifyFails(gid, uid)
 			v.recordDecision(true)
-			v.notePassed(gid, uid)
 			v.save()
 			return approveConfirmed
 		}
 		v.save()
 		return approveGone
 	}
+	// Record the pass before the terminal marker is released. Approving produces a membership
+	// update of its own, and it can be handled while the calls below are still in flight; until
+	// the marker goes the terminal claim blocks a second verification, and from then on this
+	// record does. Leaving a gap between them re-challenges the person just admitted.
+	v.notePassed(gid, uid)
 	v.mu.Lock()
 	key := pkey{gid, uid}
 	if cur, ok := v.pend[key]; ok && cur == p {
@@ -1996,7 +2050,6 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 	v.clearVerifyFails(gid, uid) // verified successfully — reset any failure strikes
 	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	v.recordDecision(true)
-	v.notePassed(gid, uid)
 	v.save()
 	log.Printf("approve user=%d group=%d", uid, gid)
 	return approveConfirmed
@@ -2224,6 +2277,7 @@ func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, 
 			return approveFailed
 		}
 	}
+	v.notePassed(gid, uid)
 	v.finishTerminal(gid, uid, p)
 	v.clearVerifyFails(gid, uid)
 	v.deleteChallenges(c, bot, gid, uid, p.messages())

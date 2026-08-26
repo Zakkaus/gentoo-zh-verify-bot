@@ -815,6 +815,27 @@ func (b *fakeVerifyBot) Call(ctx context.Context, url string, data *ta.RequestDa
 			return nil, err
 		}
 		return fakeTelegramResponse(nil, b.BanChatMember(ctx, &params))
+	case "unbanChatMember":
+		var params telego.UnbanChatMemberParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		return fakeTelegramResponse(nil, b.Unban(ctx, params.ChatID.ID, params.UserID, params.OnlyIfBanned))
+	case "restrictChatMember":
+		var params telego.RestrictChatMemberParams
+		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {
+			return nil, err
+		}
+		if params.Permissions.CanSendMessages != nil && *params.Permissions.CanSendMessages {
+			return fakeTelegramResponse(nil, b.Unmute(ctx, params.ChatID.ID, params.UserID))
+		}
+		return fakeTelegramResponse(nil, b.Mute(ctx, params.ChatID.ID, params.UserID, 0))
+	case "getChat":
+		return fakeTelegramResponse(&telego.ChatFullInfo{
+			ID:          -100,
+			Type:        telego.ChatTypeSupergroup,
+			Permissions: &telego.ChatPermissions{CanSendMessages: boolPtr(true)},
+		}, nil)
 	case "deleteMessage":
 		var params telego.DeleteMessageParams
 		if err := json.Unmarshal(data.BodyRaw, &params); err != nil {

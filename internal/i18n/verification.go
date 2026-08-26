@@ -33,6 +33,7 @@ func (q Question) For(l Lang) (string, []string) {
 // passing lifts a restriction and failing removes them rather than settling a join request.
 type VerificationHeldCatalog struct {
 	Passed          Text
+	CooldownActive  Format
 	AlreadyHandled  Text
 	SettlePending   Text
 	DeferralExpired Text

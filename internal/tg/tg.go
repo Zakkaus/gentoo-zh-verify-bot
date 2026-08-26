@@ -413,6 +413,11 @@ func (c *Client) fetchAdmin(ctx context.Context, key adminKey) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if member == nil {
+		// A success with no member is not an answer. Reading it would panic and take the whole
+		// process down, so report it as an unreadable lookup and let the caller fail closed.
+		return false, errors.New("get chat member returned no result")
+	}
 	status := member.MemberStatus()
 	isAdmin := status == telego.MemberStatusCreator || status == telego.MemberStatusAdministrator
 	c.adminMu.Lock()

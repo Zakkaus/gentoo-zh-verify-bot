@@ -325,3 +325,52 @@ func TestVerifyInvitedDefaultsOn(t *testing.T) {
 		t.Error("a group that switched it off must be honoured")
 	}
 }
+
+// deleteProbe records whether a just-admitted applicant would be re-challenged at the moment the
+// bot is still cleaning up after admitting them. Approving produces a membership update of its
+// own, and handlers run concurrently, so that moment is reachable.
+type deleteProbe struct {
+	*fakeVerifyBot
+	v        *Service
+	gid, uid int64
+	seen     []bool
+}
+
+func (b *deleteProbe) Delete(ctx context.Context, chatID int64, messageID int) {
+	b.seen = append(b.seen, b.v.recentlyPassed(b.gid, b.uid))
+	b.fakeVerifyBot.Delete(ctx, chatID, messageID)
+}
+
+// Admitting somebody must never leave a window in which the bot reads its own approval as a new
+// arrival: it would mute the person it just let in and hand them another question.
+func TestAdmissionLeavesNoWindowToRechallenge(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gate string
+	}{
+		{name: "join request approved", gate: gateRequest},
+		{name: "hold lifted", gate: gateMute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newTestService(&config.Config{})
+			gid, uid := int64(-100), int64(21)
+			probe := &deleteProbe{fakeVerifyBot: &fakeVerifyBot{}, v: v, gid: gid, uid: uid}
+			p := &pending{gate: tc.gate, held: tc.gate == gateMute, nonce: "n", lang: i18n.LangEN,
+				deadline: time.Now().Add(time.Hour), groupMsgID: 1, privateMsgID: 2}
+			v.pend[pkey{gid, uid}] = p
+
+			if got := v.executeApprove(context.Background(), probe, gid, uid, p); got != approveConfirmed {
+				t.Fatalf("approve outcome = %v, want approveConfirmed", got)
+			}
+			if len(probe.seen) == 0 {
+				t.Fatal("the cleanup that opens the window did not run")
+			}
+			for i, passed := range probe.seen {
+				if !passed {
+					t.Errorf("cleanup step %d ran while the admission was still invisible; a membership "+
+						"update handled here would mute and re-question the person just admitted", i)
+				}
+			}
+		})
+	}
+}

@@ -143,6 +143,7 @@
     "ai_caught": "❌ That reply tripped the automated-answer check, so you were removed from the group. Join again in %[1]d seconds and verify in person.",
     "ai_caught_no_wait": "❌ That reply tripped the automated-answer check, so you were removed from the group. Join again and verify in person.",
     "already_handled": "This verification was already settled, or it cannot continue right now. Check your status in the group.",
+    "cooldown_active": "⚠️ Your last verification failure is still in its cooldown, so you were removed again. Join again in %[1]d seconds and verify.",
     "deferral_expired": "The bot could not reach Telegram for a long time, so verification never finished and you were removed from the group. You may join again and verify.",
     "passed": "✅ Verified. You can post in the group now.",
     "settle_pending": "⚠️ The bot cannot finish handling this yet. Please wait.",
