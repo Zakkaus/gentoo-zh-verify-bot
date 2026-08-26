@@ -44,21 +44,21 @@
     "unauthorized_chat": "🚪 已自動退出未授權聊天：%[1]s（ID：%[2]d，類型：%[3]s）。"
   },
   "direct_message": {
-    "auto_reply": "👋 這是 Gentoo 中文社群的加入群組驗證與 Gentoo/Linux 助手機器人。\n\n• 申請加入群組：請在群組提出加入申請。請回答機器人傳送到此私訊的驗證題，或點選機器人在群組內傳送的訊息中的「✅ 開始驗證」。\n• 查詢指令（/pkg /use /bug /news /wiki /bbs /pkgs /arm /armpkgs）也可在私訊中使用。私訊每分鐘最多 %[1]d 次，群組內不限次數。\n• 審核與管理指令僅可在群組內使用。"
+    "auto_reply": "👋 本機器人提供 Gentoo 中文社群的加入群組驗證與 Gentoo/Linux 輔助功能。\n\n• 申請加入群組：請在群組提出加入申請。請回答機器人傳送至此私訊的驗證題，或點選群組內機器人訊息中的「✅ 開始驗證」。\n• 查詢指令也可在私訊中使用，完整清單見 /help。私訊每分鐘最多 %[1]d 次，群組內不限次數。\n• 審核與管理指令僅可在群組內使用。"
   },
   "registration": {
     "owner_claimed": "部署者身分已綁定。現在可以新增群組。",
-    "owner_claim_refused": "這個擁有者認領連結無效、已使用或已過期。",
-    "owner_claim_save_failed": "無法儲存擁有者認領狀態。請恢復服務狀態目錄的寫入權限，然後重試同一連結。",
-    "enrollment_owner_only": "只有機器人擁有者可以建立群組登記連結。",
+    "owner_claim_refused": "該擁有者認領連結無效、已使用或已過期。",
+    "owner_claim_save_failed": "無法儲存擁有者認領狀態。請恢復服務狀態目錄的寫入權限後，使用相同連結重試。",
+    "enrollment_owner_only": "僅機器人擁有者可建立群組登記連結。",
     "enrollment_link": "群組登記連結（%[1]d 分鐘內有效且只能使用一次）：\n%[2]s",
-    "enrollment_refused": "這個群組登記連結無效、已使用或已過期。機器人將退出該群組。",
+    "enrollment_refused": "該群組登記連結無效、已使用或已過期。機器人將退出該群組。",
     "registration_pending": "已授權登記群組「%[1]s」。請將機器人提升為管理員並授予所需權限。提升後會自動完成登記。",
     "group_registered": "已登記群組「%[1]s」。請在該群組中執行 /settings。",
     "registration_save_failed": "無法持久儲存群組登記。機器人將退出該群組；請檢查服務狀態目錄。",
-    "unregister_owner_only": "只有機器人擁有者可以取消登記執行階段群組。",
+    "unregister_owner_only": "僅機器人擁有者可取消登記執行階段群組。",
     "unregister_refused": "無法取消登記該群組。請使用 /unregister <group-id> 指定已登記的執行階段群組 ID。",
-    "unregister_save_failed": "無法持久儲存群組移除結果。請恢復服務狀態目錄的寫入權限，然後重試。",
+    "unregister_save_failed": "無法持久儲存群組移除結果。請恢復服務狀態目錄的寫入權限後重試。",
     "group_unregistered": "已取消登記群組「%[1]s」，並刪除其執行階段設定。"
   }
 }

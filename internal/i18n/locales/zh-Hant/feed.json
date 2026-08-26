@@ -13,6 +13,6 @@
     "creation_date": "建立日期"
   },
   "config": {
-    "control_group_only": "⛔ 此指令只能在控制群組（ID %[1]d）中使用。"
+    "control_group_only": "⛔ 此指令僅可在控制群組（ID %[1]d）中使用。"
   }
 }

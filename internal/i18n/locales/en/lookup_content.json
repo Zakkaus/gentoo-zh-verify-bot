@@ -1,6 +1,6 @@
 {
   "bug": {
-    "usage": "Usage: /bug <number>. Example: /bug 900000.",
+    "usage": "Usage: /{g}bug <number>. Example: /{g}bug 900000.",
     "not_found": "❓ Bug %[1]s does not exist. Check the bug number and try again.",
     "unavailable": "❓ Bug %[1]s details are temporarily unavailable. Try again later or view the bug directly: %[2]s",
     "heading": "🐞 <a href=\"%[1]s\">Bug %[2]s</a>\n%[3]s\n",
@@ -63,7 +63,7 @@
     "no_matches": "\n\nNo matching pages found. Try different keywords."
   },
   "bbs": {
-    "usage": "Usage: /bbs <keywords>. Example: /bbs nvidia black screen. Search Linux forums, showing Chinese results first.",
+    "usage": "Usage: /{g}bbs <keywords>. Example: /{g}bbs nvidia black screen. Search Linux forums, showing Chinese results first.",
     "heading": "💬 Forum results for <b>%[1]s</b>",
     "arch_cn_heading": "\n\n<b>Arch Linux CN Forum</b>",
     "arch_cn_unavailable": "\n\nArch Linux CN Forum results are temporarily unavailable. Try again later.",

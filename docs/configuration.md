@@ -82,7 +82,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | `private_query_per_min` | `3` | Per-user direct-message query rate. |
 | `rich_messages` | `false` | Rich Bot API output with an HTML fallback. |
 | `private_reply` | built-in | Reply to non-command direct messages. |
-| `overlays` | `gentoo-zh/overlay`, `gentoo/guru` | Overlays searched by `/pkg`. |
+| `overlays` | `gentoo-zh/overlay`, `gentoo/guru` | Overlays searched by `/pkg` (`/gpkg` in the general edition). |
 | `news_url` | gentoo.org news items | Source for `/news` (`/gnews` in the general edition). |
 | `user_agent` | `gentoo-zh-verify-bot` | Outbound HTTP User-Agent. |
 | `stats_timezone` | `Asia/Shanghai` | Day boundary for `/stats`. |

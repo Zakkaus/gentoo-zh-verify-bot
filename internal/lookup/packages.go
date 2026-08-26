@@ -1439,7 +1439,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		var b strings.Builder
 		b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
 		for _, a := range atoms {
-			fmt.Fprintf(&b, "\n • /use %s", a)
+			fmt.Fprintf(&b, "\n • /%suse %s", i18n.CommandPrefix, a)
 		}
 		if availability.anyUnavailable() {
 			fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))

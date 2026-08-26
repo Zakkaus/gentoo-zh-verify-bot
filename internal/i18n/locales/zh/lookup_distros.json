@@ -36,7 +36,7 @@
   },
   "kernel": {
     "eol": "（已停止维护）",
-    "footer": "验证入群时请发送本机实际运行的版本号，而不是这里的版本号。",
+    "footer": "验证入群时请发送本机实际运行的版本号，而不是列表中的版本号。",
     "heading": "🐧 <a href=\"https://www.kernel.org/\">kernel.org</a> 当前发布版本：",
     "row": "%[1]s <b>%[2]s</b>　%[3]s",
     "unavailable": "⚠️ 暂时无法读取 kernel.org 的版本信息。请稍后重试。"

@@ -97,10 +97,12 @@ Three environment variables exist. `BOT_TOKEN` is required; `GITHUB_TOKEN` raise
 | Registered group or private chat | `/pkg`, `/use`, `/arm` | Query Gentoo packages, USE flags, and `arm64` keyword status. |
 | Registered group or private chat | `/bug`, `/news`, `/wiki`, `/bbs` | Query Gentoo Bugzilla, Gentoo news, Gentoo Wiki, ArchWiki, and Arch Linux CN. |
 | Registered group or private chat | `/pkgs`, `/distro`, `/armpkgs` | Compare package versions or `arm64` support across distributions; `/distro` is an alias for `/pkgs`. |
+| Registered group or private chat | `/kernel`, `/man`, `/cve`, `/repology` | Look up kernel.org release versions, Linux manual pages, CVE identifiers, and package versions across distribution repositories. |
 | Administrator in a registered group | `/mute [duration]`, `/unmute`, `/ban`, `/sb`, `/warn`, `/clearwarn` | Reply to the target message, then mute, ban, purge, or warn that user. |
 | Administrator in a registered group | `/start`, `/stop`, `/settings`, `/bantime`, `/bc`, `/spoiler`, `/vmode`, `/autodel` | Change verification, moderation, and message policy for the current group; runtime values are written to `settings.json`. |
 | Administrator in the control group | `/rich` | Change bot-wide rich output for `/pkg` and `/use`. |
 | Owner in a private chat | `/enroll`, `/unregister <group-id>` | Issue a group enrollment link or remove a runtime-registered group. |
+Command names above are the Gentoo edition's. In `gentoo-zhbot` the six Gentoo lookups are `/gpkg`, `/guse`, `/gbug`, `/gnews`, `/gbbs`, and `/garm`; every other name is the same, and `/rich` governs `/gpkg` and `/guse` there.
 
 External lookups in private chats are limited per user to `private_query_per_min` requests per minute; registered groups are unlimited. `/start` also carries the owner-claim, group-enrollment, verification, and settings-panel deep links; each link type is accepted only in its corresponding private-chat or group scope.
 
