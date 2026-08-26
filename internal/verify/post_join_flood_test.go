@@ -111,3 +111,28 @@ func TestCooldownNoticeIsThrottledOnBothGates(t *testing.T) {
 		t.Errorf("cooldown notices = %d, want 1", fb.sends)
 	}
 }
+
+// An administrator adding somebody outranks a cooldown from an earlier failure. Throwing them
+// out seconds after the administrator put them in would be the bot overruling that decision;
+// they still have to verify.
+func TestAdminAddedMemberIsNotRemovedForAnOldCooldown(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}, VerifyRetrySeconds: 180})
+	v.botUsername = "bot"
+	fb := &fakeVerifyBot{member: &telego.ChatMemberMember{Status: telego.MemberStatusMember}}
+	t.Cleanup(v.stopForShutdown)
+	v.recordVerifyFail(-100, 5, v.wallNow())
+
+	added := joinUpdate(-100, 5, telego.ChatTypeSupergroup, nil)
+	added.ChatMember.From = telego.User{ID: 42} // an administrator, not the member
+	runFakeHandler(t, newAPITestBot(t, fb), v.OnMemberJoined, added)
+
+	if fb.bans != 0 {
+		t.Errorf("bans = %d, want 0: the administrator just added them", fb.bans)
+	}
+	v.mu.Lock()
+	pending := len(v.pend)
+	v.mu.Unlock()
+	if pending != 1 {
+		t.Errorf("pending verifications = %d, want 1: being vouched for is not verification", pending)
+	}
+}

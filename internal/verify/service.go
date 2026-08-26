@@ -1090,8 +1090,11 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	// The bot tells a removed member how long to wait. Honour it, or that promise means nothing
-	// and every rejoin costs a fresh notice and question.
-	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
+	// and every rejoin costs a fresh notice and question. Somebody an administrator just added is
+	// exempt: removing them seconds later would be the bot overruling the person who added them.
+	// They still verify — being vouched for is not verification — they are just not thrown out
+	// over an earlier failure.
+	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 && !invited {
 		v.removeDuringCooldown(c, bot, gid, uid, applicantLang, wait)
 		return nil
 	}
