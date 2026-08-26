@@ -189,6 +189,7 @@ type pendingRec struct {
 	Invited            bool     `json:"invited,omitempty"`             // the member was added by somebody else
 	Held               bool     `json:"held,omitempty"`                // a verification mute is in place
 	HoldUntil          int64    `json:"hold_until,omitempty"`          // Unix expiry of the mute this verification placed
+	ChannelUnreadable  bool     `json:"channel_unreadable,omitempty"`  // the last required-channel reading failed
 	Passing            bool     `json:"passing,omitempty"`             // answered correctly; the settlement retry must approve
 	SettleFailures     int      `json:"settle_failures,omitempty"`     // consecutive unconfirmed settlements; bounds the retry
 	SettlePendingSaid  bool     `json:"settle_pending_said,omitempty"` // the "still being settled" notice was already sent
@@ -1253,6 +1254,9 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	v.deleteChallenges(c, bot, gid, uid, oldMessages)
+	// Persist before restricting anyone. A crash between the two would otherwise leave a member
+	// silenced by a verification no restart knows about.
+	v.save()
 	v.holdMember(c, bot, gid, uid, supergroup, p)
 
 	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name, p)
