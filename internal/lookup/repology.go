@@ -83,7 +83,7 @@ func repologyByFamily(pkgs []repologyPkg) (entries []repologyEntry, others int) 
 			unnamed[p.Repo] = true
 			continue
 		}
-		if current, ok := newest[family]; !ok || betterVer(p.Version, current) {
+		if current, ok := newest[family]; !ok || betterVer(current, p.Version) {
 			newest[family] = p.Version
 		}
 	}

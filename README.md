@@ -13,7 +13,7 @@ One codebase, two binaries. They differ only in who gets the unqualified command
 | `gentoo-zh-verify-bot` | the Gentoo-zh Community | `/pkg` `/use` `/bug` `/news` `/bbs` `/arm` |
 | `gentoo-zhbot` | Linux communities in general | `/gpkg` `/guse` `/gbug` `/gnews` `/gbbs` `/garm` |
 
-Everything else is identical, including verification, moderation, the settings panel, and the cross-distribution lookups `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel`. A group running Arch or Debian keeps `/pkg` free for whatever it wants to bind it to, and can still ask a Gentoo question when one comes up.
+Everything else is identical, including verification, moderation, the settings panel, and the lookups every Linux community shares: `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. A group running Arch or Debian keeps `/pkg` free for whatever it wants to bind it to, and can still ask a Gentoo question when one comes up.
 
 Build the Gentoo edition with `-tags gentoo`; the default build is the general one. Both are published on every release, for `amd64` and `arm64`.
 

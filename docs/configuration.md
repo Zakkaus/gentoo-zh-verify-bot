@@ -22,7 +22,8 @@ verification on/off · challenge delivery · verification mode · applicant-name
 
 `gentoo-zh-verify-bot` is built with `-tags gentoo` and gives the Gentoo lookups the short names
 `/pkg` `/use` `/bug` `/news` `/bbs` `/arm`. `gentoo-zhbot` is the default build for Linux
-communities in general and prefixes those with `g`, leaving `/pkg` free. Nothing else differs,
+communities in general and prefixes those with `g`, leaving `/pkg` free. Both answer `/pkgs`
+`/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. Nothing else differs,
 and no setting selects between them: the choice is which binary you install.
 
 ## Fields

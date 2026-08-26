@@ -13,7 +13,7 @@
 | `gentoo-zh-verify-bot` | Gentoo 中文社区 | `/pkg` `/use` `/bug` `/news` `/bbs` `/arm` |
 | `gentoo-zhbot` | 一般 Linux 社区 | `/gpkg` `/guse` `/gbug` `/gnews` `/gbbs` `/garm` |
 
-其余完全相同，包括验证、群组管理、设置面板，以及跨发行版查询 `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel`。运行 Arch 或 Debian 的群组因此保留了 `/pkg` 这个名字，同时仍然可以在需要时查询 Gentoo。
+其余完全相同，包括验证、群组管理、设置面板，以及所有 Linux 社区共用的查询：`/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`。运行 Arch 或 Debian 的群组因此保留了 `/pkg` 这个名字，同时仍然可以在需要时查询 Gentoo。
 
 Gentoo 版用 `-tags gentoo` 构建，默认构建即通用版。每次发布同时提供两者的 `amd64` 与 `arm64` 二进制。
 

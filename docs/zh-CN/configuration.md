@@ -22,7 +22,8 @@
 
 `gentoo-zh-verify-bot` 用 `-tags gentoo` 构建，Gentoo 查询使用短名 `/pkg` `/use` `/bug` `/news`
 `/bbs` `/arm`。`gentoo-zhbot` 是面向一般 Linux 社区的默认构建，上述命令加 `g` 前缀，`/pkg`
-留给群组自己使用。其余没有差别，也没有任何配置项在两者之间切换：选择的是安装哪个二进制。
+留给群组自己使用。两者都提供 `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve`
+`/repology`。其余没有差别，也没有任何配置项在两者之间切换：选择的是安装哪个二进制。
 
 ## 字段
 
