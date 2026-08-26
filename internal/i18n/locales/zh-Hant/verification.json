@@ -64,7 +64,23 @@
     "no_linux_retry": "請回覆 <code>無 Linux 裝置</code>，並在同一則訊息中附上目前的分鐘數。分鐘數是時鐘冒號後的兩位數字，例如 14:46 對應 <code>46</code>。本次不會扣減機會；格式仍不正確時，將按錯誤回答處理。",
     "os_mixed": "你的回覆提到其他作業系統。若該版本號來自本機執行的 Linux 核心（如 WSL 或虛擬機器），請只傳送該版本號。本次不會扣減機會。",
     "quiz_prompt": "請回答以下問題，完成加入群組驗證：\n\n❓ %[1]s",
-    "sample_copied": "你傳送的是範例版本號，不是本機版本號。請在終端機執行 <code>uname -r</code>，並傳送實際輸出。本次不會扣減機會；再次傳送範例版本號時，將按錯誤回答處理。"
+    "sample_copied": "你傳送的是範例版本號，不是本機版本號。請在終端機執行 <code>uname -r</code>，並傳送實際輸出。本次不會扣減機會；再次傳送範例版本號時，將按錯誤回答處理。",
+    "fallback_questions_generic": [
+      {
+        "prompt": "Linux 核心官方網站的網域名稱是什麼？",
+        "answers": [
+          "kernel.org",
+          "www.kernel.org"
+        ]
+      },
+      {
+        "prompt": "GNU 專案官方網站的網域名稱是什麼？",
+        "answers": [
+          "gnu.org",
+          "www.gnu.org"
+        ]
+      }
+    ]
   },
   "channel": {
     "continue_button": "✅ 我已加入，繼續驗證",

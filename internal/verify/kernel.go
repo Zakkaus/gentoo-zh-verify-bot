@@ -347,7 +347,7 @@ func (v *Service) fallbackQuestion(groupID int64, l i18n.Lang) (string, []string
 		question := questions[cryptoIntn(len(questions))]
 		return question.Q, question.Answers
 	}
-	builtin := v.messages.Verification.Challenge.FallbackQuestions
+	builtin := v.messages.Verification.Challenge.BuiltinFallback()
 	return builtin[cryptoIntn(len(builtin))].For(l)
 }
 

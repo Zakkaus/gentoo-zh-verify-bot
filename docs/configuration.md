@@ -51,7 +51,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | `verify_invited` | `true` | Whether a member somebody else added still has to verify. |
 | `ban_seconds` | `0` (permanent) | Automatic-ban duration. |
 | `questions` | none | Quiz bank. There is no built-in one: with an empty bank `verify_mode: quiz` falls back to `kernel`. See [`examples/quiz-bank.json`](../examples/quiz-bank.json). |
-| `fallback_questions` | built-in | Short-answer bank for applicants with no Linux machine. See [`examples/fallback-questions.json`](../examples/fallback-questions.json). |
+| `fallback_questions` | built-in (differs by edition) | Short-answer bank for applicants with no Linux machine. Left empty, the built-in bank is used: the Gentoo edition asks about gentoozh.org and gentoo.org, the general edition about kernel.org and gnu.org. See [`examples/fallback-questions.json`](../examples/fallback-questions.json). |
 
 ### Required channel
 

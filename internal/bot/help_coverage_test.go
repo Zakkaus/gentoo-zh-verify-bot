@@ -128,3 +128,43 @@ func TestDMRejectsUnregisteredCommand(t *testing.T) {
 		}
 	}
 }
+
+// A build that is not the Gentoo edition must not present itself as the Gentoo-zh Community's
+// bot, and must not ask joiners about that community's website.
+func TestGenericBuildClaimsNoCommunity(t *testing.T) {
+	if i18n.CommandPrefix == "" {
+		t.Skip("the Gentoo build is the Gentoo-zh Community's bot")
+	}
+	for _, l := range helpLocales {
+		reply := i18n.Messages.Bot.DirectMessage.AutoReply.Render(l, 5, i18n.Messages.Bot.DirectMessage.Who(l))
+		for _, claim := range []string{"Gentoo-zh", "Gentoo 中文社区", "Gentoo 中文社群", "gentoozh"} {
+			if strings.Contains(reply, claim) {
+				t.Errorf("%s: the generic build's direct-message reply claims %q", helpLocaleName[l], claim)
+			}
+		}
+		for _, q := range i18n.Messages.Verification.Challenge.BuiltinFallback() {
+			prompt, answers := q.For(l)
+			for _, claim := range []string{"Gentoo", "gentoozh"} {
+				if strings.Contains(prompt, claim) {
+					t.Errorf("%s: the generic build's built-in question asks about %q: %s", helpLocaleName[l], claim, prompt)
+				}
+			}
+			if len(answers) == 0 {
+				t.Errorf("%s: built-in question %q has no accepted answer", helpLocaleName[l], prompt)
+			}
+		}
+	}
+}
+
+func TestGentooBuildKeepsItsIdentity(t *testing.T) {
+	if i18n.CommandPrefix != "" {
+		t.Skip("only the Gentoo build names the community")
+	}
+	reply := i18n.Messages.Bot.DirectMessage.AutoReply.Render(i18n.LangZH, 5, i18n.Messages.Bot.DirectMessage.Who(i18n.LangZH))
+	if !strings.Contains(reply, "Gentoo 中文社区") {
+		t.Error("the Gentoo build must still name the community it serves")
+	}
+	if got := i18n.Messages.Verification.Challenge.BuiltinFallback(); len(got) != 2 {
+		t.Errorf("built-in bank = %d questions, want 2", len(got))
+	}
+}

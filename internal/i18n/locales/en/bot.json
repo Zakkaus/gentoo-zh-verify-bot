@@ -44,7 +44,9 @@
     "unauthorized_chat": "🚪 Automatically left unauthorized chat: %[1]s (ID: %[2]d, type: %[3]s)."
   },
   "direct_message": {
-    "auto_reply": "👋 This bot handles join verification for the Gentoo-zh Community and provides Gentoo/Linux lookup commands.\n\n• To join: submit a join request in the group. Answer a challenge sent here, or select “✅ Start verification” in any group message the bot posts.\n• Lookup commands also work in direct messages; /help lists every one of them. Direct messages are limited to %[1]d queries per minute; group chats are not rate-limited.\n• Review and administration commands only work in the group."
+    "auto_reply": "👋 %[2]s\n\n• To join: submit a join request in the group. Answer a challenge sent here, or select “✅ Start verification” in any group message the bot posts.\n• Lookup commands also work in direct messages; /help lists every one of them. Direct messages are limited to %[1]d queries per minute; group chats are not rate-limited.\n• Review and administration commands only work in the group.",
+    "identity": "This bot handles join verification for the Gentoo-zh Community and provides Gentoo/Linux lookup commands.",
+    "identity_generic": "This bot handles join verification for this group and provides Linux lookup commands."
   },
   "registration": {
     "owner_claimed": "Deployer ownership is now bound to this account. You can add groups.",

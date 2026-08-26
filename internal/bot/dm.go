@@ -86,7 +86,8 @@ func (v *dmHandler) privateReply(l i18n.Lang) string {
 	if v.settings != nil {
 		rate = v.settings.Global().PrivateQueryPerMin().Value
 	}
-	return i18n.Messages.Bot.DirectMessage.AutoReply.Render(l, rate)
+	dm := i18n.Messages.Bot.DirectMessage
+	return dm.AutoReply.Render(l, rate, dm.Who(l))
 }
 
 func (v *dmHandler) onPrivateDM(ctx *th.Context, update telego.Update) error {

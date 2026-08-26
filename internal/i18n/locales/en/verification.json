@@ -64,7 +64,23 @@
     "no_linux_retry": "Reply <code>no Linux device</code> and include the current minute in the same message. The minute is the two digits after the colon on your clock; at 14:46, send <code>46</code>. This reminder does not use an attempt; another invalid format will count as an incorrect answer.",
     "os_mixed": "Your reply mentions another operating system. If the version comes from a Linux kernel running on this device, such as under WSL or in a virtual machine, send only that version. This clarification does not use an attempt.",
     "quiz_prompt": "Answer this question to complete join verification:\n\n❓ %[1]s",
-    "sample_copied": "You sent the example version, not the version from your machine. Run <code>uname -r</code> in a terminal and send its actual output. This reminder does not use an attempt; sending the example again will count as an incorrect answer."
+    "sample_copied": "You sent the example version, not the version from your machine. Run <code>uname -r</code> in a terminal and send its actual output. This reminder does not use an attempt; sending the example again will count as an incorrect answer.",
+    "fallback_questions_generic": [
+      {
+        "prompt": "What is the domain name of the official Linux kernel website?",
+        "answers": [
+          "kernel.org",
+          "www.kernel.org"
+        ]
+      },
+      {
+        "prompt": "What is the domain name of the official GNU Project website?",
+        "answers": [
+          "gnu.org",
+          "www.gnu.org"
+        ]
+      }
+    ]
   },
   "channel": {
     "continue_button": "✅ I've joined — continue verification",
