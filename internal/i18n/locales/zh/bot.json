@@ -49,16 +49,16 @@
   "registration": {
     "owner_claimed": "部署者身份已绑定。现在可以添加群组。",
     "owner_claim_refused": "此所有者认领链接无效、已使用或已过期。",
-    "owner_claim_save_failed": "无法保存所有者认领状态。请恢复服务状态目录的写入权限，然后重试同一链接。",
-    "enrollment_owner_only": "只有机器人所有者可以创建群组登记链接。",
+    "owner_claim_save_failed": "无法保存所有者认领状态。请恢复服务状态目录的写入权限后，使用相同链接重试。",
+    "enrollment_owner_only": "仅机器人所有者可创建群组登记链接。",
     "enrollment_link": "群组登记链接（%[1]d 分钟内有效且只能使用一次）：\n%[2]s",
     "enrollment_refused": "此群组登记链接无效、已使用或已过期。机器人将离开该群组。",
     "registration_pending": "已授权登记群组“%[1]s”。请将机器人提升为管理员并授予所需权限。提升后会自动完成登记。",
     "group_registered": "已登记群组“%[1]s”。请在该群组中运行 /settings。",
     "registration_save_failed": "无法持久保存群组登记。机器人将离开该群组；请检查服务状态目录。",
-    "unregister_owner_only": "只有机器人所有者可以取消登记运行时群组。",
+    "unregister_owner_only": "仅机器人所有者可取消登记运行时群组。",
     "unregister_refused": "无法取消登记该群组。请使用 /unregister <group-id> 指定已登记的运行时群组 ID。",
-    "unregister_save_failed": "无法持久保存群组移除结果。请恢复服务状态目录的写入权限，然后重试。",
+    "unregister_save_failed": "无法持久保存群组取消登记结果。请恢复服务状态目录的写入权限后重试。",
     "group_unregistered": "已取消登记群组“%[1]s”，并删除其运行设置。"
   }
 }

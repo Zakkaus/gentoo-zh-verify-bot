@@ -51,7 +51,7 @@
   "news": {
     "latest_heading": "📰 Gentoo 最新新闻：",
     "search_heading": "📰 Gentoo 新闻搜索「%[1]s」：",
-    "no_matches": "没找到匹配的新闻。请尝试其他关键词。",
+    "no_matches": "未找到匹配的新闻。请尝试其他关键词。",
     "unavailable": "暂时无法获取新闻列表。请稍后重试。",
     "stale": "新闻列表暂时无法更新。以上结果可能不完整。请稍后重试。"
   },

@@ -2,7 +2,7 @@
   "arm": {
     "heading": "🦾 <a href=\"%[1]s\">%[2]s</a> 在 arm64（AArch64）上的 keyword：",
     "keyword_unavailable": "⚠️ 暂时无法获取 keyword 状态。请稍后重试，或打开上方链接查看。",
-    "no_keyword": "❌ 未设置 arm64 keyword——这通常表示该包尚未支持 arm64 或未经测试。如需确认支持状态，请打开上方链接查看。",
+    "no_keyword": "❌ 未设置 arm64 keyword。通常表示该包尚未支持 arm64 或未经测试。如需确认支持状态，请打开上方链接查看。",
     "not_found": "❓ 未在 Gentoo 官方树中找到「%[1]s」。请检查包名，或用 /{g}pkg %[1]s 进行模糊搜索。",
     "official_unavailable": "暂时无法查询 Gentoo 官方树。请稍后重试。",
     "stable_only": "\n✅ stable keyword（arm64）：%[1]s",
