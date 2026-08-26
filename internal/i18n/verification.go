@@ -113,8 +113,11 @@ type VerificationChallengeCatalog struct {
 	FallbackIntro Format
 	// FallbackWrong formats a fallback retry.
 	FallbackWrong Format
-	// FallbackQuestions contains the built-in answer-hidden questions.
+	// FallbackQuestions contains the built-in answer-hidden questions for the Gentoo build.
 	FallbackQuestions [2]Question
+	// FallbackQuestionsGeneric contains the built-in questions for a build serving Linux
+	// communities in general, which cannot ask about a Gentoo-zh Community site.
+	FallbackQuestionsGeneric [2]Question
 	// AgentTrap formats the hidden automated-agent instruction.
 	AgentTrap Format
 }
@@ -285,4 +288,14 @@ type VerificationAdminCatalog struct {
 	BanButton Text
 	// ChallengePostFailed formats a failed public challenge alert.
 	ChallengePostFailed Format
+}
+
+// BuiltinFallback returns the built-in questions this build should ask. A group that is not
+// the Gentoo-zh Community cannot answer a question about its website, so the generic build
+// asks about Linux itself instead.
+func (c VerificationChallengeCatalog) BuiltinFallback() []Question {
+	if CommandPrefix == "" {
+		return c.FallbackQuestions[:]
+	}
+	return c.FallbackQuestionsGeneric[:]
 }

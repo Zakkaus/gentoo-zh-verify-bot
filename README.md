@@ -15,6 +15,8 @@ One codebase, two binaries. They differ only in who gets the unqualified command
 
 Everything else is identical, including verification, moderation, the settings panel, and the lookups every Linux community shares: `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. A group running Arch or Debian keeps `/pkg` free for whatever it wants to bind it to, and can still ask a Gentoo question when one comes up.
 
+Two more things differ by build: the identity sentence in the direct-message reply, and the built-in questions used when a group has configured none. The general edition claims no community of its own, and its questions ask about kernel.org and gnu.org, because an applicant elsewhere cannot name the Gentoo-zh Community's domain.
+
 Build the Gentoo edition with `-tags gentoo`; the default build is the general one. Both are published on every release, for `amd64` and `arm64`.
 
 ## Fit and operating footprint

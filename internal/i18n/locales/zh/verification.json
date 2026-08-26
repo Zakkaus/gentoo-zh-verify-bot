@@ -64,7 +64,23 @@
     "no_linux_retry": "请回复 <code>无 Linux 设备</code>，并在同一条消息中附上当前分钟数。分钟数是时钟冒号后的两位数字，例如 14:46 对应 <code>46</code>。本次不会扣减机会；格式仍不正确时，将按错误回答处理。",
     "os_mixed": "你的回复提到了其他操作系统。若该版本号来自本机运行的 Linux 内核（如 WSL 或虚拟机），请仅发送该版本号。本次不会扣减机会。",
     "quiz_prompt": "请回答以下问题，完成入群验证：\n\n❓ %[1]s",
-    "sample_copied": "你发送的是示例版本号，不是本机版本号。请在终端执行 <code>uname -r</code>，并发送实际输出。本次不会扣减机会；再次发送示例版本号时，将按错误回答处理。"
+    "sample_copied": "你发送的是示例版本号，不是本机版本号。请在终端执行 <code>uname -r</code>，并发送实际输出。本次不会扣减机会；再次发送示例版本号时，将按错误回答处理。",
+    "fallback_questions_generic": [
+      {
+        "prompt": "Linux 内核官方网站的域名是什么？",
+        "answers": [
+          "kernel.org",
+          "www.kernel.org"
+        ]
+      },
+      {
+        "prompt": "GNU 项目官方网站的域名是什么？",
+        "answers": [
+          "gnu.org",
+          "www.gnu.org"
+        ]
+      }
+    ]
   },
   "channel": {
     "continue_button": "✅ 我已加入，继续验证",

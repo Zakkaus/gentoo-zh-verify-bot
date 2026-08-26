@@ -108,8 +108,12 @@ type BotLifecycleCatalog struct {
 
 // BotDirectMessageCatalog contains ordinary direct-message replies.
 type BotDirectMessageCatalog struct {
-	// AutoReply formats the built-in direct-message guidance.
+	// AutoReply formats the built-in direct-message guidance around an identity sentence.
 	AutoReply Format
+	// Identity names the community this build serves.
+	Identity Text
+	// IdentityGeneric names a build that serves no particular community.
+	IdentityGeneric Text
 }
 
 // BotRegistrationCatalog contains private owner and group-enrollment notices.
@@ -140,4 +144,13 @@ type BotRegistrationCatalog struct {
 	UnregisterSaveFailed Text
 	// GroupUnregistered formats completed runtime-group removal.
 	GroupUnregistered Format
+}
+
+// Who returns the identity sentence for this build. Only the Gentoo build may claim to be the
+// Gentoo-zh Community's bot; every other build states what it does without naming a community.
+func (c BotDirectMessageCatalog) Who(l Lang) string {
+	if CommandPrefix == "" {
+		return c.Identity.For(l)
+	}
+	return c.IdentityGeneric.For(l)
 }
