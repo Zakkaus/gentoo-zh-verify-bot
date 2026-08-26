@@ -23,7 +23,19 @@
 `gentoo-zh-verify-bot` 用 `-tags gentoo` 构建，Gentoo 查询使用短名 `/pkg` `/use` `/bug` `/news`
 `/bbs` `/arm`。`gentoo-zhbot` 是面向一般 Linux 社区的默认构建，上述命令加 `g` 前缀，`/pkg`
 留给群组自己使用。两者都提供 `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve`
-`/repology`。其余没有差别，也没有任何配置项在两者之间切换：选择的是安装哪个二进制。
+`/repology`。没有任何配置项在两者之间切换：选择的是安装哪个二进制。
+
+由构建决定的全部差异：
+
+| | `gentoo-zh-verify-bot` | `gentoo-zhbot` |
+| --- | --- | --- |
+| Gentoo 查询命令 | `/pkg` `/use` `/bug` `/news` `/bbs` `/arm` | 同样六条，加 `g` 前缀 |
+| 私聊身份句 | 自称 Gentoo 中文社区 | 不指名任何社区 |
+| 内置备用题 | gentoozh.org、gentoo.org | kernel.org、gnu.org |
+| 二进制、systemd 单元、`/etc` 与 `/var/lib` 目录 | `gentoo-zh-verify-bot` | `gentoo-zhbot` |
+| `user_agent` 默认值 | `gentoo-zh-verify-bot` | `gentoo-zhbot` |
+
+除此之外没有差别。群组语言、验证、群管理、设置面板和其余全部配置项行为一致。
 
 ## 字段
 
@@ -83,7 +95,7 @@
 | `private_reply` | 内置 | 对非命令私聊消息的回复。 |
 | `overlays` | `gentoo-zh/overlay`、`gentoo/guru` | `/pkg` 搜索的 overlay（通用版为 `/gpkg`）。 |
 | `news_url` | gentoo.org 新闻条目 | `/news` 的数据源（通用版为 `/gnews`）。 |
-| `user_agent` | `gentoo-zh-verify-bot` | 出站 HTTP User-Agent。 |
+| `user_agent` | 本构建的名称 | 出站 HTTP User-Agent。默认与二进制同名，即 `gentoo-zh-verify-bot` 或 `gentoo-zhbot`。 |
 | `stats_timezone` | `Asia/Shanghai` | `/stats` 的日界时区。 |
 
 ### 所有权与推送

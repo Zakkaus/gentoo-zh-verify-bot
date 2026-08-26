@@ -1403,6 +1403,21 @@ func appendUseAvailabilityNote(l i18n.Lang, plain, rich string, availability pkg
 }
 
 // OnUse handles package metadata and USE flag lookups.
+// renderUseMultipleMatches lists the candidate atoms with the command that queries each one.
+// The command carries the edition prefix, so the generic build suggests /guse, not /use.
+func renderUseMultipleMatches(l i18n.Lang, atoms []string, availability pkgLookupAvailability) string {
+	sort.Strings(atoms)
+	var b strings.Builder
+	b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
+	for _, a := range atoms {
+		fmt.Fprintf(&b, "\n • /%suse %s", edition.CommandPrefix, a)
+	}
+	if availability.anyUnavailable() {
+		fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))
+	}
+	return b.String()
+}
+
 func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil {
@@ -1437,16 +1452,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		for a := range srcs {
 			atoms = append(atoms, a)
 		}
-		sort.Strings(atoms)
-		var b strings.Builder
-		b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
-		for _, a := range atoms {
-			fmt.Fprintf(&b, "\n • /%suse %s", edition.CommandPrefix, a)
-		}
-		if availability.anyUnavailable() {
-			fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))
-		}
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, b.String())
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderUseMultipleMatches(l, atoms, availability))
 		return nil
 	}
 

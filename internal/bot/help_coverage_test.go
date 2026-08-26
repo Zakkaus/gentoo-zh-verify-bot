@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -158,14 +159,31 @@ func TestGenericBuildClaimsNoCommunity(t *testing.T) {
 }
 
 func TestGentooBuildKeepsItsIdentity(t *testing.T) {
-	if edition.CommandPrefix != "" {
+	if !edition.IsGentoo {
 		t.Skip("only the Gentoo build names the community")
 	}
-	reply := i18n.Messages.Bot.DirectMessage.AutoReply.Render(i18n.LangZH, 5, i18n.Messages.Bot.DirectMessage.Who(i18n.LangZH))
-	if !strings.Contains(reply, "Gentoo 中文社区") {
-		t.Error("the Gentoo build must still name the community it serves")
+	for _, l := range helpLocales {
+		reply := i18n.Messages.Bot.DirectMessage.AutoReply.Render(l, 5, i18n.Messages.Bot.DirectMessage.Who(l))
+		if !strings.Contains(reply, "Gentoo") {
+			t.Errorf("%s: the Gentoo build must name the community it serves: %q", helpLocaleName[l], reply)
+		}
 	}
-	if got := i18n.Messages.Verification.Challenge.BuiltinFallback(); len(got) != 2 {
-		t.Errorf("built-in bank = %d questions, want 2", len(got))
+	// A bank of the right length but the wrong content would pass a length check, so assert
+	// that the selector really returned the Gentoo bank.
+	bank := i18n.Messages.Verification.Challenge.BuiltinFallback()
+	if len(bank) != 2 {
+		t.Fatalf("built-in bank = %d questions, want 2", len(bank))
+	}
+	for _, l := range helpLocales {
+		var answers []string
+		for _, q := range bank {
+			_, a := q.For(l)
+			answers = append(answers, a...)
+		}
+		for _, want := range []string{"gentoozh.org", "gentoo.org"} {
+			if !slices.Contains(answers, want) {
+				t.Errorf("%s: the Gentoo build's built-in bank does not accept %q, got %v", helpLocaleName[l], want, answers)
+			}
+		}
 	}
 }

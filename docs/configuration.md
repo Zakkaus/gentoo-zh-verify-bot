@@ -23,8 +23,21 @@ verification on/off · challenge delivery · verification mode · applicant-name
 `gentoo-zh-verify-bot` is built with `-tags gentoo` and gives the Gentoo lookups the short names
 `/pkg` `/use` `/bug` `/news` `/bbs` `/arm`. `gentoo-zhbot` is the default build for Linux
 communities in general and prefixes those with `g`, leaving `/pkg` free. Both answer `/pkgs`
-`/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. Nothing else differs,
-and no setting selects between them: the choice is which binary you install.
+`/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. No setting selects between
+them: the choice is which binary you install.
+
+Everything the build decides:
+
+| | `gentoo-zh-verify-bot` | `gentoo-zhbot` |
+| --- | --- | --- |
+| Gentoo lookups | `/pkg` `/use` `/bug` `/news` `/bbs` `/arm` | the same six, prefixed with `g` |
+| Direct-message identity | names the Gentoo-zh Community | names no community |
+| Built-in fallback questions | gentoozh.org, gentoo.org | kernel.org, gnu.org |
+| Binary, systemd unit, `/etc` and `/var/lib` directories | `gentoo-zh-verify-bot` | `gentoo-zhbot` |
+| Default `user_agent` | `gentoo-zh-verify-bot` | `gentoo-zhbot` |
+
+Nothing else does. Group language, verification, moderation, the panel, and every other
+setting behave identically.
 
 ## Fields
 
@@ -84,7 +97,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | `private_reply` | built-in | Reply to non-command direct messages. |
 | `overlays` | `gentoo-zh/overlay`, `gentoo/guru` | Overlays searched by `/pkg` (`/gpkg` in the general edition). |
 | `news_url` | gentoo.org news items | Source for `/news` (`/gnews` in the general edition). |
-| `user_agent` | `gentoo-zh-verify-bot` | Outbound HTTP User-Agent. |
+| `user_agent` | the build's name | Outbound HTTP User-Agent. Defaults to `gentoo-zh-verify-bot` or `gentoo-zhbot`, matching the binary. |
 | `stats_timezone` | `Asia/Shanghai` | Day boundary for `/stats`. |
 
 ### Ownership and feeds
