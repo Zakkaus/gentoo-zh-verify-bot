@@ -220,3 +220,43 @@ func TestInvitedIsDecidedByWhoActed(t *testing.T) {
 		t.Fatal("fixture error: the actor must differ from the member")
 	}
 }
+
+// Someone already in the group is not watching for a challenge the way an applicant is, and the
+// hold keeps them harmless, so the post-join window is longer by default. A group that chose its
+// own timeout means what it chose.
+func TestPostJoinWindowDefaultsLonger(t *testing.T) {
+	def := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	if got := def.gateTimeout(-100, gateMute); got != postJoinTimeout {
+		t.Errorf("post-join window = %v, want %v", got, postJoinTimeout)
+	}
+	if got := def.gateTimeout(-100, gateRequest); got == postJoinTimeout {
+		t.Error("an applicant's window is unchanged by the post-join default")
+	}
+
+	chosen := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	group, _ := chosen.settings.Group(-100)
+	overrides := group.Overrides()
+	seconds := 300
+	overrides.TimeoutSeconds = &seconds
+	if _, err := chosen.settings.CommitGroup(-100, group.Revision(), overrides); err != nil {
+		t.Fatal(err)
+	}
+	for _, gate := range []string{gateRequest, gateMute} {
+		if got := chosen.gateTimeout(-100, gate); got != 300*time.Second {
+			t.Errorf("gate %q window = %v, want the 300s an administrator chose", gate, got)
+		}
+	}
+}
+
+// Verifying invited members is on unless the group turns it off.
+func TestVerifyInvitedDefaultsOn(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	if !v.verifyInvited(-100) {
+		t.Error("being vouched for is not verification; the check defaults on")
+	}
+	off := false
+	v2 := newTestService(&config.Config{GroupIDs: []int64{-100}, VerifyInvited: &off})
+	if v2.verifyInvited(-100) {
+		t.Error("a group that switched it off must be honoured")
+	}
+}

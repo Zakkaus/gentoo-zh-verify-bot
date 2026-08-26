@@ -542,7 +542,7 @@ func (v *Service) load(bot modBot) {
 			}
 		case longOutage:
 			// The outage consumed the window, so refresh and do not strike on this lapse.
-			delay = v.timeout(gid)
+			delay = v.gateTimeout(gid, p.gate)
 			p.deadline = now.Add(delay)
 			p.lastRenotify = now // mark re-notified so a runtime recovery right after doesn't re-message
 			reason = "recovered"
@@ -742,7 +742,7 @@ func (v *Service) deferExpiry(bot modBot, gid, uid int64, nonce string, epoch ui
 	if p.deferredSince.IsZero() {
 		p.deferredSince = now
 	}
-	delay := v.expiryDelay(gid, reason)
+	delay := v.expiryDelay(gid, p.gate, reason)
 	remaining := p.deferredSince.Add(maxVerificationDeferral).Sub(now)
 	if p.deferralCapReached || remaining <= 0 {
 		if !p.deferralCapReached {
@@ -790,7 +790,7 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	default:
 		template = group.BodyJoined
 	}
-	body := template.Render(l, mention, linkText, int(v.timeout(gid)/time.Second), channelHint)
+	body := template.Render(l, mention, linkText, int(v.gateTimeout(gid, voice.gate)/time.Second), channelHint)
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
@@ -925,7 +925,7 @@ func (v *Service) onRecovery(c context.Context, bot modBot, outage time.Duration
 		if p.timer != nil {
 			p.timer.Stop()
 		}
-		delay := v.timeout(k.gid)
+		delay := v.gateTimeout(k.gid, p.gate)
 		reason := "recovered"
 		if p.deferralCapReached || !p.deferredSince.IsZero() &&
 			!now.Before(p.deferredSince.Add(maxVerificationDeferral)) {

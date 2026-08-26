@@ -464,11 +464,36 @@ func (v *Service) ToggleNameSpoiler(groupID int64) (bool, error) {
 	return enabled, err
 }
 func (v *Service) timeout(groupID int64) time.Duration {
+	return v.gateTimeout(groupID, gateRequest)
+}
+
+// verifyInvited reports whether a member somebody else added still has to verify here.
+func (v *Service) verifyInvited(groupID int64) bool {
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return v.cfg.VerifyInvitedMembers()
+	}
+	return group.VerifyInvited().Value
+}
+
+// postJoinTimeout is the default window for someone verified after joining. An applicant waiting
+// outside is watching for the challenge; a member who is already in the group may not notice it
+// for a while, and the hold keeps them harmless in the meantime, so they get longer.
+const postJoinTimeout = 10 * time.Minute
+
+// gateTimeout returns the verification window. timeout_seconds describes how long an applicant
+// waits outside, so the post-join window keeps its own longer default; an administrator who sets
+// the timeout in the panel is making a deliberate choice and it applies to both.
+func (v *Service) gateTimeout(groupID int64, gate string) time.Duration {
 	group, ok := v.groupSettings(groupID)
 	if !ok {
 		return 0
 	}
-	duration, ok := config.SecondsToDuration(group.TimeoutSeconds().Value)
+	setting := group.TimeoutSeconds()
+	if gate == gateMute && setting.Source != store.SourceRuntime {
+		return postJoinTimeout
+	}
+	duration, ok := config.SecondsToDuration(setting.Value)
 	if !ok {
 		return 0
 	}
@@ -511,7 +536,7 @@ func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID
 	if !supergroup {
 		return
 	}
-	seconds := int(v.timeout(groupID)/time.Second) + muteGraceSeconds
+	seconds := int(v.gateTimeout(groupID, gateMute)/time.Second) + muteGraceSeconds
 	if err := v.verificationTransport(bot).Mute(ctx, groupID, userID, seconds); err != nil {
 		log.Printf("post-join verify: cannot mute %d in %d (%v); the challenge continues unheld", userID, groupID, err)
 	}
@@ -726,11 +751,11 @@ func challengeExpiryReason(delivered bool) string {
 // Delivery has its own no-fault deadline; the applicant's answer window starts only after confirmation.
 const pendingDeliveryTimeout = 60 * time.Second
 
-func (v *Service) expiryDelay(gid int64, reason string) time.Duration {
+func (v *Service) expiryDelay(gid int64, gate, reason string) time.Duration {
 	if reason == challengeExpiryReason(false) {
 		return pendingDeliveryTimeout
 	}
-	return v.timeout(gid)
+	return v.gateTimeout(gid, gate)
 }
 
 // Reserve capacity before delivery; only a confirmed challenge may install a striking timeout.
@@ -781,7 +806,7 @@ func (v *Service) finishPendingChallenge(
 	p.groupMsgID = messages.groupMsgID
 	p.privateMsgID = messages.privateMsgID
 	p.challengeDelivered = delivered
-	delay := v.timeout(gid)
+	delay := v.gateTimeout(gid, p.gate)
 	p.deadline = v.wallNow().Add(delay)
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(delivered))
 	return true
@@ -985,10 +1010,15 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	if v.isGroupAdmin(c, bot, gid, uid) {
 		return nil // administrators are not challenged in their own group
 	}
+	invited := member.From.ID != uid
+	if invited && !v.verifyInvited(gid) {
+		log.Printf("post-join verify: %d was invited into %d and invited members are exempt here", uid, gid)
+		return nil
+	}
 	supergroup := member.Chat.Type == telego.ChatTypeSupergroup
 	mode, text, opts, correctIdx := v.newChallenge(gid, applicantLang)
 	name := applicantDisplayName(&user)
-	p := &pending{gate: gateMute, invited: member.From.ID != uid, mode: mode, lang: applicantLang,
+	p := &pending{gate: gateMute, invited: invited, mode: mode, lang: applicantLang,
 		qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(), name: name}
 	oldMessages, status := v.startPending(bot, gid, uid, p)
 	switch status {
@@ -1179,7 +1209,7 @@ func (v *Service) completeDMDelivery(
 				if p.timer != nil {
 					p.timer.Stop()
 				}
-				delay := v.timeout(prompt.gid)
+				delay := v.gateTimeout(prompt.gid, prompt.pending.gate)
 				p.deadline = v.wallNow().Add(delay)
 				v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 			}
@@ -1207,7 +1237,7 @@ func (v *Service) completeDMDelivery(
 		if p.timer != nil {
 			p.timer.Stop()
 		}
-		delay := v.timeout(prompt.gid)
+		delay := v.gateTimeout(prompt.gid, prompt.pending.gate)
 		p.deadline = v.wallNow().Add(delay)
 		v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 	}
@@ -1372,7 +1402,7 @@ func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, ui
 		// Waiting out a flood limit is only worth it if the applicant's own window outlives the
 		// wait. Sleeping past their deadline means they are declined before the question ever
 		// arrives; falling through instead lets the group challenge carry the verification.
-		if wait > 0 && wait < v.timeout(gid) && wait+rateLimitSendMargin <= v.deliveryBudget(gid, uid, owner) {
+		if wait > 0 && wait < v.gateTimeout(gid, gateOf(owner).gate) && wait+rateLimitSendMargin <= v.deliveryBudget(gid, uid, owner) {
 			log.Printf("join %d in %d: private challenge rate-limited; retrying after %s", uid, gid, wait)
 			if !tg.Pace(c, wait) {
 				return privateDeliveryOutcome{result: privateUncertain}

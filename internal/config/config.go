@@ -262,6 +262,8 @@ type Config struct {
 	PrivateQueryPerMin int `json:"private_query_per_min"`
 	// RequiredChannelFailOpen controls admission when required-channel membership is unreadable.
 	RequiredChannelFailOpen *bool `json:"required_channel_fail_open"`
+	// VerifyInvited controls whether a member somebody else added still has to verify.
+	VerifyInvited *bool `json:"verify_invited"`
 	// BanSeconds is the default ban duration and zero means permanent.
 	BanSeconds int `json:"ban_seconds"`
 	// MuteSeconds is the finite default mute duration.
@@ -626,6 +628,12 @@ func (c *Config) TrustedGroups(id int64) []int64 {
 		return g.TrustedMemberGroupIDs
 	}
 	return c.TrustedMemberGroupIDs
+}
+
+// VerifyInvitedMembers reports whether a member added by somebody else still has to verify.
+// Being vouched for is not verification, so this defaults on.
+func (c *Config) VerifyInvitedMembers() bool {
+	return c.VerifyInvited == nil || *c.VerifyInvited
 }
 
 // FailOpenChannel reports whether unreadable required-channel membership admits users.

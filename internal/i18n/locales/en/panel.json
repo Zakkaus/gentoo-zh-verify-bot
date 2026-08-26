@@ -94,7 +94,7 @@
       "runtime": "Runtime settings for %[1]d\nVerification: %[2]s\nMode: %[3]s\nChallenge delivery: %[4]s\nName spoiler: %[5]s\nBan duration: %[6]s\nLookup auto-delete: %[7]s\nLookup TTL: %[8]s\nLanguage: %[9]s",
       "lists": "List settings for %[1]d\nChannel allowlist: %[2]d\nTrusted groups: %[3]d\nKnown chats: %[4]d",
       "list": "%[1]s for %[2]d\nEntries: %[3]d\n%[4]s",
-      "verification": "Verification parameters for %[1]d\nTimeout: %[2]s\nMaximum failures: %[3]s\nRetry cooldown: %[4]s\nPrivate-query rate (bot-wide): %[5]s",
+      "verification": "Verification parameters for %[1]d\nTimeout: %[2]s\nMaximum failures: %[3]s\nRetry cooldown: %[4]s\nVerify invited members: %[5]s\nPrivate-query rate (bot-wide): %[6]s",
       "content": "Verification content for %[1]d\nQuiz questions: %[2]d\nFallback bank: %[3]s\nRequired channel: %[4]s\nInvite link: %[5]s",
       "quiz_bank": "Quiz bank for %[1]d\nQuestions: %[2]d\n%[3]s",
       "quiz_detail": "Quiz question\nQuestion: %[1]s\nOptions:\n%[2]s\nCorrect option: %[3]s",
@@ -152,7 +152,8 @@
       "warn_limit": "Warning limit",
       "rich_text": "Toggle rich text",
       "alert_chat": "Set alert chat",
-      "clear_alert_chat": "Clear alert chat"
+      "clear_alert_chat": "Clear alert chat",
+      "verify_invited": "Toggle verifying invited members"
     },
     "prompt": {
       "ban_duration": "Send 0 for permanent, or a duration such as 30m, 12h, or 7d.",

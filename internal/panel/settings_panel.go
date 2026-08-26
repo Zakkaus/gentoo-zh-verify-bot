@@ -436,6 +436,21 @@ func (v *Panel) dispatchVerificationParameters(ctx context.Context, bot *telego.
 	if data.field == "go" {
 		return v.navigate(ctx, bot, session, data.value)
 	}
+	if data.field == "vi" {
+		group, ok := v.settings.Group(session.groupID)
+		if !ok {
+			return store.ErrUnknownGroup
+		}
+		next := group.Overrides()
+		value := !group.VerifyInvited().Value
+		next.VerifyInvited = &value
+		result, err := v.settings.CommitGroup(session.groupID, session.revision, next)
+		if err != nil {
+			return err
+		}
+		session.revision = result.Revision
+		return v.renderAfterCommit(ctx, bot, session)
+	}
 	kind := map[string]inputKind{"to": inputTimeout, "mf": inputMaxFails, "rc": inputRetryCooldown, "pr": inputPrivateRate}[data.field]
 	if kind == inputPrivateRate && session.groupID != v.settings.ControlGroupID() {
 		return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.ControlGroupOnly.For(session.language)}
@@ -723,11 +738,13 @@ func (v *Panel) buildVerificationParameters(session *panelSession, token string)
 	text := i18n.Messages.Panel.Settings.Screen.Verification.Render(session.language, session.groupID,
 		v.sourcedSeconds(session.language, group.TimeoutSeconds(), false), v.sourcedLimit(session.language, group.VerifyMaxFails()),
 		v.sourcedLimit(session.language, group.VerifyRetrySeconds()),
+		v.sourcedBool(session.language, group.VerifyInvited()),
 		i18n.Messages.Panel.Settings.Value.Sourced.Render(session.language, strconv.Itoa(global.PrivateQueryPerMin().Value), v.sourceText(session.language, global.PrivateQueryPerMin().Source)))
 	buttons := []panelButton{
 		{text: i18n.Messages.Panel.Settings.Field.Timeout.For(session.language), field: "to", value: "_"},
 		{text: i18n.Messages.Panel.Settings.Field.MaxFails.For(session.language), field: "mf", value: "_"},
 		{text: i18n.Messages.Panel.Settings.Field.RetryCooldown.For(session.language), field: "rc", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.VerifyInvited.For(session.language), field: "vi", value: "_"},
 		{text: i18n.Messages.Panel.Settings.Field.PrivateRate.For(session.language), field: "pr", value: "_"},
 		{text: i18n.Messages.Panel.Settings.Common.Back.For(session.language), field: "go", value: "gh"},
 	}

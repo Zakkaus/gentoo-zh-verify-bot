@@ -242,6 +242,7 @@ func testSettings(t *testing.T, cfg *config.Config) *store.Settings {
 		VerifyMaxFails:          store.BaselineValue[int]{Value: 3},
 		VerifyRetrySeconds:      store.BaselineValue[int]{Value: 180},
 		MuteSeconds:             store.BaselineValue[int]{Value: cfg.MuteSeconds},
+		VerifyInvited:           store.BaselineValue[bool]{Value: cfg.VerifyInvitedMembers()},
 		WarnLimit:               store.BaselineValue[int]{Value: cfg.WarnLimit},
 		AntispamEnabled:         store.BaselineValue[bool]{Value: cfg.BlockChannelSenders},
 		Lang:                    store.BaselineValue[string]{Value: cfg.Lang},
