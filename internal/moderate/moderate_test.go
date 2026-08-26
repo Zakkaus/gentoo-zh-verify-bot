@@ -55,6 +55,9 @@ type fakeModBot struct {
 	deletedMessageIDs []int
 	notifications     []fakeModNotification
 	failAlerts        []fakeModFailAlert
+	linkedChat        int64
+	linkedUnknown     bool
+	linkedRequests    []int64
 }
 
 type fakeModNotification struct {
@@ -148,6 +151,11 @@ func (b *fakeModBot) Alert(_ context.Context, chatID int64, text string) {
 		b.lastSendText = text
 		b.notifications = append(b.notifications, fakeModNotification{chatID: chatID, text: text})
 	}
+}
+
+func (b *fakeModBot) LinkedChat(_ context.Context, chatID int64) (int64, bool) {
+	b.linkedRequests = append(b.linkedRequests, chatID)
+	return b.linkedChat, !b.linkedUnknown
 }
 
 func (b *fakeModBot) AuditLog(ctx context.Context, chatID int64, text string) {
@@ -495,8 +503,12 @@ func TestIsGroupAdminFailsClosed(t *testing.T) {
 			telegram.member = test.member
 			telegram.memberErr = test.err
 			service := newTestService(t, &config.Config{NotifyTTLSeconds: -1}, telegram, "")
-			if got := service.isGroupAdmin(ctx, -100, 1); got != test.want {
+			got, err := service.isGroupAdmin(ctx, -100, 1)
+			if got != test.want {
 				t.Errorf("isGroupAdmin = %v, want %v", got, test.want)
+			}
+			if (err != nil) != (test.err != nil) {
+				t.Errorf("isGroupAdmin error = %v, want error presence %v: a failed lookup is not a statement about the caller", err, test.err != nil)
 			}
 		})
 	}
@@ -884,4 +896,74 @@ func TestWarnLimitRejectionFallsBackToGroupWithoutAdminLog(t *testing.T) {
 		fakeModNotification{chatID: groupID, text: wantAlert},
 	)
 	assertFailAlert(t, telegram, 0, groupID, wantAlert)
+}
+
+// A Telegram hiccup during the caller's admin lookup must not be reported as "you are not an
+// administrator": the command is still refused, but the reason belongs to the bot.
+func TestCallerAdminLookupFailureSaysSo(t *testing.T) {
+	const groupID = int64(-100)
+	telegram := newFakeMod()
+	telegram.memberErr = errors.New("network")
+	service := newTestService(t, &config.Config{NotifyTTLSeconds: -1, GroupIDs: []int64{groupID}}, telegram, "")
+
+	message := &telego.Message{
+		MessageID: 1,
+		Chat:      telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 7, LanguageCode: "en"},
+		Text:      "/ban",
+		ReplyToMessage: &telego.Message{
+			MessageID: 2,
+			Chat:      telego.Chat{ID: groupID},
+			From:      &telego.User{ID: 8},
+		},
+	}
+	if got := service.warnPrecheck(context.Background(), message, "/ban", true, i18n.LangEN); got != nil {
+		t.Fatal("an unreadable admin lookup must refuse the command")
+	}
+	want := i18n.Messages.Moderate.Common.CallerAdminCheckFailed.For(i18n.LangEN)
+	if len(telegram.notifications) != 1 || telegram.notifications[0].text != want {
+		t.Fatalf("notification = %#v, want the caller-check-failed notice", telegram.notifications)
+	}
+	if telegram.bans != 0 || telegram.mutes != 0 {
+		t.Errorf("bans=%d mutes=%d, want 0: refusing must stay fail-closed", telegram.bans, telegram.mutes)
+	}
+}
+
+// A discussion group's own channel replying to a comment is not an impersonator, and a lookup
+// the bot could not complete is never grounds for a permanent ban.
+func TestChannelSenderFilterSparesTheLinkedChannel(t *testing.T) {
+	const groupID, channelID = int64(-100), int64(-1009000000777)
+	cases := []struct {
+		name          string
+		linkedChat    int64
+		linkedUnknown bool
+		wantDeletes   int
+		wantBans      int
+	}{
+		{name: "the group's own channel", linkedChat: channelID, wantDeletes: 0, wantBans: 0},
+		{name: "an unrelated channel", linkedChat: -1009000000111, wantDeletes: 1, wantBans: 1},
+		{name: "linked channel unreadable", linkedUnknown: true, wantDeletes: 1, wantBans: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			telegram := newFakeMod()
+			telegram.linkedChat = tc.linkedChat
+			telegram.linkedUnknown = tc.linkedUnknown
+			cfg := &config.Config{GroupIDs: []int64{groupID}, BlockChannelSenders: true, NotifyTTLSeconds: -1}
+			service := newTestService(t, cfg, telegram, "")
+			update := telego.Update{Message: &telego.Message{
+				MessageID:  9,
+				Chat:       telego.Chat{ID: groupID, Type: telego.ChatTypeSupergroup},
+				SenderChat: &telego.Chat{ID: channelID, Type: telego.ChatTypeChannel, Title: "Channel"},
+				Text:       "hello",
+			}}
+			runFakeHandler(t, newAPITestBot(t, telegram), service.FilterChannelSenders, update)
+			if telegram.deletes != tc.wantDeletes {
+				t.Errorf("deletes = %d, want %d", telegram.deletes, tc.wantDeletes)
+			}
+			if telegram.senderBans != tc.wantBans {
+				t.Errorf("sender-chat bans = %d, want %d", telegram.senderBans, tc.wantBans)
+			}
+		})
+	}
 }

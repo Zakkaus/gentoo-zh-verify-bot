@@ -143,15 +143,37 @@ func PermanentEditError(err error) bool {
 		strings.Contains(message, "message_id_invalid")
 }
 
+// destinationError reports failures caused by the destination chat itself: the bot lost posting
+// rights, was muted, the topic closed, the chat migrated or vanished. They say nothing about the
+// item or the message being sent, so neither path may count them against one of those.
+func destinationError(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"chat not found",
+		"migrate to chat",
+		"not enough rights",
+		"have no rights",
+		"chat_write_forbidden",
+		"chat_send_plain_forbidden",
+		"chat_restricted",
+		"topic_closed",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // CountablePermanentEditError reports deterministic unclassified 400 edit rejections.
 func CountablePermanentEditError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "chat not found") {
+	if destinationError(err) {
 		return false
 	}
+	message := strings.ToLower(err.Error())
 	code := ErrorCode(err)
 	return code == 400 || code == 0 && strings.Contains(message, "bad request")
 }
@@ -173,12 +195,10 @@ func PermanentPostError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "chat not found") ||
-		strings.Contains(message, "migrate to chat") ||
-		strings.Contains(message, "not enough rights") {
+	if destinationError(err) {
 		return false
 	}
+	message := strings.ToLower(err.Error())
 	code := ErrorCode(err)
 	return code == 400 || code == 0 && strings.Contains(message, "bad request")
 }

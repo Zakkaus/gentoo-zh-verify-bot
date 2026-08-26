@@ -427,6 +427,15 @@ func (c *dispatchCaller) Call(_ context.Context, endpoint string, data *ta.Reque
 	case "getMe":
 		c.record(dispatchAPICall{method: method, body: body})
 		return apiResponse(&telego.User{ID: c.botID, IsBot: true, Username: "dispatch_bot"})
+	case "getChat":
+		var params struct {
+			ChatID int64 `json:"chat_id"`
+		}
+		if err := json.Unmarshal(body, &params); err != nil {
+			return nil, err
+		}
+		c.record(dispatchAPICall{method: method, body: body})
+		return apiResponse(&telego.ChatFullInfo{ID: params.ChatID, Type: telego.ChatTypeSupergroup})
 	case "getChatMember":
 		var params struct {
 			ChatID int64 `json:"chat_id"`

@@ -36,12 +36,16 @@ type Client struct {
 	alertMu   sync.Mutex
 	alertSeen map[alertKey]time.Time
 
+	linkedMu    sync.Mutex
+	linkedCache map[int64]linkedChatEntry
+
 	cleanupTimers atomic.Int32
 }
 
 // New wraps bot with transport helpers and a bounded positive admin cache.
 func New(bot *telego.Bot) *Client {
-	return &Client{bot: bot, adminCache: make(map[adminKey]time.Time), alertSeen: make(map[alertKey]time.Time)}
+	return &Client{bot: bot, adminCache: make(map[adminKey]time.Time), alertSeen: make(map[alertKey]time.Time),
+		linkedCache: make(map[int64]linkedChatEntry)}
 }
 
 // HTMLMessage builds the standard outbound HTML message with link previews disabled.
@@ -263,6 +267,44 @@ func (c *Client) FailAlert(ctx context.Context, adminLogChatID, groupID int64, t
 	if fallback && message != nil {
 		c.scheduleDelete(target, message.MessageID, 0, groupFallbackAlertTTL)
 	}
+}
+
+// A group and its linked channel can be paired or unpaired at any time, so the answer is cached
+// only briefly. A failed lookup is cached for a shorter spell so a flood of messages does not
+// become a flood of getChat calls.
+const (
+	linkedChatTTL     = time.Hour
+	linkedChatFailTTL = 45 * time.Second
+)
+
+type linkedChatEntry struct {
+	id      int64
+	known   bool
+	expires time.Time
+}
+
+// LinkedChat returns the channel linked to chatID. known=false means the pairing could not be
+// read; callers must not treat that as "there is no linked channel".
+func (c *Client) LinkedChat(ctx context.Context, chatID int64) (linked int64, known bool) {
+	now := time.Now()
+	c.linkedMu.Lock()
+	entry, cached := c.linkedCache[chatID]
+	c.linkedMu.Unlock()
+	if cached && now.Before(entry.expires) {
+		return entry.id, entry.known
+	}
+	chat, err := c.bot.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(chatID)})
+	entry = linkedChatEntry{known: err == nil && chat != nil, expires: now.Add(linkedChatFailTTL)}
+	if entry.known {
+		entry.id = chat.LinkedChatID
+		entry.expires = now.Add(linkedChatTTL)
+	} else {
+		log.Printf("linkedChat(%d): %v", chatID, err)
+	}
+	c.linkedMu.Lock()
+	c.linkedCache[chatID] = entry
+	c.linkedMu.Unlock()
+	return entry.id, entry.known
 }
 
 // CachedAdmin returns cached positive status or performs a Telegram membership lookup.

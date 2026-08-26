@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/mymmrac/telego/telegoapi"
 )
 
 func TestJoinRequestGone(t *testing.T) {
@@ -84,5 +86,33 @@ func TestGroupUnreachable(t *testing.T) {
 		if got := GroupUnreachable(tc.err); got != tc.want {
 			t.Errorf("GroupUnreachable(%v) = %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+// A chat the bot cannot write in says nothing about the message it was asked to edit, so those
+// failures must never count toward giving up on tracking one bug.
+func TestDestinationFailuresAreNotPermanentPerMessage(t *testing.T) {
+	destinations := []string{
+		"Bad Request: not enough rights to send text messages to the chat",
+		"Bad Request: have no rights to send a message",
+		"Bad Request: CHAT_WRITE_FORBIDDEN",
+		"Bad Request: CHAT_SEND_PLAIN_FORBIDDEN",
+		"Bad Request: TOPIC_CLOSED",
+		"Bad Request: chat not found",
+		"Bad Request: group chat was upgraded to a supergroup chat, migrate to chat id",
+	}
+	for _, description := range destinations {
+		err := &telegoapi.Error{ErrorCode: 400, Description: description}
+		if CountablePermanentEditError(err) {
+			t.Errorf("CountablePermanentEditError(%q) = true, want false", description)
+		}
+		if PermanentPostError(err) {
+			t.Errorf("PermanentPostError(%q) = true, want false", description)
+		}
+	}
+	// An unclassified 400 is still the message's own fault and still counts.
+	own := &telegoapi.Error{ErrorCode: 400, Description: "Bad Request: message is too long"}
+	if !CountablePermanentEditError(own) || !PermanentPostError(own) {
+		t.Error("an unclassified 400 is a problem with the message itself and must still count")
 	}
 }

@@ -32,7 +32,8 @@
     "reply_usage": "用法：请回复目标用户的消息，再发送 %[1]s。",
     "settings_save_failed": "❌ 无法保存设置。请稍后重试。",
     "target_admin_check_failed": "⚠️ 无法确认目标用户是否为管理员，本次未执行操作。请确认机器人可读取成员信息后重试。",
-    "target_is_admin": "目标用户是管理员，未执行操作。请回复非管理员用户的消息后重试。"
+    "target_is_admin": "目标用户是管理员，未执行操作。请回复非管理员用户的消息后重试。",
+    "caller_admin_check_failed": "⚠️ 无法确认你是否为管理员，本次未执行操作。请确认机器人可读取成员信息后重试。"
   },
   "duration": {
     "days": "%[1]d 天",

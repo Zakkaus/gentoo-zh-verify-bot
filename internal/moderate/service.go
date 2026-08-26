@@ -31,6 +31,7 @@ type Telegram interface {
 	Unban(ctx context.Context, chatID, userID int64, onlyIfBanned bool) error
 	Mute(ctx context.Context, chatID, userID int64, seconds int) error
 	Unmute(ctx context.Context, chatID, userID int64) error
+	LinkedChat(ctx context.Context, chatID int64) (linked int64, known bool)
 	BanSenderChat(ctx context.Context, chatID, senderChatID int64) error
 	UnbanSenderChat(ctx context.Context, chatID, senderChatID int64) error
 }
@@ -177,13 +178,24 @@ func (s *Service) LogGroupAdmin(ctx context.Context, bot MemberLookup, selfID in
 	}
 }
 
-func (s *Service) isGroupAdmin(ctx context.Context, chatID, userID int64) bool {
+// isGroupAdmin separates "not an administrator" from "could not tell". Both refuse the command,
+// but only one of them is a statement about the caller.
+func (s *Service) isGroupAdmin(ctx context.Context, chatID, userID int64) (bool, error) {
 	ok, err := s.telegram.FreshAdmin(ctx, chatID, userID)
 	if err != nil {
 		log.Printf("isGroupAdmin getChatMember chat=%d user=%d: %v", chatID, userID, err)
-		return false
+		return false, err
 	}
-	return ok
+	return ok, nil
+}
+
+// callerRefusal picks between telling the caller they lack the rights and admitting the bot
+// could not check.
+func callerRefusal(l i18n.Lang, err error, denied string) string {
+	if err != nil {
+		return i18n.Messages.Moderate.Common.CallerAdminCheckFailed.For(l)
+	}
+	return denied
 }
 
 // Both moderation limits follow the group's own setting, falling back to the configured
@@ -222,8 +234,8 @@ func (s *Service) groupLanguage(groupID int64) i18n.Lang {
 
 func (s *Service) warnPrecheck(ctx context.Context, msg *telego.Message, command string, checkTargetAdmin bool, l i18n.Lang) *telego.User {
 	groupID := msg.Chat.ID
-	if !s.isGroupAdmin(ctx, groupID, msg.From.ID) {
-		s.notify(ctx, groupID, i18n.Messages.Moderate.Common.CommandAdminOnly.Render(l, command))
+	if admin, err := s.isGroupAdmin(ctx, groupID, msg.From.ID); !admin {
+		s.notify(ctx, groupID, callerRefusal(l, err, i18n.Messages.Moderate.Common.CommandAdminOnly.Render(l, command)))
 		return nil
 	}
 	if msg.ReplyToMessage == nil || msg.ReplyToMessage.From == nil {
@@ -480,8 +492,8 @@ func (s *Service) runSettingsAdminCommand(ctx *th.Context, update telego.Update,
 	groupID := msg.Chat.ID
 	l := s.groupLanguage(groupID)
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-	if !s.isGroupAdmin(requestCtx, groupID, msg.From.ID) {
-		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Common.AdminOnly.For(l))
+	if admin, err := s.isGroupAdmin(requestCtx, groupID, msg.From.ID); !admin {
+		s.notify(requestCtx, groupID, callerRefusal(l, err, i18n.Messages.Moderate.Common.AdminOnly.For(l)))
 		return nil
 	}
 	text, err := run(groupID, l)
