@@ -1,12 +1,14 @@
 package verify
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/mymmrac/telego"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 )
 
 // Leaving and rejoining must not buy a fresh notice and a fresh question every time. One
@@ -86,5 +88,26 @@ func TestCooldownIsEnforcedOnRejoin(t *testing.T) {
 	runFakeHandler(t, newAPITestBot(t, fb), v.OnMemberJoined, joinUpdate(-100, 5, telego.ChatTypeSupergroup, nil))
 	if fb.sends != before {
 		t.Errorf("sends went %d → %d: the cooldown notice must be throttled, or a rejoin loop becomes a DM loop", before, fb.sends)
+	}
+}
+
+// Re-applying inside the cooldown is refused every time, but the explanation is sent once:
+// the decline is the answer, and repeating it turns a determined applicant into a DM loop.
+func TestCooldownNoticeIsThrottledOnBothGates(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}, VerifyRetrySeconds: 180})
+	fb := &fakeVerifyBot{member: &telego.ChatMemberMember{Status: telego.MemberStatusMember}}
+	gid, uid := int64(-100), int64(5)
+	v.recordVerifyFail(gid, uid, v.wallNow())
+
+	for range 5 {
+		if !v.joinGate(context.Background(), fb, gid, uid, i18n.LangEN) {
+			t.Fatal("an applicant inside the cooldown must be refused")
+		}
+	}
+	if fb.declines != 5 {
+		t.Errorf("declines = %d, want 5: every re-apply is refused", fb.declines)
+	}
+	if fb.sends != 1 {
+		t.Errorf("cooldown notices = %d, want 1", fb.sends)
 	}
 }

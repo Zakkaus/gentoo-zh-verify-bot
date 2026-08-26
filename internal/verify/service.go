@@ -759,8 +759,12 @@ func (v *Service) joinGate(c context.Context, bot modBot, gid, uid int64, applic
 			return true
 		}
 		seconds := durationSecondsCeil(v.verifyCooldownRemaining(gid, uid))
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.messages.Verification.Result.CooldownActive.Render(applicantLang, seconds)))
 		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, seconds)
+		// The decline is the answer; repeating the explanation on every re-apply would turn a
+		// determined applicant into a direct-message loop. Same throttle the post-join gate uses.
+		if v.challengeResendOK(gid, uid) {
+			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.messages.Verification.Result.CooldownActive.Render(applicantLang, seconds)))
+		}
 		return true
 	}
 	return false
