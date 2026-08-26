@@ -45,12 +45,17 @@ func isBuiltInPrivateReply(reply string) bool {
 	return sha256.Sum256([]byte(reply)) == legacyPrivateReplySHA256
 }
 
-// Only these member commands bypass the unified DM reply.
-var dmCommands = map[string]bool{
-	"pkg": true, "use": true, "bug": true, "news": true, "wiki": true, "bbs": true,
-	"distro": true, "pkgs": true, "arm": true, "armpkgs": true,
-	"help": true, "ping": true, "stats": true,
-}
+// Member commands bypass the unified DM reply. Deriving the set from the registered menu
+// keeps two things right that a hand-written list got wrong: a newly added command works in
+// direct messages straight away, and the Gentoo lookups carry the edition prefix, so the
+// generic build admits /gpkg where the Gentoo build admits /pkg.
+var dmCommands = func() map[string]bool {
+	allowed := make(map[string]bool)
+	for _, c := range memberCommands(i18n.LangEN) {
+		allowed[c.Command] = true
+	}
+	return allowed
+}()
 
 // /start and allowed DM commands must reach their registered handlers.
 func privateNonStart(_ context.Context, update telego.Update) bool {
