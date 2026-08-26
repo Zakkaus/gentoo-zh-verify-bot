@@ -12,8 +12,8 @@
     "stopped": "⏸ 入群验证已关闭。新的入群申请不会自动验证，请由管理员手动审核。"
   },
   "rich_text": {
-    "enabled": "🎨 富文本输出已开启。/pkg 和 /use 将发送富文本消息；旧版或第三方客户端可能无法正确显示。",
-    "disabled": "📄 富文本输出已关闭。/pkg 和 /use 将发送纯文本消息。"
+    "enabled": "🎨 富文本输出已开启。/{g}pkg 和 /{g}use 将发送富文本消息；旧版或第三方客户端可能无法正确显示。",
+    "disabled": "📄 富文本输出已关闭。/{g}pkg 和 /{g}use 将发送纯文本消息。"
   },
   "name_spoiler": {
     "enabled": "🫥 新成员姓名遮盖已开启。姓名将以防剧透格式显示，避免广告姓名直接显示在群组内。",
@@ -31,15 +31,15 @@
   "auto_delete": {
     "current_enabled": "🧹 查询结果自动删除已开启。查询结果和原提问将在 %[1]d 分钟后删除。\n用法：/autodel off 关闭；/autodel <分钟> 调整时间。",
     "current_disabled": "查询结果自动删除已关闭。\n用法：/autodel on 开启；/autodel <分钟> 设置时间并开启。",
-    "disabled": "查询结果自动删除已关闭。/pkg、/use、/bug、/news、/wiki、/bbs、/pkgs、/arm、/armpkgs 的回复和原提问将保留。",
+    "disabled": "查询结果自动删除已关闭。/{g}pkg、/{g}use、/{g}bug、/{g}news、/wiki、/{g}bbs、/pkgs、/{g}arm、/armpkgs 的回复和原提问将保留。",
     "enabled": "🧹 查询结果自动删除已开启。查询结果和原提问的保留时间为 %[1]d 分钟。",
     "set": "🧹 删除时间已设置为 %[1]d 分钟，范围包括查询结果和原提问。",
     "usage": "用法：/autodel on|off 或 /autodel <分钟数>（1–1440）。"
   },
   "help": {
-    "member": "🤖 可用命令：\n/pkg <包名> — 搜索 Gentoo 包（官方树、gentoo-zh、GURU）\n/use <包名> — 查看包信息和 USE flag\n/arm <包名> — 查看 Gentoo arm64 keyword\n\n/pkgs <包名> — 比较各发行版的包版本（也可使用 /distro <包名>）\n/armpkgs <包名> — 比较各发行版的 arm64 支持情况\n/bug <编号> — 查询 Gentoo Bugzilla\n/news [关键词] — 查看或搜索 Gentoo 新闻\n/wiki <关键词> — 搜索 Gentoo Wiki、ArchWiki（含中文页面）\n/bbs <关键词> — 搜索 Linux 论坛（中文优先）\n\n/ping — 查看机器人状态和运行时长\n/stats — 查看今日通过、拒绝人数\n/help — 显示本帮助",
+    "member": "🤖 可用命令：\n/{g}pkg <包名> — 搜索 Gentoo 包（官方树、gentoo-zh、GURU）\n/{g}use <包名> — 查看包信息和 USE flag\n/{g}arm <包名> — 查看 Gentoo arm64 keyword\n\n/pkgs <包名> — 比较各发行版的包版本（也可使用 /distro <包名>）\n/armpkgs <包名> — 比较各发行版的 arm64 支持情况\n/{g}bug <编号> — 查询 Gentoo Bugzilla\n/{g}news [关键词] — 查看或搜索 Gentoo 新闻\n/wiki <关键词> — 搜索 Gentoo Wiki、ArchWiki（含中文页面）\n/{g}bbs <关键词> — 搜索 Linux 论坛（中文优先）\n\n/ping — 查看机器人状态和运行时长\n/stats — 查看今日通过、拒绝人数\n/help — 显示本帮助",
     "group_state": "入群验证：%[1]s",
-    "admin": "👮 管理员（请回复目标消息）：\n/mute [时长] — 禁言用户；默认 1h，例如 /mute 30m\n/unmute — 解除禁言\n/ban — 封禁并踢出用户；仅删除被回复的消息\n/sb — 封禁并踢出用户；同时删除该用户的全部消息\n/warn — 警告用户；累计 %[1]d 次后自动踢出\n/clearwarn — 清除警告\n\n其他管理命令：\n/settings — 打开私聊设置面板\n/bantime <时长> — 设置封禁时长；0 表示永久，例如 7d、12h、30m\n/autodel [on|off|分钟] — 设置查询结果自动删除\n/rich — 切换 /pkg、/use 富文本输出\n/spoiler — 切换新成员姓名遮盖\n/vmode <模式> — 设置验证方式：kernel、quiz、mixed 或 auto\n/bc — 切换频道身份发言封禁；使用 /bc allow|deny <频道 ID> 管理白名单\n/start 或 /stop — 开启或关闭入群验证",
+    "admin": "👮 管理员（请回复目标消息）：\n/mute [时长] — 禁言用户；默认 1h，例如 /mute 30m\n/unmute — 解除禁言\n/ban — 封禁并踢出用户；仅删除被回复的消息\n/sb — 封禁并踢出用户；同时删除该用户的全部消息\n/warn — 警告用户；累计 %[1]d 次后自动踢出\n/clearwarn — 清除警告\n\n其他管理命令：\n/settings — 打开私聊设置面板\n/bantime <时长> — 设置封禁时长；0 表示永久，例如 7d、12h、30m\n/autodel [on|off|分钟] — 设置查询结果自动删除\n/rich — 切换 /{g}pkg、/{g}use 富文本输出\n/spoiler — 切换新成员姓名遮盖\n/vmode <模式> — 设置验证方式：kernel、quiz、mixed 或 auto\n/bc — 切换频道身份发言封禁；使用 /bc allow|deny <频道 ID> 管理白名单\n/start 或 /stop — 开启或关闭入群验证",
     "direct_message_note": "以上查询命令也可在私聊中使用，每分钟最多 %[1]d 次。审核和管理命令仅可在群组内使用。"
   },
   "error": {

@@ -1,6 +1,6 @@
 {
   "bug": {
-    "usage": "用法：/bug <編號>。範例：/bug 900000。",
+    "usage": "用法：/{g}bug <編號>。範例：/{g}bug 900000。",
     "not_found": "❓ Bug %[1]s 不存在。請檢查編號後重試。",
     "unavailable": "❓ 暫時無法取得 Bug %[1]s 的詳細資料。請稍後重試。也可直接查看：%[2]s",
     "heading": "🐞 <a href=\"%[1]s\">Bug %[2]s</a>\n%[3]s\n",
@@ -63,7 +63,7 @@
     "no_matches": "\n\n找不到相關條目。請嘗試其他關鍵字。"
   },
   "bbs": {
-    "usage": "用法：/bbs <關鍵字>。範例：/bbs nvidia 黑畫面。搜尋 Linux 論壇，並優先顯示中文結果。",
+    "usage": "用法：/{g}bbs <關鍵字>。範例：/{g}bbs nvidia 黑畫面。搜尋 Linux 論壇，並優先顯示中文結果。",
     "heading": "💬 <b>%[1]s</b> 的論壇搜尋結果",
     "arch_cn_heading": "\n\n<b>Arch Linux CN 論壇</b>",
     "arch_cn_unavailable": "\n\n暫時無法取得 Arch Linux CN 論壇的結果。請稍後重試。",

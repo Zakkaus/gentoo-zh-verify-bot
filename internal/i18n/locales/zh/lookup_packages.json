@@ -3,12 +3,12 @@
     "heading": "🦾 <a href=\"%[1]s\">%[2]s</a> 在 arm64（AArch64）上的 keyword：",
     "keyword_unavailable": "⚠️ 暂时无法获取 keyword 状态。请稍后重试，或打开上方链接查看。",
     "no_keyword": "❌ 未设置 arm64 keyword——这通常表示该包尚未支持 arm64 或未经测试。如需确认支持状态，请打开上方链接查看。",
-    "not_found": "❓ 未在 Gentoo 官方树中找到「%[1]s」。请检查包名，或用 /pkg %[1]s 进行模糊搜索。",
+    "not_found": "❓ 未在 Gentoo 官方树中找到「%[1]s」。请检查包名，或用 /{g}pkg %[1]s 进行模糊搜索。",
     "official_unavailable": "暂时无法查询 Gentoo 官方树。请稍后重试。",
     "stable_only": "\n✅ stable keyword（arm64）：%[1]s",
     "stable_testing": "\n✅ stable keyword（arm64）：%[1]s\n🧪 testing keyword（~arm64）：%[2]s",
     "testing_only": "\n🧪 仅有 testing keyword（~arm64）：%[1]s（尚无 arm64 stable keyword；如需安装，请在 package.accept_keywords 中接受 ~arm64）",
-    "usage": "用法：/arm <包名>。示例：/arm firefox。查看该包在 Gentoo arm64（AArch64）上的 keyword 状态。"
+    "usage": "用法：/{g}arm <包名>。示例：/{g}arm firefox。查看该包在 Gentoo arm64（AArch64）上的 keyword 状态。"
   },
   "pkg": {
     "keyword_legend": "官方树：无符号表示 amd64 stable keyword；~ 表示最新版本尚无 amd64 stable keyword，不保证已设置 ~amd64。overlay：~ 仅标记最新 ebuild，不表示已设置 ~arch keyword。",
@@ -17,7 +17,7 @@
     "overlay_count": "（共 %[1]d 个）",
     "results_heading": "%[1]s 的搜索结果",
     "unavailable": "暂时无法查询以下来源：%[1]s。目前无法确认是否有匹配的包。请稍后重试。",
-    "usage": "用法：/pkg <包名>。示例：/pkg vim。也可粘贴链接：/pkg https://packages.gentoo.org/packages/app-editors/vim"
+    "usage": "用法：/{g}pkg <包名>。示例：/{g}pkg vim。也可粘贴链接：/{g}pkg https://packages.gentoo.org/packages/app-editors/vim"
   },
   "source": {
     "gentoo_official_tree": "Gentoo 官方树",
@@ -33,14 +33,14 @@
     "local_flags": "local USE flag",
     "multiple_matches": "匹配到多个包，请用完整包名（category/package）指定一个：",
     "no_flags": "（该包没有 USE flag）",
-    "not_found": "未找到精确匹配「%[1]s」的包。请用 /pkg %[1]s 进行模糊搜索。",
+    "not_found": "未找到精确匹配「%[1]s」的包。请用 /{g}pkg %[1]s 进行模糊搜索。",
     "official_legend": "+ 表示 USE flag 默认启用；版本前的 ~ 表示尚无 amd64 stable keyword，不保证已设置 ~amd64。",
     "overlay_legend": "overlay · USE flag 取自最新 ebuild，可能不完整；+ 表示默认启用。",
     "partial_matches": "暂时无法查询以下来源：%[1]s。以上匹配结果可能不完整。请稍后重试。",
     "source_label": "（%[1]s）",
     "truncated_count": " …（共 %[1]d 个）",
     "unavailable": "暂时无法查询以下来源：%[2]s。目前无法确认是否有精确匹配「%[1]s」的包。请稍后重试。",
-    "usage": "用法：/use <包名>。示例：/use vim、/use app-editors/vim。也可粘贴 packages.gentoo.org 链接。",
+    "usage": "用法：/{g}use <包名>。示例：/{g}use vim、/{g}use app-editors/vim。也可粘贴 packages.gentoo.org 链接。",
     "value_separator": "：",
     "version_latest": "版本：~%[1]s",
     "version_stable": "版本：%[1]s",

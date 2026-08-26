@@ -95,7 +95,19 @@ func (s localized) value(l Lang) string {
 	if l >= langCount {
 		l = LangZH
 	}
-	return s[l]
+	return applyCommandPrefix(s[l])
+}
+
+// commandPrefixToken marks where an edition-specific command name begins, so one catalogue
+// serves both builds: "/{g}pkg" renders as /pkg in the Gentoo build and /gpkg in the generic
+// one. Substituting here rather than at each call site means no message can be missed.
+const commandPrefixToken = "{g}"
+
+func applyCommandPrefix(s string) string {
+	if !strings.Contains(s, commandPrefixToken) {
+		return s
+	}
+	return strings.ReplaceAll(s, commandPrefixToken, CommandPrefix)
 }
 
 // Text is a localized value that is returned without formatting.
