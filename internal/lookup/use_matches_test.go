@@ -32,3 +32,13 @@ func TestUseMultipleMatchesSortsAtoms(t *testing.T) {
 		t.Errorf("atoms are not sorted: %q", got)
 	}
 }
+
+// The homepage link text used to be the English word, printed as-is to Chinese readers.
+func TestHomepageLabelIsLocalized(t *testing.T) {
+	want := map[i18n.Lang]string{i18n.LangEN: "homepage", i18n.LangZH: "主页", i18n.LangZHHant: "首頁"}
+	for l, expected := range want {
+		if got := i18n.Messages.LookupPackages.Use.Homepage.For(l); got != expected {
+			t.Errorf("%v homepage label = %q, want %q", l, got, expected)
+		}
+	}
+}

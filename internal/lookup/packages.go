@@ -1214,7 +1214,7 @@ func renderUseRich(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overl
 		hdr = append(hdr, esc(info.description))
 	}
 	if info.homepage != "" {
-		hdr = append(hdr, fmt.Sprintf("🏠 <a href=\"%s\">homepage</a>", esc(info.homepage)))
+		hdr = append(hdr, fmt.Sprintf("🏠 <a href=\"%s\">%s</a>", esc(info.homepage), esc(messages.Homepage.For(l))))
 	}
 	switch {
 	case info.stable != "" && info.latest != "" && info.latest != info.stable:
