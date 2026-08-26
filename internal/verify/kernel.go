@@ -45,15 +45,19 @@ func ModeName(l i18n.Lang, mode string) string {
 const kernelReleasePattern = `[vV]?(\d{1,3}(?:\.\d{1,6}){1,3})(?:[-+_][0-9A-Za-z][0-9A-Za-z._+-]*)?`
 
 var (
-	kernelReleaseRe           = regexp.MustCompile(`^` + kernelReleasePattern + `$`)
-	kernelReleaseTokenRe      = regexp.MustCompile(kernelReleasePattern)
-	kernelContextWordRe       = regexp.MustCompile(`[-#]?[0-9A-Za-z](?:[0-9A-Za-z_./+-]*[0-9A-Za-z])?`)
-	kernelHostnameRe          = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
-	kernelDateNumberRe        = regexp.MustCompile(`^(?:[0-9]{1,2}|[0-9]{4})$`)
-	wslKernelOutputRe         = regexp.MustCompile(`(?i)^Windows\s+WSL[0-9]*(?:\s+kernel\s+|\s*,\s*)` + kernelReleasePattern + `$`)
+	kernelReleaseRe      = regexp.MustCompile(`^` + kernelReleasePattern + `$`)
+	kernelReleaseTokenRe = regexp.MustCompile(kernelReleasePattern)
+	kernelContextWordRe  = regexp.MustCompile(`[-#]?[0-9A-Za-z](?:[0-9A-Za-z_./+-]*[0-9A-Za-z])?`)
+	kernelHostnameRe     = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$`)
+	kernelDateNumberRe   = regexp.MustCompile(`^(?:[0-9]{1,2}|[0-9]{4})$`)
+	wslKernelOutputRe    = regexp.MustCompile(`(?i)^Windows\s+WSL[0-9]*(?:\s+kernel\s+|\s*,\s*)` + kernelReleasePattern + `$`)
+	// The /proc/version banner is anchored by its own literal prefix and the parenthesised build
+	// info that always follows. The uname -a shape has no such prefix, so it must also carry the
+	// #N build field the real command always prints; without it the trailing wildcard would
+	// accept any words dressed up as kernel output.
 	kernelMultiVersionOutputs = [...]*regexp.Regexp{
-		regexp.MustCompile(`^Linux version ` + kernelReleasePattern + `(?:\s+\(.+|\s+#.+)$`),
-		regexp.MustCompile(`(?i)^(?:uname\s+-a\s*:?\s*)?Linux\s+\S+\s+` + kernelReleasePattern + `\s+.+\sGNU/Linux$`),
+		regexp.MustCompile(`^Linux version ` + kernelReleasePattern + `\s+\(.+$`),
+		regexp.MustCompile(`(?i)^(?:uname\s+-a\s*:?\s*)?Linux\s+\S+\s+` + kernelReleasePattern + `\s+#\d+\b.*\sGNU/Linux$`),
 	}
 )
 
@@ -98,14 +102,16 @@ func kernelAnswerOK(text string) bool {
 	if m := kernelReleaseRe.FindStringSubmatch(text); m != nil {
 		return kernelVersionOK(m[1])
 	}
+	// The whole-output shapes are anchored, so recognising them cannot widen acceptance to
+	// prose. Try them before counting tokens: whether a compiler banner happens to contain one
+	// version number or three must not decide whether the same command's output is accepted.
+	for _, re := range kernelMultiVersionOutputs {
+		if m := re.FindStringSubmatch(text); m != nil {
+			return kernelVersionOK(m[1])
+		}
+	}
 	matches := kernelReleaseTokenRe.FindAllStringIndex(text, -1)
 	if len(matches) != 1 {
-		// Anchored /proc/version and uname shapes may contain compiler or package versions.
-		for _, re := range kernelMultiVersionOutputs {
-			if m := re.FindStringSubmatch(text); m != nil {
-				return kernelVersionOK(m[1])
-			}
-		}
 		return false
 	}
 	if m := wslKernelOutputRe.FindStringSubmatch(text); m != nil {
