@@ -233,3 +233,27 @@ func TestChallengeWordingMatchesTheGate(t *testing.T) {
 		}
 	}
 }
+
+// Telling an administrator that a join request is still pending, when the person is standing in
+// the group muted, sends them looking for a queue entry that does not exist.
+func TestAdminWordingFollowsTheGate(t *testing.T) {
+	v := newTestService(&config.Config{})
+	for _, locale := range i18n.Languages() {
+		request := v.adminSays(gateRequest)
+		member := v.adminSays(gateMute)
+		pairs := [][2]string{
+			{request.Approving.For(locale), member.Approving.For(locale)},
+			{request.ActionFailed.For(locale), member.ActionFailed.For(locale)},
+			{request.CannotApprove.For(locale), member.CannotApprove.For(locale)},
+			{request.AlreadyHandled.For(locale), member.AlreadyHandled.For(locale)},
+			{request.Banning.Render(locale, "1h"), member.Banning.Render(locale, "1h")},
+			{request.DeclineFailed.Render(locale, 1, 2, "x"), member.DeclineFailed.Render(locale, 1, 2, "x")},
+			{request.PendingCap.Render(locale, 1, 2, 3), member.PendingCap.Render(locale, 1, 2, 3)},
+		}
+		for i, pair := range pairs {
+			if pair[0] == pair[1] {
+				t.Errorf("%s: operator message %d reads the same for an applicant and a member", locale, i)
+			}
+		}
+	}
+}

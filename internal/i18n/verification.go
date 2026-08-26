@@ -265,6 +265,18 @@ type VerificationAdminCatalog struct {
 	BanFailed Format
 	// ApproveButton labels the direct-approval button.
 	ApproveButton Text
+	// The *Held variants say the same thing about a member who is already inside the group,
+	// where admitting means lifting a restriction and refusing means removing them.
+	ApprovingHeld           Text
+	BanningHeld             Format
+	ApproveFailedHeld       Format
+	BanFailedHeld           Format
+	DeclineFailedHeld       Format
+	ActionFailedHeld        Text
+	CannotApproveHeld       Text
+	AlreadyHandledHeld      Text
+	ChallengePostFailedHeld Format
+	PendingCapHeld          Format
 	// ReleaseButton labels the direct-approval button for a held member.
 	ReleaseButton Text
 	// RemoveButton labels the removal button for a held member.
