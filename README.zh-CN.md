@@ -48,12 +48,18 @@ Gentoo 版用 `-tags gentoo` 构建，默认构建即通用版。每次发布同
 ```sh
 curl --fail --location --remote-name \
   https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/main/deploy/install.sh
+# Gentoo 中文社区版
 sh install.sh                       # 或指定版本：sh install.sh v4.3.0
 sudoedit /etc/gentoo-zh-verify-bot/bot.env   # 填入 BOT_TOKEN=<@BotFather 给的令牌>
 sudo systemctl start gentoo-zh-verify-bot
+
+# 一般 Linux 社区版
+sh install.sh --generic
+sudoedit /etc/gentoo-zhbot/bot.env
+sudo systemctl start gentoo-zhbot
 ```
 
-装通用版加 `--generic`，二进制、配置目录、systemd 单元和状态目录全部换成 `gentoo-zhbot`，因此两个版本可以装在同一台机器上互不干扰。
+两个版本的二进制、配置目录、systemd 单元和状态目录名称全部不同，可以装在同一台机器上互不干扰。后文命令按 Gentoo 版的名称书写，装通用版时换成 `gentoo-zhbot`。
 
 运行前请先读一遍脚本，它很短，做的就是上面这几件事。
 
@@ -130,7 +136,7 @@ Telegram 不可达时，到期验证会获得新的完整时限，不会被拒�
 
 ## 适配到其它社区
 
-多数社区不需要 fork：运行 `gentoo-zhbot` 版本再配置即可。群组、验证模式、两种题库、三个现有 locale、overlay、新闻源、推送目标和消息策略都可通过 `config.json` 或设置面板修改，不需要改代码。
+多数社区不需要 fork：运行 `gentoo-zhbot` 版本再配置即可，不需要改代码。群组、验证模式、两种题库、三个现有 locale、消息策略和群管理设置在设置面板里改；overlay、新闻源、推送目标、`user_agent` 和 `stats_timezone` 只能改 `config.json`，改完需要重启。
 
 若要彻底替换 Gentoo 语义，而不是让它保留在 `g` 前缀之后，必须完整修改以下位置：
 
