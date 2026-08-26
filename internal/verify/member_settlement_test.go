@@ -173,3 +173,50 @@ func TestReleaseLeavesSomebodyElsesRestrictionAlone(t *testing.T) {
 		t.Errorf("unmutes = %d, want 1: passing lifts the hold verification placed", mine.unmutes)
 	}
 }
+
+// A button left behind by a failed deletion must not settle a verification the administrator
+// never looked at. The applicant's answer buttons have always carried a nonce; these now do too.
+func TestStaleAdminButtonDoesNotSettleTheNextVerification(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	gid, uid := int64(-100), int64(9)
+	current := &pending{gate: gateMute, nonce: "fresh", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = current
+	t.Cleanup(v.stopForShutdown)
+	fb := &fakeVerifyBot{member: &telego.ChatMemberMember{Status: telego.MemberStatusMember}}
+
+	stale := telego.Update{CallbackQuery: &telego.CallbackQuery{
+		ID:      "1",
+		From:    telego.User{ID: 42, LanguageCode: "en"},
+		Message: &telego.Message{MessageID: 1, Chat: telego.Chat{ID: gid}},
+		Data:    AdminCallbackPrefix + "pass:-100:9:stale",
+	}}
+	runFakeHandler(t, newAPITestBot(t, fb), v.OnAdminAction, stale)
+
+	v.mu.Lock()
+	_, still := v.pend[pkey{gid, uid}]
+	v.mu.Unlock()
+	if !still {
+		t.Error("a button from a finished verification must not settle the running one")
+	}
+	if fb.unmutes != 0 || fb.approves != 0 {
+		t.Errorf("unmutes = %d approves = %d, want 0 and 0", fb.unmutes, fb.approves)
+	}
+}
+
+// Removal that cannot be undone leaves the member banned. Inviting them back would be false.
+func TestStrandedBanIsReportedAsABan(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	gid, uid := int64(-100), int64(10)
+	p := &pending{gate: gateMute, nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = p
+	t.Cleanup(v.stopForShutdown)
+	fb := &fakeVerifyBot{
+		member:   &telego.ChatMemberMember{Status: telego.MemberStatusMember},
+		unbanErr: errors.New("not enough rights"),
+	}
+
+	_, banned := v.finishDecline(context.Background(), fb, gid, uid, p, "timeout")
+	if !banned {
+		t.Error("a removal whose unban failed leaves them banned; the result must say so")
+	}
+}

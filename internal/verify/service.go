@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -27,7 +28,7 @@ const (
 	// AnswerCallbackPrefix identifies applicant quiz-answer callbacks.
 	AnswerCallbackPrefix = "v:" // v:<gid>:<uid>:<nonce>:<idx>
 	// AdminCallbackPrefix identifies administrator verification callbacks.
-	AdminCallbackPrefix = "adm:" // adm:<action>:<gid>:<uid>
+	AdminCallbackPrefix = "adm:" // adm:<action>:<gid>:<uid>[:<nonce>]
 	// ChannelRecheckCallbackPrefix identifies required-channel recheck callbacks.
 	ChannelRecheckCallbackPrefix = "ch:" // ch:<gid>:<uid>
 )
@@ -556,7 +557,7 @@ func (v *Service) livePending(gid, uid int64) (*pending, bool) {
 // allowed to attempt. The notice is throttled: a rejoin loop must not become a direct-message
 // loop, and the removal alone already conveys the answer.
 func (v *Service) removeDuringCooldown(c context.Context, bot modBot, gid, uid int64, l i18n.Lang, wait time.Duration) {
-	if err := v.removeMember(c, bot, gid, uid); err != nil {
+	if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 		log.Printf("post-join verify: cannot remove %d from %d during cooldown: %v", uid, gid, err)
 		admin := &v.messages.Verification.Admin
 		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
@@ -696,21 +697,24 @@ func (v *Service) holdStillOurs(ctx context.Context, bot modBot, groupID, userID
 // The unban is the dangerous half. An administrator who banned this person moments ago would
 // find their ban quietly lifted, so anyone Telegram already reports as banned or gone is left
 // exactly as they are: whoever put them there outranks this settlement.
-func (v *Service) removeMember(ctx context.Context, bot modBot, groupID, userID int64) error {
+// It reports whether the member was left banned, which happens when the ban lands but the unban
+// that follows it does not.
+func (v *Service) removeMember(ctx context.Context, bot modBot, groupID, userID int64) (stillBanned bool, err error) {
 	if settled, known := v.alreadyOut(ctx, bot, groupID, userID); known && settled {
 		log.Printf("post-join verify: %d is already out of %d; leaving that decision alone", userID, groupID)
-		return nil
+		return false, nil
 	}
 	transport := v.verificationTransport(bot)
 	if err := transport.Ban(ctx, groupID, userID, 0, false); err != nil {
-		return err
+		return false, err
 	}
 	if err := transport.Unban(ctx, groupID, userID, true); err != nil {
-		// The removal itself worked; leaving them banned is stricter than intended but not a
-		// failed settlement, so it is reported rather than retried.
+		// The removal worked, but they are still banned. Telling them to come back would be
+		// false, so the caller is told to word it as a ban and operators are told to lift it.
 		log.Printf("post-join verify: removed %d from %d but could not lift the ban: %v", userID, groupID, err)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // alreadyOut reports that somebody is banned or has left. known=false means the answer could not
@@ -1021,7 +1025,7 @@ func gateOf(owner *pending) challengeVoice {
 	if owner == nil {
 		return challengeVoice{gate: gateRequest}
 	}
-	return challengeVoice{gate: owner.gate, invited: owner.invited}
+	return challengeVoice{gate: owner.gate, invited: owner.invited, nonce: owner.nonce}
 }
 
 // challengeVoice selects the public challenge wording: applying, arriving on their own, or
@@ -1029,6 +1033,7 @@ func gateOf(owner *pending) challengeVoice {
 type challengeVoice struct {
 	gate    string
 	invited bool
+	nonce   string
 }
 
 func (v *Service) deliverPendingChallenge(
@@ -1239,7 +1244,7 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		// back out — no strike, they did nothing wrong — so they can return once the queue drains.
 		log.Printf("post-join verify: %d in %d skipped, pending cap reached; removing them until the queue drains", uid, gid)
 		v.alertPendingCap(c, bot, gid)
-		if err := v.removeMember(c, bot, gid, uid); err != nil {
+		if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 			log.Printf("post-join verify: cannot remove %d from %d at capacity: %v", uid, gid, err)
 		}
 		return nil
@@ -1849,17 +1854,29 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	parts := strings.SplitN(strings.TrimPrefix(cq.Data, AdminCallbackPrefix), ":", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(strings.TrimPrefix(cq.Data, AdminCallbackPrefix), ":", 4)
+	if len(parts) < 3 {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
 	}
 	action := parts[0]
 	gid, _ := strconv.ParseInt(parts[1], 10, 64)
 	target, _ := strconv.ParseInt(parts[2], 10, 64)
+	// The nonce ties the button to the verification it was posted for. A button left behind by a
+	// failed deletion would otherwise settle whatever verification is running now — one the
+	// administrator never looked at. Buttons posted before this existed carry no nonce and keep
+	// the old behaviour; they disappear with the verification they belong to.
+	nonce := ""
+	if len(parts) == 4 {
+		nonce = parts[3]
+	}
 
 	l := v.groupLanguage(gid)
 	admin := &v.messages.Verification.Admin
+	if nonce != "" && !v.pendingHasNonce(gid, target, nonce) {
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.AlreadyHandled.For(l)).WithShowAlert())
+		return nil
+	}
 	if !v.isGroupAdmin(c, bot, gid, cq.From.ID) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.OnlyGroupAdmin.For(l)).WithShowAlert())
 		return nil
@@ -2339,6 +2356,14 @@ func (v *Service) markPassing(gid, uid int64, p *pending) {
 	}
 }
 
+// pendingHasNonce reports that the live verification is the one a button was posted for.
+func (v *Service) pendingHasNonce(gid, uid int64, nonce string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	return ok && !p.done && p.nonce == nonce
+}
+
 // pendingGate reads the gate of a live pending; a missing one reads as the join-request gate.
 func (v *Service) pendingGate(gid, uid int64) string {
 	v.mu.Lock()
@@ -2435,6 +2460,9 @@ func (v *Service) declineResultText(outcome declineOutcome, l i18n.Lang, gate st
 	}
 }
 
+// errRemovalLeftBanned names the state a failed unban leaves behind, for the operator alert.
+var errRemovalLeftBanned = errors.New("removed but the ban could not be lifted; unban them manually")
+
 // wrongAnswerReason marks a decline the applicant caused by failing the challenge.
 const wrongAnswerReason = "wrong answer"
 
@@ -2511,9 +2539,12 @@ func (o declineOutcome) settled() bool {
 // Settle an already-claimed decline, striking at claim time only after Telegram confirms rejection.
 func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p *pending, reason string) (outcome declineOutcome, banned bool) {
 	outcome = declineConfirmed
+	leftBanned := false
 	settle := func() error {
 		if p.gate == gateMute {
-			return v.removeMember(c, bot, gid, uid)
+			stranded, err := v.removeMember(c, bot, gid, uid)
+			leftBanned = stranded
+			return err
 		}
 		return bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
 	}
@@ -2581,6 +2612,13 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 		if banned {
 			v.clearVerifyFails(gid, uid)
 		}
+	}
+	if leftBanned {
+		// The removal could not be undone, so they really are banned. Say that instead of
+		// inviting them back, and tell operators, because only they can lift it.
+		banned = true
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, errRemovalLeftBanned))
 	}
 	v.save()
 	log.Printf("decline user=%d group=%d (%s) fails=%d banned=%v", uid, gid, reason, count, banned)

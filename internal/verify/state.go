@@ -806,8 +806,8 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: group.VerifyButton.For(l), URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
-		telego.InlineKeyboardButton{Text: adminPassLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: adminRejectLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: adminPassLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr + ":" + voice.nonce},
+		telego.InlineKeyboardButton{Text: adminRejectLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr + ":" + voice.nonce},
 	))
 	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	if err != nil {
