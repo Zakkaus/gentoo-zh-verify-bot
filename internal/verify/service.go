@@ -1507,9 +1507,10 @@ func (v *Service) sendDMQuestionRetainingPrevious(
 		if prompt.fallback {
 			render = fallbackPromptHTML
 		}
+		gate := gateOf(prompt.pending).gate
 		sent, err = v.sendVerifyDM(c, bot, uid,
-			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, true),
-			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, false))
+			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, true, gate),
+			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, false, gate))
 	} else {
 		gidStr, uidStr := strconv.FormatInt(prompt.gid, 10), strconv.FormatInt(uid, 10)
 		rows := make([][]telego.InlineKeyboardButton, 0, len(prompt.opts))

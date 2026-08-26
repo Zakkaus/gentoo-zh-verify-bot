@@ -287,11 +287,15 @@ func (v *Service) newChallenge(gid int64, ul i18n.Lang) (mode, text string, opts
 }
 
 // Render both expandable and legacy-compatible versions of the localized DM prompt.
-func kernelPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, left int, nonce string, expandable bool) string {
+func kernelPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, left int, nonce string, expandable bool, gate string) string {
 	if left < 1 {
 		left = 1 // a live pending always has at least one reply left; never advertise zero
 	}
-	prompt := messages.Verification.Challenge.KernelPrompt.Render(l, html.EscapeString(question), left)
+	template := messages.Verification.Challenge.KernelPrompt
+	if gate == gateMute {
+		template = messages.Verification.Challenge.KernelPromptHeld
+	}
+	prompt := template.Render(l, html.EscapeString(question), left)
 	return prompt + "\n\n" + aiTrapLine(messages, l, nonce, expandable)
 }
 
@@ -523,7 +527,7 @@ func saysNoLinux(text string) bool {
 }
 
 // The fallback carries the same agent tripwire as the kernel prompt.
-func fallbackPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, left int, nonce string, expandable bool) string {
+func fallbackPromptHTML(messages *i18n.Catalog, l i18n.Lang, question string, left int, nonce string, expandable bool, _ string) string {
 	if left < 1 {
 		left = 1
 	}
@@ -668,7 +672,7 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 		}
 		if left > 0 {
 			v.save()
-			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.FallbackWrong.Render(ul, left)))
+			_, _ = bot.SendMessage(c, htmlMessage(uid, heldOr(gate, challenge.FallbackWrongHeld, challenge.FallbackWrong).Render(ul, left)))
 			return
 		}
 		// Decline only the nonce charged by recordKernelTry, never a replacement pending.
@@ -722,7 +726,7 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 		}
 		if left > 0 {
 			v.save() // keep the used-up tries across a restart
-			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.KernelWrong.Render(ul, left)))
+			_, _ = bot.SendMessage(c, htmlMessage(uid, heldOr(gate, challenge.KernelWrongHeld, challenge.KernelWrong).Render(ul, left)))
 			return
 		}
 		outcome, banned := v.decline(c, bot, gid, uid, curNonce, wrongAnswerReason) // the nonce as of the charge, see above
@@ -762,6 +766,14 @@ func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string,
 		return i18n.LangZH, "", nil, gateRequest, false
 	}
 	return p.lang, p.nonce, p.fbAnswers, p.gate, true
+}
+
+// heldOr picks the wording that matches where the applicant is standing.
+func heldOr(gate string, held, request i18n.Format) i18n.Format {
+	if gate == gateMute {
+		return held
+	}
+	return request
 }
 
 // Prepare a hidden fallback and suspend grading until its prompt delivery is confirmed.

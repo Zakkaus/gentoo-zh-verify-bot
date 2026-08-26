@@ -220,3 +220,16 @@ func TestStrandedBanIsReportedAsABan(t *testing.T) {
 		t.Error("a removal whose unban failed leaves them banned; the result must say so")
 	}
 }
+
+// A held member is told what failing actually costs them: removal from the group, not a declined
+// join request they do not have.
+func TestChallengeWordingMatchesTheGate(t *testing.T) {
+	for _, locale := range i18n.Languages() {
+		question := kernelQuestion(&i18n.Messages, locale)
+		applicant := kernelPromptHTML(&i18n.Messages, locale, question, 3, "n", true, gateRequest)
+		member := kernelPromptHTML(&i18n.Messages, locale, question, 3, "n", true, gateMute)
+		if applicant == member {
+			t.Errorf("%s: a member standing in the group gets the same warning as somebody waiting outside", locale)
+		}
+	}
+}

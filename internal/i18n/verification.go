@@ -89,6 +89,12 @@ type VerificationGroupCatalog struct {
 
 // VerificationChallengeCatalog contains applicant questions and guidance.
 type VerificationChallengeCatalog struct {
+	// KernelPromptHeld, KernelWrongHeld and FallbackWrongHeld say what failing costs somebody who
+	// is already inside the group: removal, not a declined join request.
+	KernelPromptHeld  Format
+	KernelWrongHeld   Format
+	FallbackWrongHeld Format
+
 	// KernelQuestion is persisted with a kernel challenge.
 	KernelQuestion Text
 	// QuizPrompt formats a multiple-choice question.
