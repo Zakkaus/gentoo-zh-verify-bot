@@ -581,6 +581,11 @@ func (v *Service) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64
 		}
 		// Trusted membership takes priority over failure cooldown.
 		if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+			if tg.JoinRequestGone(err) {
+				// Already settled in Telegram's own interface; a challenge now would be noise.
+				log.Printf("trusted-bypass: join request from %d in %d is already gone: %v", uid, gid, err)
+				return true, true
+			}
 			log.Printf("trusted-bypass: approve %d in %d failed (%v) — falling back to normal verification", uid, gid, err)
 			alert := v.messages.Verification.Admin.TrustedBypassFailed.Render(v.groupLanguage(gid), uid, src, gid, err)
 			v.adminAlert(c, bot, alert)
@@ -1635,11 +1640,21 @@ func (v *Service) approve(c context.Context, bot verifyBot, gid, uid int64) bool
 // Failed approval reopens the claimed pending instead of stranding the applicant.
 func (v *Service) executeApprove(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
-		log.Printf("approve %d in %d: %v", uid, gid, err)
-		admin := &v.messages.Verification.Admin
-		v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.reopenPending(bot, gid, uid, p, "approve-retry")
-		return false
+		if !tg.JoinRequestGone(err) {
+			log.Printf("approve %d in %d: %v", uid, gid, err)
+			admin := &v.messages.Verification.Admin
+			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.reopenPending(bot, gid, uid, p, "approve-retry")
+			return false
+		}
+		// An administrator settled this request in Telegram's own interface, so the bot
+		// has nothing left to approve. Close the pending instead of retrying, and record
+		// no decision either way: which way it went is not knowable from here.
+		log.Printf("approve %d in %d: join request is already gone: %v", uid, gid, err)
+		v.finishTerminal(gid, uid, p)
+		v.deleteChallenges(c, bot, gid, uid, p.messages())
+		v.save()
+		return true
 	}
 	v.mu.Lock()
 	key := pkey{gid, uid}
