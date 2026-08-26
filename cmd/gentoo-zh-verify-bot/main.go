@@ -129,6 +129,31 @@ func alertRetentionOutage(
 	}
 }
 
+// alertPersistenceProblem tells the operator, in Telegram, that runtime settings are degraded.
+func alertPersistenceProblem(ctx context.Context, bot *telego.Bot, cfg *config.Config, settings *store.Settings) {
+	status := settings.Persistence()
+	if status.LastError == nil {
+		return
+	}
+	log.Printf("WARNING: runtime settings persistence unavailable: %v", status.LastError)
+	targets := []int64{cfg.AdminLogChatID}
+	if cfg.AdminLogChatID == 0 {
+		targets = settings.GroupIDs()
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, target := range targets {
+		if target == 0 {
+			continue
+		}
+		language := i18n.FromStored(cfg.LangForGroup(target))
+		text := i18n.Messages.Verification.Admin.SettingsDegraded.Render(language, status.LastError.Error())
+		if _, err := bot.SendMessage(sendCtx, tu.Message(tu.ID(target), text)); err != nil && ctx.Err() == nil {
+			log.Printf("settings-degraded alert to %d failed: %v", target, err)
+		}
+	}
+}
+
 // A live context means the update stream died unexpectedly; exit non-zero so systemd restarts it.
 func streamEndedUnexpectedly(ctxErr error) bool { return ctxErr == nil }
 
@@ -271,6 +296,9 @@ func main() {
 	if sd != "" {
 		heartbeatPath = filepath.Join(sd, "heartbeat.json")
 	}
+	// A settings store that could not be loaded cleanly changes how the bot behaves everywhere.
+	// A log line alone leaves the operator to discover that by accident.
+	alertPersistenceProblem(ctx, bot, cfg, runtimeSettings)
 	outageObserver := &retentionOutageObserver{heartbeatPath: heartbeatPath}
 	outageObserver.alert = func(outage time.Duration) {
 		alertRetentionOutage(ctx, bot, cfg, runtimeSettings.GroupIDs(), outage)
@@ -504,9 +532,6 @@ func loadRuntimeState(configPath, stateDirectory string) (*config.Config, *store
 	runtimeSettings, err := store.NewSettings(settingsPath, baseline)
 	if err != nil {
 		return nil, nil, fmt.Errorf("settings: %w", err)
-	}
-	if status := runtimeSettings.Persistence(); status.LastError != nil {
-		log.Printf("WARNING: runtime settings persistence unavailable: %v", status.LastError)
 	}
 	return cfg, runtimeSettings, nil
 }

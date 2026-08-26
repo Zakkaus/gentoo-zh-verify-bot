@@ -424,6 +424,20 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 
 	snap, err := s.buildSnapshot(s.state)
 	if err != nil {
+		// Config and stored state can drift apart through ordinary maintenance: a runtime-
+		// registered group gets written into config.json, or the control group is retired.
+		// Reconciling the two costs nothing and keeps every administrator's decision; throwing
+		// the file away silently re-enables verification everywhere and unregisters live groups.
+		reconciled, adjustments := s.reconcileWithBaseline(s.state)
+		if len(adjustments) > 0 {
+			if snap, err = s.buildSnapshot(reconciled); err == nil {
+				s.writable = false // hold writes until the operator confirms; the file on disk stays intact
+				s.state = reconciled
+				s.setLastError(fmt.Errorf("%w: reconciled with config: %s", ErrSettingsUnavailable, strings.Join(adjustments, "; ")))
+				s.snapshot.Store(snap)
+				return s, nil
+			}
+		}
 		s.writable = false
 		s.setLastError(fmt.Errorf("%w: %v", ErrSettingsUnavailable, err))
 		s.state = s.newState()
@@ -431,6 +445,42 @@ func NewSettings(path string, baseline SettingsBaseline) (*Settings, error) {
 	}
 	s.snapshot.Store(snap)
 	return s, nil
+}
+
+// reconcileWithBaseline resolves the two ways config.json and settings.json routinely drift
+// apart, and reports what it changed so the operator can be told. Per-group overrides are never
+// touched: a group promoted into config.json keeps the settings its administrators chose.
+func (s *Settings) reconcileWithBaseline(state settingsFile) (settingsFile, []string) {
+	out := cloneSettingsFile(state)
+	var adjustments []string
+
+	kept := out.RegisteredGroups[:0]
+	for _, group := range out.RegisteredGroups {
+		if _, configured := s.baselineByID[group.ID]; configured {
+			adjustments = append(adjustments, fmt.Sprintf("group %d is now configured, dropping its runtime registration", group.ID))
+			continue
+		}
+		kept = append(kept, group)
+	}
+	out.RegisteredGroups = kept
+
+	if out.ControlGroupID != 0 {
+		known := false
+		if _, configured := s.baselineByID[out.ControlGroupID]; configured {
+			known = true
+		}
+		for _, group := range out.RegisteredGroups {
+			if group.ID == out.ControlGroupID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			adjustments = append(adjustments, fmt.Sprintf("control group %d no longer exists, falling back to the first effective group", out.ControlGroupID))
+			out.ControlGroupID = 0
+		}
+	}
+	return out, adjustments
 }
 
 // Persistence returns a lock-free persistence status snapshot.
