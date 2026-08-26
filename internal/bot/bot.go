@@ -84,6 +84,7 @@ func (s *Service) handlerRoutes() []handlerRoute {
 		{name: "verify.channel_recheck", handler: s.verification.OnChannelRecheck, predicates: []th.Predicate{th.CallbackDataPrefix(verify.ChannelRecheckCallbackPrefix)}},
 		{name: "panel.settings_callback", handler: s.administration.OnSettingsCallback, predicates: []th.Predicate{th.CallbackDataPrefix(panel.SettingsCallbackPrefix)}},
 		{name: "verify.join_request", handler: s.verification.OnJoinRequest, predicates: []th.Predicate{th.AnyChatJoinRequest()}},
+		{name: "verify.member_joined", handler: s.verification.OnMemberJoined, predicates: []th.Predicate{th.AnyChatMember()}},
 		{name: "panel.chat_shared", handler: s.administration.OnPanelChatShared, predicates: []th.Predicate{s.administration.PanelChatSharedDM}},
 		{name: "panel.input", handler: s.administration.OnPanelInput, predicates: []th.Predicate{s.administration.PanelInputDM}},
 		{name: "verify.kernel_answer", handler: s.verification.OnKernelAnswer, predicates: []th.Predicate{s.verification.KernelAnswerDM}},

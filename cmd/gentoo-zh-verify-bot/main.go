@@ -351,7 +351,7 @@ func main() {
 		func() (<-chan telego.Update, error) {
 			return bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 				Timeout:        30,
-				AllowedUpdates: []string{"chat_join_request", "callback_query", "message", "my_chat_member"},
+				AllowedUpdates: []string{"chat_join_request", "chat_member", "callback_query", "message", "my_chat_member"},
 			}, telego.WithLongPollingRetryTimeout(pollRetryInterval))
 		},
 	)

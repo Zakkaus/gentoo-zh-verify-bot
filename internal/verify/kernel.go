@@ -610,7 +610,7 @@ func (v *Service) trippedPending(uid int64, text string) (gid int64, nonce strin
 
 // Decline every affected group, but tally the one reply only once.
 func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, nonce, text string) {
-	ul, cur, _, ok := v.kernelPendingInfo(gid, uid)
+	ul, cur, _, gate, ok := v.kernelPendingInfo(gid, uid)
 	if !ok {
 		return
 	}
@@ -626,13 +626,13 @@ func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, no
 	if outcome == declineNoPending {
 		return
 	}
-	msg := v.declineResultText(outcome, ul, func() string { return v.agentCaughtText(gid, ul, banned) })
+	msg := v.declineResultText(outcome, ul, gate, func() string { return v.agentCaughtText(gid, ul, gate, banned) })
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 }
 
 // A plausible version passes after the channel gate; the final failed reply declines.
 func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int64, text string) {
-	ul, nonce, fbAnswers, ok := v.kernelPendingInfo(gid, uid)
+	ul, nonce, fbAnswers, gate, ok := v.kernelPendingInfo(gid, uid)
 	if !ok {
 		return // handled or replaced meanwhile
 	}
@@ -676,7 +676,7 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 		if outcome == declineNoPending {
 			return
 		}
-		msg := v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
+		msg := v.declineResultText(outcome, ul, gate, func() string { return v.wrongAnswerText(gid, ul, gate, banned) })
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
@@ -729,7 +729,7 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 		if outcome == declineNoPending {
 			return
 		}
-		msg := v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
+		msg := v.declineResultText(outcome, ul, gate, func() string { return v.wrongAnswerText(gid, ul, gate, banned) })
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
@@ -739,7 +739,7 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 // Nonce-bind approval across the channel lookup so a stale answer cannot settle a replacement.
 func (v *Service) finishKernelPass(c context.Context, bot modBot, gid, uid int64, nonce string, ul, groupLang i18n.Lang) {
 	channel := &v.messages.Verification.Channel
-	result := &v.messages.Verification.Result
+	voice := v.voice(v.pendingGate(gid, uid))
 	if !v.isChannelMember(c, bot, gid, uid, groupLang) {
 		message := channel.First.Render(ul, v.channelLinkHTML(gid, ul))
 		_, _ = bot.SendMessage(c, htmlMessage(uid, message))
@@ -747,21 +747,21 @@ func (v *Service) finishKernelPass(c context.Context, bot modBot, gid, uid int64
 	}
 	p, ok := v.claimPendingNonce(gid, uid, nonce)
 	if ok && v.executeApprove(c, bot, gid, uid, p) == approveConfirmed {
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.Approved.For(ul)))
+		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), voice.Passed.For(ul)))
 		return
 	}
-	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.AlreadyHandled.For(ul)))
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), voice.AlreadyHandled.For(ul)))
 }
 
 // Return only live, confirmed pending data needed for grading.
-func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string, fbAnswers []string, ok bool) {
+func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string, fbAnswers []string, gate string, ok bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, exists := v.pend[pkey{gid, uid}]
 	if !exists || p.done || p.fallbackPending {
-		return i18n.LangZH, "", nil, false
+		return i18n.LangZH, "", nil, gateRequest, false
 	}
-	return p.lang, p.nonce, p.fbAnswers, true
+	return p.lang, p.nonce, p.fbAnswers, p.gate, true
 }
 
 // Prepare a hidden fallback and suspend grading until its prompt delivery is confirmed.

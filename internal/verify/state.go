@@ -462,7 +462,7 @@ func (v *Service) save() {
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
 				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
-				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid})
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate})
 		}
 		return recs
 	})
@@ -521,7 +521,7 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate,
 			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
@@ -677,15 +677,16 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 	if outcome == declineUnsettled && !v.claimSettlePendingNotice(gid, uid, p) {
 		return // one notice per applicant: a settlement the bot keeps retrying must not DM them each round
 	}
-	text := v.declineResultText(outcome, p.lang, func() string {
+	voice := v.voice(p.gate)
+	text := v.declineResultText(outcome, p.lang, p.gate, func() string {
 		switch {
 		case capped:
-			return v.messages.Verification.Result.DeferralExpired.For(p.lang)
+			return voice.DeferralExpired.For(p.lang)
 		case reason == challengeExpiryReason(false):
 			// The applicant never saw a question; telling them they ran out of time is not true.
-			return v.messages.Verification.Result.Undelivered.For(p.lang)
+			return voice.Undelivered.For(p.lang)
 		default:
-			return v.timeoutResultText(gid, uid, p.lang, banned)
+			return v.timeoutResultText(gid, uid, p.lang, p.gate, banned)
 		}
 	})
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
@@ -763,7 +764,7 @@ func (v *Service) deferExpiry(bot modBot, gid, uid int64, nonce string, epoch ui
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.
-func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, l i18n.Lang) int {
+func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, l i18n.Lang, gate string) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 	mention := joinerLabel(uid, name, v.NameSpoilerOn(gid))
 	link := ""
@@ -781,15 +782,19 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	if link != "" {
 		linkText = group.LinkText.Render(l, link)
 	}
-	body := group.Body.Render(l, mention, linkText, int(v.timeout(gid)/time.Second), channelHint)
+	template := group.Body
+	if gate == gateMute {
+		template = group.BodyJoined
+	}
+	body := template.Render(l, mention, linkText, int(v.timeout(gid)/time.Second), channelHint)
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: group.VerifyButton.For(l), URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
-		telego.InlineKeyboardButton{Text: admin.ApproveButton.For(l), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: admin.BanButton.For(l), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: adminPassLabel(admin, l, gate), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: adminRejectLabel(admin, l, gate), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
 	))
 	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	if err != nil {
@@ -798,6 +803,21 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 		return 0
 	}
 	return msgID(sent)
+}
+
+// The administrator buttons do different things on the two gates, so they say different things.
+func adminPassLabel(admin *i18n.VerificationAdminCatalog, l i18n.Lang, gate string) string {
+	if gate == gateMute {
+		return admin.ReleaseButton.For(l)
+	}
+	return admin.ApproveButton.For(l)
+}
+
+func adminRejectLabel(admin *i18n.VerificationAdminCatalog, l i18n.Lang, gate string) string {
+	if gate == gateMute {
+		return admin.RemoveButton.For(l)
+	}
+	return admin.BanButton.For(l)
 }
 
 type heartbeatRec struct {

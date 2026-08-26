@@ -12,6 +12,16 @@
 
 同一用户重新申请同一群组时，新记录替换旧记录，并尽力删除旧群内验证消息和私聊验证消息。新记录获得完整时限，但不会恢复已用掉的内核答案次数和一次性提示。批准或封禁操作仍在执行时，新申请不会覆盖正在结束的记录。
 
+## 已经在群内的成员
+
+**实现位置：**`internal/verify` 包；`internal/verify/service.go` 中的 `(*Service).OnMemberJoined`、`joinedNow`、`(*Service).holdMember`、`(*Service).executeRelease` 和 `(*Service).removeMember`。
+
+没有开启入群审批的群不会产生入群申请；即使开了审批，管理员直接拉人也会绕过审批。`OnMemberJoined` 覆盖这两种情况：它处理 `chat_member` 更新中「原本在群外的人成为普通成员」这一种变化。升为管理员、被降权、退群、解除禁言都不算加入。机器人、机器人自己、群管理员，以及已确认在受信任群组内的人都不验证；五分钟内刚被机器人放行的人也不验证，因此机器人自己批准入群申请所产生的成员更新不会被当成新到达。
+
+pending 记录自己属于哪一种入口，全部结算都据此分流。通过时，禁言模式恢复群组自身的默认权限，审批模式仍然调用 `approveChatJoinRequest`。失败时，禁言模式先封禁再立即解封，人被移出而邀请链接仍然可用；累计失败达到上限仍会按配置时长封禁。面向申请人的文案同样按入口区分：已经站在群里的人不会被告知「入群申请已被拒绝」。
+
+Telegram 只能限制超级群成员。基本群里验证照常进行、失败照常踢出，但没有禁言，因此验证期间对方可以发言。禁言时长为验证超时再加一分钟，避免在超时与结算之间失效。
+
 ## 验证题发送方式
 
 **实现位置：**`internal/verify` 包；`internal/verify/state.go` 和 `internal/verify/service.go` 中的 `(*Service).deliverPendingChallenge`、`(*Service).attemptPrivateChallenge`、`(*Service).postGroupChallenge`、`(*Service).SendDMChallenge`、`(*Service).sendQuizzes`；`internal/panel` 包；`internal/panel/panel.go` 中的 `(*Panel).OnStart`。

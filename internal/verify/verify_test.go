@@ -518,6 +518,12 @@ func TestJoinRequestAmbiguousDMFailureDoesNotRiskDuplicateGroupChallenge(t *test
 // fakeVerifyBot is a verifyBot stand-in so the approve / decline / ban handler branches can be
 // exercised without a real Telegram connection; it records call counts and returns configured
 // errors for those network actions.
+type muteCall struct {
+	chatID  int64
+	userID  int64
+	seconds int
+}
+
 type fakeVerifyBot struct {
 	approveErr        error
 	declineErr        error
@@ -534,6 +540,15 @@ type fakeVerifyBot struct {
 	approves          int
 	declines          int
 	bans              int
+	unbans            int
+	mutes             int
+	unmutes           int
+	unbanErr          error
+	muteErr           error
+	unmuteErr         error
+	unbanned          [][2]int64
+	unmuted           [][2]int64
+	muted             []muteCall
 	deletes           int
 	sends             int
 	getMeCalls        int
@@ -662,6 +677,24 @@ func (b *fakeVerifyBot) FailAlert(ctx context.Context, adminLogChatID, groupID i
 		adminLogChatID = groupID
 	}
 	_, _ = b.SendMessage(ctx, &telego.SendMessageParams{ChatID: telego.ChatID{ID: adminLogChatID}, Text: text})
+}
+
+func (b *fakeVerifyBot) Unban(_ context.Context, chatID, userID int64, _ bool) error {
+	b.unbans++
+	b.unbanned = append(b.unbanned, [2]int64{chatID, userID})
+	return b.unbanErr
+}
+
+func (b *fakeVerifyBot) Mute(_ context.Context, chatID, userID int64, seconds int) error {
+	b.mutes++
+	b.muted = append(b.muted, muteCall{chatID: chatID, userID: userID, seconds: seconds})
+	return b.muteErr
+}
+
+func (b *fakeVerifyBot) Unmute(_ context.Context, chatID, userID int64) error {
+	b.unmutes++
+	b.unmuted = append(b.unmuted, [2]int64{chatID, userID})
+	return b.unmuteErr
 }
 
 func (b *fakeVerifyBot) Ban(ctx context.Context, chatID, userID int64, _ int, revokeMessages bool) error {
@@ -1120,18 +1153,18 @@ func TestFailureCopyNamesDecisionAndRetry(t *testing.T) {
 		VerifyRetrySeconds: 600,
 	})
 
-	retry := v.wrongAnswerText(gid, i18n.LangZH, false)
+	retry := v.wrongAnswerText(gid, i18n.LangZH, gateRequest, false)
 	wantRetry := v.messages.Verification.Result.WrongRetry.Render(i18n.LangZH, 600)
 	if retry != wantRetry {
 		t.Errorf("wrong-answer retry = %q, want catalogue result %q", retry, wantRetry)
 	}
-	banned := v.wrongAnswerText(gid, i18n.LangZH, true)
+	banned := v.wrongAnswerText(gid, i18n.LangZH, gateRequest, true)
 	duration := verificationBanDurationText(v.messages, i18n.LangZH, v.verificationBanDuration(gid))
 	wantBanned := i18n.Messages.Verification.Result.WrongBanned.Render(i18n.LangZH, duration)
 	if banned != wantBanned {
 		t.Errorf("ban result = %q, want catalogue result %q", banned, wantBanned)
 	}
-	agent := v.agentCaughtText(gid, i18n.LangEN, false)
+	agent := v.agentCaughtText(gid, i18n.LangEN, gateRequest, false)
 	wantAgent := v.messages.Verification.Result.AICaught.Render(i18n.LangEN, 600)
 	if agent != wantAgent {
 		t.Errorf("automated-agent result = %q, want catalogue result %q", agent, wantAgent)
@@ -1144,8 +1177,8 @@ func TestBannedResultTextIgnoresConfiguredThreshold(t *testing.T) {
 	higherThreshold := newTestService(&config.Config{BanSeconds: 86400, VerifyMaxFails: 4})
 
 	for _, l := range i18n.Languages() {
-		got := lowerThreshold.wrongAnswerText(gid, l, true)
-		want := higherThreshold.wrongAnswerText(gid, l, true)
+		got := lowerThreshold.wrongAnswerText(gid, l, gateRequest, true)
+		want := higherThreshold.wrongAnswerText(gid, l, gateRequest, true)
 		if got != want {
 			t.Errorf("%s banned result changed with threshold: got %q, want %q", l, got, want)
 		}

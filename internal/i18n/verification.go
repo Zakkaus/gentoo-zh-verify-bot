@@ -29,6 +29,24 @@ func (q Question) For(l Lang) (string, []string) {
 }
 
 // VerificationCatalog contains the join-verification surface groups.
+// VerificationHeldCatalog words verification outcomes for someone verified after joining, where
+// passing lifts a restriction and failing removes them rather than settling a join request.
+type VerificationHeldCatalog struct {
+	Passed          Text
+	AlreadyHandled  Text
+	SettlePending   Text
+	DeferralExpired Text
+	Undelivered     Text
+	WrongNoWait     Text
+	WrongRetry      Format
+	WrongBanned     Format
+	TimeoutNoWait   Text
+	TimeoutRetry    Format
+	TimeoutBanned   Format
+	AICaught        Format
+	AICaughtNoWait  Text
+}
+
 type VerificationCatalog struct {
 	// Group contains the public join challenge.
 	Group VerificationGroupCatalog
@@ -36,6 +54,8 @@ type VerificationCatalog struct {
 	Challenge VerificationChallengeCatalog
 	// Result contains verification outcomes and callback alerts.
 	Result VerificationResultCatalog
+	// Held contains the same outcomes worded for a member who is already inside the group.
+	Held VerificationHeldCatalog
 	// Channel contains required-channel guidance.
 	Channel VerificationChannelCatalog
 	// Recovery contains outage recovery notices.
@@ -54,6 +74,8 @@ type VerificationCatalog struct {
 type VerificationGroupCatalog struct {
 	// Body formats the public challenge body.
 	Body Format
+	// BodyJoined formats the public challenge for someone who is already a member.
+	BodyJoined Format
 	// LinkText formats the optional deep-link clause.
 	LinkText Format
 	// ChannelHint formats the required-channel suffix.
@@ -234,6 +256,10 @@ type VerificationAdminCatalog struct {
 	BanFailed Format
 	// ApproveButton labels the direct-approval button.
 	ApproveButton Text
+	// ReleaseButton labels the direct-approval button for a held member.
+	ReleaseButton Text
+	// RemoveButton labels the removal button for a held member.
+	RemoveButton Text
 	// BanButton labels the decline-and-ban button.
 	BanButton Text
 	// ChallengePostFailed formats a failed public challenge alert.
