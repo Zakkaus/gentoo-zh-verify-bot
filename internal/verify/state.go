@@ -926,6 +926,36 @@ func (v *Service) onRecovery(c context.Context, bot modBot, outage time.Duration
 	log.Printf("recovery: refreshed %d verification(s), re-notified %d after ~%s offline%s", refreshed, len(items), outage.Round(time.Second), capNote(capped))
 }
 
+// An administrator can settle a join request by hand while the bot is offline. Telegram has
+// no way to list the requests it still holds, but confirmed membership answers the question
+// that matters: the applicant is already in, so no challenge can apply to them. A failed
+// lookup keeps the pending, because verification must never be skipped on uncertainty.
+func (v *Service) dropIfAlreadyJoined(c context.Context, bot modBot, gid, uid int64, p *pending, messages challengeMessages) bool {
+	if !v.isChatMember(c, bot, gid, uid) {
+		return false
+	}
+	log.Printf("recovery: applicant %d already joined %d while the bot was offline — dropping the stale verification", uid, gid)
+	v.discardPending(gid, uid, p)
+	v.deleteChallenges(c, bot, gid, uid, messages)
+	return true
+}
+
+// discardPending drops a pending that no longer has anything to settle, stopping its timer
+// so no expiry fires for a request Telegram has already released.
+func (v *Service) discardPending(gid, uid int64, p *pending) {
+	v.mu.Lock()
+	key := pkey{gid, uid}
+	if cur, ok := v.pend[key]; ok && cur == p {
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		p.done = true
+		delete(v.pend, key)
+	}
+	v.releaseTerminalLocked(key, p)
+	v.mu.Unlock()
+}
+
 // Re-notify without holding v.mu, replacing working challenges only after a confirmed current send.
 func (v *Service) renotifyPending(
 	c context.Context,
@@ -936,6 +966,9 @@ func (v *Service) renotifyPending(
 	p *pending,
 	outage time.Duration,
 ) {
+	if v.dropIfAlreadyJoined(c, bot, gid, uid, p, oldMessages) {
+		return
+	}
 	ul := p.lang
 	notice := v.messages.Verification.Recovery.Renotify.Render(ul, outageText(v.messages, ul, outage))
 	_, _ = bot.SendMessage(c, htmlMessage(uid, notice))

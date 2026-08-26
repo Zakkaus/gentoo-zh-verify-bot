@@ -560,6 +560,10 @@ func (v *Service) isChatMember(c context.Context, bot modBot, chatID, uid int64)
 		log.Printf("exempt: getChatMember(chat=%d user=%d): %v", chatID, uid, err)
 		return false
 	}
+	if cm == nil {
+		log.Printf("exempt: getChatMember(chat=%d user=%d) returned no member", chatID, uid)
+		return false // an answer we cannot read is not a confirmed membership
+	}
 	switch cm.MemberStatus() {
 	case "creator", "administrator", "member":
 		return true
