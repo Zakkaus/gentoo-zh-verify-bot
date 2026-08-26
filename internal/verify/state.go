@@ -462,7 +462,8 @@ func (v *Service) save() {
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
 				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
-				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited, Held: p.held, HoldUntil: p.holdUntil, Passing: p.passing})
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited, Held: p.held, HoldUntil: p.holdUntil, Passing: p.passing,
+				ChannelUnreadable: p.channelUnreadable})
 		}
 		return recs
 	})
@@ -521,7 +522,7 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited, held: r.Held, holdUntil: r.HoldUntil, passing: r.Passing,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited, held: r.Held, holdUntil: r.HoldUntil, passing: r.Passing, channelUnreadable: r.ChannelUnreadable,
 			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
@@ -672,6 +673,12 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 	p, ok := v.claimPendingExpiry(gid, uid, nonce, epoch)
 	if !ok {
 		return
+	}
+	// Somebody who never opened the direct chat never had the required-channel gate read for
+	// them, so a gate that broke after the challenge went out would look like their failure.
+	// Read it once here, before the timeout is charged to anyone.
+	if reason == "timeout" && v.RequiredChannelID(gid) != 0 && !p.channelUnreadable {
+		v.isChannelMember(c, bot, gid, uid, v.groupLanguage(gid))
 	}
 	if p.passing {
 		// This applicant answered correctly; the only thing left is an admission the bot could
