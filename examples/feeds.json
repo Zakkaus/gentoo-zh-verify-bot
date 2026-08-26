@@ -1,0 +1,19 @@
+{
+  "feeds": [
+    {
+      "chat_id": 0,
+      "lang": "en",
+      "interval_seconds": 300,
+      "bugs": true,
+      "news": true,
+      "bug_product": "",
+      "bug_component": "",
+      "silent_bugs": false
+    },
+    {
+      "chat_id": 0,
+      "lang": "zh",
+      "interval_seconds": 300
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "fallback_questions": [
+    {
+      "q": "Gentoo 中文社区官方网站的域名是什么?",
+      "answers": [
+        "gentoozh.org",
+        "gentoozh"
+      ]
+    },
+    {
+      "q": "Gentoo 官方网站的域名是什么?",
+      "answers": [
+        "gentoo.org"
+      ]
+    }
+  ]
+}

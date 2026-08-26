@@ -11,4 +11,5 @@
 | 只提供 token 的首次启动如何完成 owner 认领、群组注册和权限检查？ | [部署](deployment.md) | `main.main`、`main.(*registrationService).EnsureOwnerClaim`、`internal/moderate.(*Service).CheckGroupSetup` |
 | Telegram 或网络故障及重启期间，验证超时为什么不会误伤申请者？ | [故障与恢复](outage-recovery.md) | `internal/verify.(*Service).RunHeartbeat`、`internal/verify.(*Service).onExpiry`、`internal/verify.(*Service).onRecovery` |
 | 每个状态文件保存什么？哪些状态跨重启？文件不可读、损坏或不可写时如何处理？ | [状态与持久化](state-persistence.md) | `internal/store.Load`、`internal/store.Write`、`internal/store.(*Settings).CommitGroup` |
+| `config.json` 里能放什么、哪些改成了设置面板、默认值是多少？ | [配置参考](configuration.md) | `internal/config.LoadConfig`、`internal/store.LoadBaseline` |
 | 变更需要通过哪些构建、race、CI、发布、版本、本地化和状态 fixture 检查？ | [开发、CI 和发布](development.md) | `main.main`、`internal/i18n.TestProductionCodeContainsNoChineseStringLiterals`、状态兼容生成测试 |
