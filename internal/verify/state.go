@@ -626,7 +626,7 @@ func (v *Service) reachable(c context.Context) bool {
 
 // Caller holds v.mu. Every re-arm bumps epoch so replaced timers become stale.
 // Deferral-aware deadlines stop at the cap; non-positive delays become strike-free grace.
-func (v *Service) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay time.Duration, reason string) {
+func (v *Service) armExpiry(bot modBot, p *pending, gid, uid int64, delay time.Duration, reason string) {
 	now := v.wallNow()
 	if delay <= 0 {
 		delay = noFaultGrace
@@ -651,7 +651,7 @@ func (v *Service) armExpiry(bot verifyBot, p *pending, gid, uid int64, delay tim
 
 // Unreachable expiries receive fresh windows until the deferral cap, then short settlement retries.
 // Online settlement still requires the captured nonce and epoch.
-func (v *Service) onExpiry(c context.Context, bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce string, epoch uint64, reason string) {
 	valid, capped, newlyCapped := v.deferralCapState(gid, uid, nonce, epoch)
 	if !valid {
 		return
@@ -671,15 +671,13 @@ func (v *Service) onExpiry(c context.Context, bot verifyBot, gid, uid int64, non
 	if !ok {
 		return
 	}
-	settled, banned := v.finishDecline(c, bot, gid, uid, p, reason)
-	text := v.messages.Verification.Result.DeclinePending.For(p.lang)
-	if settled {
+	outcome, banned := v.finishDecline(c, bot, gid, uid, p, reason)
+	text := v.declineResultText(outcome, p.lang, func() string {
 		if capped {
-			text = v.messages.Verification.Result.DeferralExpired.For(p.lang)
-		} else {
-			text = v.timeoutResultText(gid, uid, p.lang, banned)
+			return v.messages.Verification.Result.DeferralExpired.For(p.lang)
 		}
-	}
+		return v.timeoutResultText(gid, uid, p.lang, banned)
+	})
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
 }
 
@@ -706,7 +704,7 @@ func logDeferralCapReached(gid, uid int64) {
 }
 
 // Keep the original reason before the cap; capped requests retry settlement after no-fault grace.
-func (v *Service) deferExpiry(bot verifyBot, gid, uid int64, nonce string, epoch uint64, reason string) {
+func (v *Service) deferExpiry(bot modBot, gid, uid int64, nonce string, epoch uint64, reason string) {
 	now := v.wallNow()
 	newlyCapped := false
 	v.mu.Lock()
@@ -972,7 +970,7 @@ func (v *Service) renotifyPending(
 	ul := p.lang
 	notice := v.messages.Verification.Recovery.Renotify.Render(ul, outageText(v.messages, ul, outage))
 	_, _ = bot.SendMessage(c, htmlMessage(uid, notice))
-	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name)
+	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name, p)
 	if !delivery.active || !delivery.delivered {
 		return
 	}

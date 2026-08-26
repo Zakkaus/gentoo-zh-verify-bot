@@ -553,23 +553,31 @@ func applicantDisplayName(user *telego.User) string {
 	return user.FirstName
 }
 
-// Membership lookup errors fail safe into normal verification, never bypass it.
-func (v *Service) isChatMember(c context.Context, bot modBot, chatID, uid int64) bool {
+// chatMemberState separates "confirmed not a member" from "could not read the answer".
+// Settling a request the bot did not get to handle needs that distinction: an unreadable
+// answer must not become a claim about where the applicant ended up.
+func (v *Service) chatMemberState(c context.Context, bot modBot, chatID, uid int64) (member, known bool) {
 	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(chatID), UserID: uid})
 	if err != nil {
 		log.Printf("exempt: getChatMember(chat=%d user=%d): %v", chatID, uid, err)
-		return false
+		return false, false
 	}
 	if cm == nil {
 		log.Printf("exempt: getChatMember(chat=%d user=%d) returned no member", chatID, uid)
-		return false // an answer we cannot read is not a confirmed membership
+		return false, false
 	}
 	switch cm.MemberStatus() {
 	case "creator", "administrator", "member":
-		return true
+		return true, true
 	default:
-		return cm.MemberIsMember()
+		return cm.MemberIsMember(), true
 	}
+}
+
+// Membership lookup errors fail safe into normal verification, never bypass it.
+func (v *Service) isChatMember(c context.Context, bot modBot, chatID, uid int64) bool {
+	member, known := v.chatMemberState(c, bot, chatID, uid)
+	return known && member
 }
 
 // Confirmed members of trusted chats bypass verification and cooldowns.
@@ -666,7 +674,7 @@ func (v *Service) expiryDelay(gid int64, reason string) time.Duration {
 }
 
 // Reserve capacity before delivery; only a confirmed challenge may install a striking timeout.
-func (v *Service) startPending(bot verifyBot, gid, uid int64, p *pending) (oldMessages challengeMessages, status pendingStartStatus) {
+func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessages challengeMessages, status pendingStartStatus) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	key := pkey{gid, uid}
@@ -696,7 +704,7 @@ func (v *Service) startPending(bot verifyBot, gid, uid int64, p *pending) (oldMe
 
 // Start a full window after delivery while preserving no-fault status on send failure.
 func (v *Service) finishPendingChallenge(
-	bot verifyBot,
+	bot modBot,
 	gid, uid int64,
 	p *pending,
 	messages challengeMessages,
@@ -720,7 +728,7 @@ func (v *Service) finishPendingChallenge(
 }
 
 // One process-wide throttle prevents a multi-group flood from spamming operator alerts.
-func (v *Service) alertPendingCap(c context.Context, bot verifyBot, gid int64) {
+func (v *Service) alertPendingCap(c context.Context, bot modBot, gid int64) {
 	now := time.Now()
 	v.mu.Lock()
 	if !v.pendingCapAlertAt.IsZero() && now.Sub(v.pendingCapAlertAt) < pendingCapAlertCooldown {
@@ -747,6 +755,7 @@ func (v *Service) deliverPendingChallenge(
 	bot modBot,
 	gid, uid int64,
 	name string,
+	owner *pending,
 ) challengeDeliveryResult {
 	result := challengeDeliveryResult{active: true, modeLabel: v.DeliveryMode(gid)}
 	groupLang := v.groupLanguage(gid)
@@ -757,7 +766,7 @@ func (v *Service) deliverPendingChallenge(
 	case config.DeliveryBoth:
 		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
 		result.delivered = result.messages.groupMsgID != 0
-		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
+		outcome := v.attemptPrivateChallenge(c, bot, gid, uid, owner)
 		result.messages.privateMsgID = outcome.privateMsgID
 		result.replacedPrivateMsgID = outcome.replacedPrivateMsgID
 		switch outcome.result {
@@ -773,7 +782,7 @@ func (v *Service) deliverPendingChallenge(
 			v.deleteChallenges(c, bot, gid, uid, result.messages)
 		}
 	case config.DeliveryDM:
-		outcome := v.attemptPrivateChallenge(c, bot, gid, uid)
+		outcome := v.attemptPrivateChallenge(c, bot, gid, uid, owner)
 		result.messages.privateMsgID = outcome.privateMsgID
 		result.replacedPrivateMsgID = outcome.replacedPrivateMsgID
 		switch outcome.result {
@@ -830,7 +839,7 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	}
 	v.deleteChallenges(c, bot, gid, uid, oldMessages)
 
-	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name)
+	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name, p)
 	if !delivery.active {
 		return nil
 	}
@@ -920,11 +929,18 @@ type dmSendResult struct {
 	stateChanged      bool
 }
 
-func (v *Service) pendingDMChallenge(gid, uid int64) (dmPrompt, bool) {
+// owner binds a delivery to the pending it was started for. A recovery that took a snapshot
+// must not write its message IDs into a replacement pending created meanwhile by a fresh
+// application, or the replacement ends up with a full window and no visible challenge.
+// A nil owner means "whatever pending is current", which is what a user-triggered resend wants.
+func (v *Service) pendingDMChallenge(gid, uid int64, owner *pending) (dmPrompt, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]
 	if !ok || p.done {
+		return dmPrompt{}, false
+	}
+	if owner != nil && (p != owner || p.nonce != owner.nonce) {
 		return dmPrompt{}, false
 	}
 	return dmPrompt{gid: gid, mode: p.mode, lang: p.lang, text: p.qText, opts: p.qOpts,
@@ -956,7 +972,7 @@ func definiteDMFailure(err error) bool {
 
 // Bind delivery completion to the pending pointer and nonce captured before the Bot API call.
 func (v *Service) completeDMDelivery(
-	bot verifyBot,
+	bot modBot,
 	uid int64,
 	prompt dmPrompt,
 	messageID int,
@@ -1037,7 +1053,7 @@ func (v *Service) sendChannelPrompt(c context.Context, bot verifyBot, gid, uid i
 
 func (v *Service) sendDMQuestionRetainingPrevious(
 	c context.Context,
-	bot verifyBot,
+	bot modBot,
 	uid int64,
 	prompt dmPrompt,
 	resetExpiry bool,
@@ -1074,7 +1090,7 @@ func (v *Service) sendDMQuestionRetainingPrevious(
 	}, err
 }
 
-func (v *Service) sendDMQuestion(c context.Context, bot verifyBot, uid int64, prompt dmPrompt) (dmSendResult, error) {
+func (v *Service) sendDMQuestion(c context.Context, bot modBot, uid int64, prompt dmPrompt) (dmSendResult, error) {
 	result, err := v.sendDMQuestionRetainingPrevious(c, bot, uid, prompt, true)
 	if result.replacedMessageID != 0 {
 		v.deleteChallenge(c, bot, uid, result.replacedMessageID)
@@ -1088,8 +1104,9 @@ func (v *Service) sendDMChallengeForGroup(
 	bot modBot,
 	gid, uid int64,
 	resetExpiry bool,
+	owner *pending,
 ) (active bool, privateMsgID, replacedPrivateMsgID int, err error) {
-	prompt, ok := v.pendingDMChallenge(gid, uid)
+	prompt, ok := v.pendingDMChallenge(gid, uid, owner)
 	if !ok {
 		return false, 0, 0, nil
 	}
@@ -1132,8 +1149,8 @@ type privateDeliveryOutcome struct {
 }
 
 // attemptPrivateChallenge classifies private delivery without assuming that ambiguous failures rejected the send.
-func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, uid int64) privateDeliveryOutcome {
-	active, privateMsgID, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid, false)
+func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, uid int64, owner *pending) privateDeliveryOutcome {
+	active, privateMsgID, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid, false, owner)
 	if !active {
 		return privateDeliveryOutcome{result: privateGone}
 	}
@@ -1151,7 +1168,7 @@ func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, ui
 			if !tg.Pace(c, wait) {
 				return privateDeliveryOutcome{result: privateUncertain}
 			}
-			active, privateMsgID, replacedPrivateMsgID, err = v.sendDMChallengeForGroup(c, bot, gid, uid, false)
+			active, privateMsgID, replacedPrivateMsgID, err = v.sendDMChallengeForGroup(c, bot, gid, uid, false, owner)
 			if !active {
 				return privateDeliveryOutcome{result: privateGone}
 			}
@@ -1183,14 +1200,14 @@ func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, ui
 func (v *Service) SendDMChallenge(c context.Context, bot *telego.Bot, uid int64, languageCode string, groupID int64) {
 	channel := &v.messages.Verification.Channel
 	if groupID != 0 {
-		if _, ok := v.pendingDMChallenge(groupID, uid); !ok {
+		if _, ok := v.pendingDMChallenge(groupID, uid, nil); !ok {
 			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), channel.NoPending.For(i18n.FromTelegram(languageCode))))
 			return
 		}
 		if !v.challengeResendOK(groupID, uid) {
 			return
 		}
-		active, _, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, groupID, uid, true)
+		active, _, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, groupID, uid, true, nil)
 		if active && replacedPrivateMsgID != 0 {
 			v.deleteChallenge(c, bot, uid, replacedPrivateMsgID)
 		}
@@ -1219,7 +1236,7 @@ func (v *Service) SendDMChallenge(c context.Context, bot *telego.Bot, uid int64,
 }
 
 // DM every live challenge; kernel mode routes the next text DM as its answer.
-func (v *Service) sendQuizzes(c context.Context, bot verifyBot, uid int64) {
+func (v *Service) sendQuizzes(c context.Context, bot modBot, uid int64) {
 	stateChanged := false
 	for _, prompt := range v.pendingDMChallenges(uid) {
 		result, _ := v.sendDMQuestion(c, bot, uid, prompt)
@@ -1330,14 +1347,10 @@ func (v *Service) OnAnswer(ctx *th.Context, update telego.Update) error {
 	}
 
 	if choice != correctIdx {
-		handled, settled, banned := v.decline(c, bot, gid, owner, nonce, "wrong answer")
+		outcome, banned := v.decline(c, bot, gid, owner, nonce, wrongAnswerReason)
 		text := result.AlreadyHandled.For(ul)
-		if handled {
-			if settled {
-				text = v.wrongAnswerText(gid, ul, banned)
-			} else {
-				text = result.DeclinePending.For(ul)
-			}
+		if outcome != declineNoPending {
+			text = v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
 		}
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(text).WithShowAlert())
 		return nil
@@ -1348,7 +1361,7 @@ func (v *Service) OnAnswer(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	p, claimed := v.claimPendingNonce(gid, owner, nonce)
-	if claimed && v.executeApprove(c, bot, gid, owner, p) {
+	if claimed && v.executeApprove(c, bot, gid, owner, p) == approveConfirmed {
 		text := result.Approved.For(ul)
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(text))
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), text))
@@ -1403,8 +1416,13 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 		}
 		// Acknowledge the pending action; failures reopen the request, tell the group, and alert admins.
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Approving.For(l)))
-		if !v.executeApprove(c, bot, gid, target, p) {
+		switch v.executeApprove(c, bot, gid, target, p) {
+		case approveFailed:
 			v.verificationTransport(bot).Notify(c, gid, admin.ActionFailed.For(l), adminActionNoticeTTL)
+		case approveGone:
+			// Someone settled the request in Telegram itself; do not claim the button did it.
+			v.verificationTransport(bot).Notify(c, gid, admin.AlreadyHandled.For(l), adminActionNoticeTTL)
+		case approveConfirmed:
 		}
 	case "ban":
 		p, ok := v.consume(gid, target)
@@ -1638,32 +1656,49 @@ func (v *Service) claimPendingNonce(gid, uid int64, nonce string) (*pending, boo
 
 // Claim before approval so its timeout cannot decline or strike concurrently.
 // Callback handlers may acknowledge between claimPending and executeApprove.
-func (v *Service) approve(c context.Context, bot verifyBot, gid, uid int64) bool {
+func (v *Service) approve(c context.Context, bot modBot, gid, uid int64) bool {
 	p, ok := v.claimPending(gid, uid)
 	if !ok {
 		return false
 	}
-	return v.executeApprove(c, bot, gid, uid, p)
+	return v.executeApprove(c, bot, gid, uid, p) == approveConfirmed
 }
 
+// approveOutcome distinguishes a confirmed approval from a request that was settled
+// elsewhere, so no caller can announce a result the bot did not actually produce.
+type approveOutcome int
+
+const (
+	approveFailed    approveOutcome = iota // unconfirmed; the request is kept for a retry
+	approveConfirmed                       // the applicant is in the group
+	approveGone                            // the request is gone and where it went is unknown
+)
+
 // Failed approval reopens the claimed pending instead of stranding the applicant.
-func (v *Service) executeApprove(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
+func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, p *pending) approveOutcome {
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("approve %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.reopenPending(bot, gid, uid, p, "approve-retry")
-			return false
+			return approveFailed
 		}
-		// An administrator settled this request in Telegram's own interface, so the bot
-		// has nothing left to approve. Close the pending instead of retrying, and record
-		// no decision either way: which way it went is not knowable from here.
+		// An administrator settled this request in Telegram's own interface. The same error
+		// covers a manual approval and a manual rejection, so ask who is actually in the
+		// group rather than announcing an outcome the bot did not produce.
 		log.Printf("approve %d in %d: join request is already gone: %v", uid, gid, err)
+		member, known := v.chatMemberState(c, bot, gid, uid)
 		v.finishTerminal(gid, uid, p)
 		v.deleteChallenges(c, bot, gid, uid, p.messages())
+		if known && member {
+			v.clearVerifyFails(gid, uid)
+			v.recordDecision(true)
+			v.save()
+			return approveConfirmed
+		}
 		v.save()
-		return true
+		return approveGone
 	}
 	v.mu.Lock()
 	key := pkey{gid, uid}
@@ -1677,11 +1712,11 @@ func (v *Service) executeApprove(c context.Context, bot verifyBot, gid, uid int6
 	v.recordDecision(true)
 	v.save()
 	log.Printf("approve user=%d group=%d", uid, gid)
-	return true
+	return approveConfirmed
 }
 
 // Reopen a bot-caused failed settlement unless the pending was replaced or consumed.
-func (v *Service) reopenPending(bot verifyBot, gid, uid int64, p *pending, reason string) {
+func (v *Service) reopenPending(bot modBot, gid, uid int64, p *pending, reason string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	key := pkey{gid, uid}
@@ -1750,6 +1785,34 @@ func (v *Service) timeoutResultText(groupID, userID int64, l i18n.Lang, banned b
 const noFaultGrace = 60 * time.Second
 
 // Timeouts and wrong answers strike; delivery, settlement, restart, and recovery failures do not.
+// declineResultText keeps every applicant-facing decline message inside what the bot knows:
+// a definite result only when the request was actually settled, and a neutral "already handled"
+// when it vanished and the applicant's fate could not be read.
+func (v *Service) declineResultText(outcome declineOutcome, l i18n.Lang, settledText func() string) string {
+	result := &v.messages.Verification.Result
+	switch outcome {
+	case declineUnsettled:
+		return result.DeclinePending.For(l)
+	case declineGoneUnknown:
+		return result.AlreadyHandled.For(l)
+	default:
+		return settledText()
+	}
+}
+
+// wrongAnswerReason marks a decline the applicant caused by failing the challenge.
+const wrongAnswerReason = "wrong answer"
+
+// A request that vanished before the bot could reject it still leaves the applicant out of the
+// group, so a wrong answer still counts. A timeout does not: the request may have been rejected
+// by an administrator long before the window ran out, and nobody should carry a strike for that.
+func (v *Service) strikesFor(outcome declineOutcome, reason string) bool {
+	if !strikesUser(reason) {
+		return false
+	}
+	return outcome == declineConfirmed || reason == wrongAnswerReason
+}
+
 func strikesUser(reason string) bool {
 	switch reason {
 	case "approve-retry", "ban-retry", "decline-retry", "restart-lapsed", "recovered",
@@ -1760,19 +1823,35 @@ func strikesUser(reason string) bool {
 	}
 }
 
+// declineOutcome tells a caller how much the bot actually knows, so no message states an
+// outcome Telegram never confirmed.
+type declineOutcome int
+
+const (
+	declineNoPending   declineOutcome = iota // nothing matched the claim
+	declineUnsettled                         // a transient failure; the request is kept for a retry
+	declineConfirmed                         // Telegram confirmed the rejection
+	declineGoneAndOut                        // the request is gone and the applicant is not in the group
+	declineGoneUnknown                       // the request is gone and where it went cannot be read
+)
+
 // Live wrong answers use nonce claims; timeout settlement uses epoch claims so outages may defer it.
-// handled=false means no matching pending; settled=false means Telegram may still hold the request.
-func (v *Service) decline(c context.Context, bot verifyBot, gid, uid int64, nonce, reason string) (handled, settled, banned bool) {
+func (v *Service) decline(c context.Context, bot modBot, gid, uid int64, nonce, reason string) (outcome declineOutcome, banned bool) {
 	p, ok := v.claimPendingNonce(gid, uid, nonce)
 	if !ok {
-		return false, false, false
+		return declineNoPending, false
 	}
-	settled, banned = v.finishDecline(c, bot, gid, uid, p, reason)
-	return true, settled, banned
+	return v.finishDecline(c, bot, gid, uid, p, reason)
+}
+
+// settled reports the outcomes that let a caller state a definite verification result.
+func (o declineOutcome) settled() bool {
+	return o == declineConfirmed || o == declineGoneAndOut
 }
 
 // Settle an already-claimed decline, striking at claim time only after Telegram confirms rejection.
-func (v *Service) finishDecline(c context.Context, bot verifyBot, gid, uid int64, p *pending, reason string) (settled, banned bool) {
+func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p *pending, reason string) (outcome declineOutcome, banned bool) {
+	outcome = declineConfirmed
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("decline %d in %d failed: %v", uid, gid, err)
@@ -1780,20 +1859,34 @@ func (v *Service) finishDecline(c context.Context, bot verifyBot, gid, uid int64
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.reopenPending(bot, gid, uid, p, "decline-retry")
 			v.save()
-			return false, false
+			return declineUnsettled, false
 		}
-		// Telegram no longer holds the request, so no retry can settle it. Close the pending
-		// without striking: whatever removed the request was not the applicant's doing.
+		// Telegram no longer holds the request, so no retry can settle it. Whether the applicant
+		// ended up inside the group decides both what to tell them and whether the failure is
+		// theirs to carry, and only their membership can answer that.
 		log.Printf("decline %d in %d: join request is already gone: %v", uid, gid, err)
-		v.deleteChallenges(c, bot, gid, uid, p.messages())
-		v.finishTerminal(gid, uid, p)
-		v.save()
-		return true, false
+		member, known := v.chatMemberState(c, bot, gid, uid)
+		switch {
+		case known && member:
+			// An administrator let them in. Nothing here is the applicant's fault.
+			v.deleteChallenges(c, bot, gid, uid, p.messages())
+			v.clearVerifyFails(gid, uid)
+			v.finishTerminal(gid, uid, p)
+			v.save()
+			return declineGoneUnknown, false
+		case !known:
+			v.deleteChallenges(c, bot, gid, uid, p.messages())
+			v.finishTerminal(gid, uid, p)
+			v.save()
+			return declineGoneUnknown, false
+		}
+		// They are out, exactly as this decline intended, so settle it like a confirmed one.
+		outcome = declineGoneAndOut
 	}
 	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	var count int
 	var doBan bool
-	if strikesUser(reason) {
+	if v.strikesFor(outcome, reason) {
 		failedAt := p.failedAt
 		if failedAt.IsZero() {
 			failedAt = v.wallNow()
@@ -1823,7 +1916,7 @@ func (v *Service) finishDecline(c context.Context, bot verifyBot, gid, uid int64
 	}
 	v.save()
 	log.Printf("decline user=%d group=%d (%s) fails=%d banned=%v", uid, gid, reason, count, banned)
-	return true, banned
+	return outcome, banned
 }
 
 func (v *Service) finishTerminal(gid, uid int64, p *pending) {
@@ -1837,7 +1930,7 @@ func (v *Service) finishTerminal(gid, uid int64, p *pending) {
 }
 
 // banApplicant preserves the request for retry when either required Telegram action is unconfirmed.
-func (v *Service) banApplicant(c context.Context, bot verifyBot, gid, uid int64) (handled, banned bool) {
+func (v *Service) banApplicant(c context.Context, bot modBot, gid, uid int64) (handled, banned bool) {
 	p, ok := v.consume(gid, uid)
 	if !ok {
 		return false, false
@@ -1846,7 +1939,7 @@ func (v *Service) banApplicant(c context.Context, bot verifyBot, gid, uid int64)
 }
 
 // executeBan confirms the ban before declining so an unconfirmed ban retains the request and its evidence.
-func (v *Service) executeBan(c context.Context, bot verifyBot, gid, uid int64, p *pending) bool {
+func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *pending) bool {
 	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil {
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
 		admin := &v.messages.Verification.Admin

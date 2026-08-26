@@ -517,14 +517,11 @@ func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, no
 	} else {
 		log.Printf("verify: declining %d in %d — the same reply tripped the tripwire in another group", uid, gid)
 	}
-	handled, settled, banned := v.decline(c, bot, gid, uid, cur, "wrong answer")
-	if !handled {
+	outcome, banned := v.decline(c, bot, gid, uid, cur, wrongAnswerReason)
+	if outcome == declineNoPending {
 		return
 	}
-	msg := v.messages.Verification.Result.DeclinePending.For(ul)
-	if settled {
-		msg = v.agentCaughtText(gid, ul, banned)
-	}
+	msg := v.declineResultText(outcome, ul, func() string { return v.agentCaughtText(gid, ul, banned) })
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 }
 
@@ -563,14 +560,11 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			return
 		}
 		// Decline only the nonce charged by recordKernelTry, never a replacement pending.
-		handled, settled, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer")
-		if !handled {
+		outcome, banned := v.decline(c, bot, gid, uid, curNonce, wrongAnswerReason)
+		if outcome == declineNoPending {
 			return
 		}
-		msg := v.messages.Verification.Result.DeclinePending.For(ul)
-		if settled {
-			msg = v.wrongAnswerText(gid, ul, banned)
-		}
+		msg := v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
@@ -595,7 +589,7 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 				qText, answers := v.fallbackQuestion(gid, ul)
 				if v.beginKernelFallback(bot, gid, uid, nonce, qText, answers) {
 					v.save()
-					prompt, current := v.pendingDMChallenge(gid, uid)
+					prompt, current := v.pendingDMChallenge(gid, uid, nil)
 					if !current {
 						return
 					}
@@ -619,14 +613,11 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.KernelWrong.Render(ul, left)))
 			return
 		}
-		handled, settled, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer") // the nonce as of the charge, see above
-		if !handled {
+		outcome, banned := v.decline(c, bot, gid, uid, curNonce, wrongAnswerReason) // the nonce as of the charge, see above
+		if outcome == declineNoPending {
 			return
 		}
-		msg := v.messages.Verification.Result.DeclinePending.For(ul)
-		if settled {
-			msg = v.wrongAnswerText(gid, ul, banned)
-		}
+		msg := v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
@@ -643,7 +634,7 @@ func (v *Service) finishKernelPass(c context.Context, bot modBot, gid, uid int64
 		return
 	}
 	p, ok := v.claimPendingNonce(gid, uid, nonce)
-	if ok && v.executeApprove(c, bot, gid, uid, p) {
+	if ok && v.executeApprove(c, bot, gid, uid, p) == approveConfirmed {
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.Approved.For(ul)))
 		return
 	}
@@ -662,7 +653,7 @@ func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string,
 }
 
 // Prepare a hidden fallback and suspend grading until its prompt delivery is confirmed.
-func (v *Service) beginKernelFallback(bot verifyBot, gid, uid int64, nonce, question string, answers []string) bool {
+func (v *Service) beginKernelFallback(bot modBot, gid, uid int64, nonce, question string, answers []string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]

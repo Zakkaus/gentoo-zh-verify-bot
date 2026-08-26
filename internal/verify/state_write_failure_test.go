@@ -102,7 +102,8 @@ func TestStateWriteFailuresKeepRuntimeStateButLoseRestartRecovery(t *testing.T) 
 		bot := newFakeVerifyBot()
 
 		output := captureStateWriteLog(t, func() {
-			handled, settled, banned := v.decline(context.Background(), bot, gid, uid, "n", "timeout")
+			outcome, banned := v.decline(context.Background(), bot, gid, uid, "n", "timeout")
+			handled, settled := outcome != declineNoPending, outcome.settled()
 			if !handled || !settled || banned {
 				t.Fatalf("runtime decline = handled:%v settled:%v banned:%v", handled, settled, banned)
 			}

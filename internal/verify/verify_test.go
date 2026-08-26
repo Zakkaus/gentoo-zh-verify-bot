@@ -1190,7 +1190,8 @@ func TestSettlementDeletesGroupAndPrivateChallenges(t *testing.T) {
 			name: "applicant decline",
 			run: func(t *testing.T, v *Service, bot *fakeVerifyBot) {
 				t.Helper()
-				handled, settled, _ := v.decline(context.Background(), bot, gid, uid, "n", "wrong answer")
+				outcome, _ := v.decline(context.Background(), bot, gid, uid, "n", "wrong answer")
+				handled, settled := outcome != declineNoPending, outcome.settled()
 				if !handled || !settled {
 					t.Fatalf("applicant decline = handled %t settled %t, want both true", handled, settled)
 				}
@@ -1265,7 +1266,8 @@ func TestDeclineBelowThreshold(t *testing.T) {
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
-	handled, settled, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
+	outcome, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
+	handled, settled := outcome != declineNoPending, outcome.settled()
 	if !handled || !settled || banned {
 		t.Fatalf("first failure should settle the decline without a ban: handled=%v settled=%v banned=%v", handled, settled, banned)
 	}
@@ -1285,7 +1287,8 @@ func TestDeclineAutoBan(t *testing.T) {
 	key := pkey{-100, 5}
 	v.pend[key] = livePending(42)
 	fb := &fakeVerifyBot{}
-	handled, settled, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
+	outcome, banned := v.decline(context.Background(), fb, -100, 5, "n", "wrong answer")
+	handled, settled := outcome != declineNoPending, outcome.settled()
 	if !handled || !settled || !banned {
 		t.Fatalf("threshold decline = handled %v, settled %v, banned %v; want all true", handled, settled, banned)
 	}
@@ -1344,7 +1347,7 @@ func TestClaimThenExecuteApprove(t *testing.T) {
 		t.Error("an already-claimed pending must not be re-claimable (a timer/second callback can't double-act)")
 	}
 	fb := &fakeVerifyBot{}
-	if !v.executeApprove(context.Background(), fb, -100, 5, p) {
+	if v.executeApprove(context.Background(), fb, -100, 5, p) != approveConfirmed {
 		t.Fatal("executeApprove should succeed")
 	}
 	if fb.approves != 1 {
@@ -1376,10 +1379,11 @@ func TestTerminalActionBlocksReapplication(t *testing.T) {
 			go func() {
 				if tt.action == "approve" {
 					p, ok := v.claimPendingNonce(gid, uid, old.nonce)
-					result <- ok && v.executeApprove(context.Background(), bot, gid, uid, p)
+					result <- ok && v.executeApprove(context.Background(), bot, gid, uid, p) == approveConfirmed
 					return
 				}
-				handled, _, _ := v.decline(context.Background(), bot, gid, uid, old.nonce, "wrong answer")
+				declineOut, _ := v.decline(context.Background(), bot, gid, uid, old.nonce, "wrong answer")
+				handled := declineOut != declineNoPending
 				result <- handled
 			}()
 			select {
@@ -1434,8 +1438,8 @@ func TestBlockedDeclineCountsStrikeAtClaimTime(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		handled, settled, banned := v.decline(context.Background(), bot, gid, uid, p.nonce, "wrong answer")
-		result <- outcome{handled: handled, settled: settled, banned: banned}
+		got, banned := v.decline(context.Background(), bot, gid, uid, p.nonce, "wrong answer")
+		result <- outcome{handled: got != declineNoPending, settled: got.settled(), banned: banned}
 	}()
 	select {
 	case <-bot.declineStarted:
@@ -1479,8 +1483,8 @@ func TestRemoveGroupCancelsBlockedDeclineWithoutStrike(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		handled, settled, banned := v.decline(context.Background(), bot, gid, uid, p.nonce, "wrong answer")
-		result <- outcome{handled: handled, settled: settled, banned: banned}
+		got, banned := v.decline(context.Background(), bot, gid, uid, p.nonce, "wrong answer")
+		result <- outcome{handled: got != declineNoPending, settled: got.settled(), banned: banned}
 	}()
 	select {
 	case <-bot.declineStarted:
@@ -1806,7 +1810,8 @@ func TestDeclineFailureAlertsAdmins(t *testing.T) {
 	p := livePending(42)
 	v.pend[pkey{gid, uid}] = p
 	fb := &fakeVerifyBot{declineErr: errors.New("Forbidden: missing can_invite_users")}
-	handled, settled, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")
+	outcome, _ := v.decline(context.Background(), fb, gid, uid, "n", "wrong answer")
+	handled, settled := outcome != declineNoPending, outcome.settled()
 	if !handled || settled || fb.declines != 1 {
 		t.Fatalf("decline result = handled %v, settled %v, calls %d; want true, false, 1", handled, settled, fb.declines)
 	}
