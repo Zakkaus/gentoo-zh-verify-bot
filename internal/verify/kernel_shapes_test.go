@@ -23,6 +23,12 @@ func TestKernelAnswerAcceptsRealCommandOutput(t *testing.T) {
 		"root@box:~# uname -a\nLinux box 6.12.3-gentoo #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux",
 		"❯ uname -r\n7.2.0-gentoo-cjk-zakk",
 		"# cat /proc/version\nLinux version 6.12.3-gentoo (root@box) (gcc 14) #1 SMP",
+		// busybox omits the OS name, so containers, Alpine and Termux end at the architecture.
+		"Linux ctr 6.1.0-18-amd64 #1 SMP PREEMPT_DYNAMIC Fri Feb 2 09:25:10 UTC 2024 x86_64 Linux",
+		"Linux ctr 6.1.0-18-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01) x86_64 Linux",
+		"Linux localhost 4.19.191-perf+ #1 SMP PREEMPT Mon Sep 30 12:00:00 CST 2024 aarch64 Android",
+		// People add a sentence of their own after pasting.
+		"Linux gentoo 7.2.0-gentoo-cjk-zakk #1 SMP PREEMPT_DYNAMIC Sat Aug 22 14:56:02 AEST 2026 x86_64 GNU/Linux 这是我的机器",
 		// A release wrapped in the punctuation a chat client adds.
 		"`7.2.0-gentoo-cjk-zakk`",
 		"7.2.0-gentoo-cjk-zakk。",
@@ -69,6 +75,17 @@ func TestKernelJudgementIgnoresTheTerminalAroundIt(t *testing.T) {
 		if !kernelAnswerOK(prompt + bare) {
 			t.Errorf("the same answer was refused once a prompt was pasted with it: %q", prompt+bare)
 		}
+	}
+}
+
+// The same command on the same host, differing only in whether the distribution stamped its own
+// version into the build field, must not get two verdicts.
+func TestKernelJudgementDoesNotDependOnWhoBuiltTheKernel(t *testing.T) {
+	plain := "Linux ctr 6.1.0-18-amd64 #1 SMP PREEMPT_DYNAMIC Fri Feb 2 09:25:10 UTC 2024 x86_64 Linux"
+	stamped := "Linux ctr 6.1.0-18-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01) x86_64 Linux"
+	if kernelAnswerOK(plain) != kernelAnswerOK(stamped) {
+		t.Errorf("same command, different builder, different verdict: plain=%v stamped=%v",
+			kernelAnswerOK(plain), kernelAnswerOK(stamped))
 	}
 }
 
