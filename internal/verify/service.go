@@ -2321,7 +2321,9 @@ func (v *Service) reopenPending(bot modBot, gid, uid int64, p *pending, reason s
 		return false
 	}
 	p.done = false
-	p.failedAt = time.Time{}
+	// Keep the moment the applicant actually failed. Every caller here is retrying a settlement
+	// for a failure that already happened, so stamping the strike with the retry time instead
+	// would start their cooldown from however long the bot spent retrying.
 	delay := p.deadline.Sub(v.wallNow())
 	if delay < noFaultGrace {
 		delay = noFaultGrace
