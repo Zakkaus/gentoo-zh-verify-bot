@@ -33,12 +33,15 @@ type Client struct {
 	adminMu    sync.Mutex
 	adminCache map[adminKey]time.Time
 
+	alertMu   sync.Mutex
+	alertSeen map[alertKey]time.Time
+
 	cleanupTimers atomic.Int32
 }
 
 // New wraps bot with transport helpers and a bounded positive admin cache.
 func New(bot *telego.Bot) *Client {
-	return &Client{bot: bot, adminCache: make(map[adminKey]time.Time)}
+	return &Client{bot: bot, adminCache: make(map[adminKey]time.Time), alertSeen: make(map[alertKey]time.Time)}
 }
 
 // HTMLMessage builds the standard outbound HTML message with link previews disabled.
@@ -172,9 +175,48 @@ func (c *Client) Notify(ctx context.Context, chatID int64, text string, ttlSecon
 	c.scheduleDelete(chatID, message.MessageID, 0, duration)
 }
 
+// A failure that keeps being retried produces the same alert every round. Collapse repeats
+// so one stuck request cannot flood the destination chat.
+const (
+	alertRepeatWindow = 10 * time.Minute
+	alertMemoryCap    = 512
+)
+
+type alertKey struct {
+	chatID int64
+	text   string
+}
+
+// alertAllowed reports whether this exact alert may be sent now and records the send.
+// It fails open: when bookkeeping is full the alert still goes out.
+func (c *Client) alertAllowed(chatID int64, text string) bool {
+	key := alertKey{chatID: chatID, text: text}
+	now := time.Now()
+	c.alertMu.Lock()
+	defer c.alertMu.Unlock()
+	if until, seen := c.alertSeen[key]; seen && now.Before(until) {
+		return false
+	}
+	if len(c.alertSeen) >= alertMemoryCap {
+		for k, until := range c.alertSeen {
+			if !now.Before(until) {
+				delete(c.alertSeen, k)
+			}
+		}
+		if len(c.alertSeen) >= alertMemoryCap {
+			return true
+		}
+	}
+	c.alertSeen[key] = now.Add(alertRepeatWindow)
+	return true
+}
+
 // Alert sends an operator alert when an admin-log chat is configured.
 func (c *Client) Alert(ctx context.Context, adminLogChatID int64, text string) {
 	if adminLogChatID == 0 {
+		return
+	}
+	if !c.alertAllowed(adminLogChatID, text) {
 		return
 	}
 	if _, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(adminLogChatID), text)); err != nil {
@@ -182,14 +224,28 @@ func (c *Client) Alert(ctx context.Context, adminLogChatID int64, text string) {
 	}
 }
 
+// An alert that falls back to the affected group is operator noise in a member-facing chat,
+// so it is cleaned up instead of staying there as a permanent record. A configured
+// admin-log chat keeps its alerts.
+const groupFallbackAlertTTL = 4 * time.Minute
+
 // FailAlert sends a failure alert to the admin log or falls back to the affected group.
 func (c *Client) FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string) {
-	target := adminLogChatID
+	target, fallback := adminLogChatID, false
 	if target == 0 {
-		target = groupID
+		target, fallback = groupID, true
 	}
-	if _, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(target), text)); err != nil {
+	if !c.alertAllowed(target, text) {
+		log.Printf("failAlert to %d suppressed as a repeat: %s", target, text)
+		return
+	}
+	message, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(target), text))
+	if err != nil {
 		log.Printf("failAlert to %d failed: %v", target, err)
+		return
+	}
+	if fallback && message != nil {
+		c.scheduleDelete(target, message.MessageID, 0, groupFallbackAlertTTL)
 	}
 }
 
