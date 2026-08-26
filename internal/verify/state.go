@@ -462,7 +462,7 @@ func (v *Service) save() {
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
 				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
-				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited})
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited, Held: p.held, Passing: p.passing})
 		}
 		return recs
 	})
@@ -521,7 +521,7 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited, held: r.Held, passing: r.Passing,
 			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
@@ -671,6 +671,15 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 	}
 	p, ok := v.claimPendingExpiry(gid, uid, nonce, epoch)
 	if !ok {
+		return
+	}
+	if p.passing {
+		// This applicant answered correctly; the only thing left is an admission the bot could
+		// not complete. Retrying that is right. Declining them would be a lie and, for a held
+		// member, would remove somebody who passed.
+		if v.executeApprove(c, bot, gid, uid, p) == approveConfirmed {
+			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.voice(p.gate).Passed.For(p.lang)))
+		}
 		return
 	}
 	outcome, banned := v.finishDecline(c, bot, gid, uid, p, reason)
@@ -975,6 +984,12 @@ func (v *Service) onRecovery(c context.Context, bot modBot, outage time.Duration
 // that matters: the applicant is already in, so no challenge can apply to them. A failed
 // lookup keeps the pending, because verification must never be skipped on uncertainty.
 func (v *Service) dropIfAlreadyJoined(c context.Context, bot modBot, gid, uid int64, p *pending, messages challengeMessages) bool {
+	if p.gate == gateMute {
+		// A held member is a member by definition, so membership proves nothing here. What ends
+		// this verification is them leaving, and Telegram reports that as a departure the bot
+		// acts on separately; recovery must keep the pending and re-notify.
+		return false
+	}
 	if !v.isChatMember(c, bot, gid, uid) {
 		return false
 	}

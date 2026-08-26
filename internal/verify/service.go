@@ -102,6 +102,8 @@ const (
 type pending struct {
 	gate               string // gateRequest or gateMute
 	invited            bool   // somebody else added this member, so the group notice tells administrators they can vouch
+	held               bool   // a verification mute is actually in place, so passing has something to lift
+	passing            bool   // the applicant answered correctly; a retry must complete the approval, never decline
 	groupMsgID         int
 	privateMsgID       int
 	challengeDelivered bool
@@ -183,6 +185,8 @@ type pendingRec struct {
 	DeferralCapReached bool     `json:"deferral_cap_reached,omitempty"`
 	Gate               string   `json:"gate,omitempty"`                // gateMute for a member verified after joining; empty means the join-request gate
 	Invited            bool     `json:"invited,omitempty"`             // the member was added by somebody else
+	Held               bool     `json:"held,omitempty"`                // a verification mute is in place
+	Passing            bool     `json:"passing,omitempty"`             // answered correctly; the settlement retry must approve
 	SettleFailures     int      `json:"settle_failures,omitempty"`     // consecutive unconfirmed settlements; bounds the retry
 	SettlePendingSaid  bool     `json:"settle_pending_said,omitempty"` // the "still being settled" notice was already sent
 }
@@ -532,14 +536,18 @@ func (v *Service) applyVerificationBan(ctx context.Context, bot verifyBot, group
 // holdMember mutes a member for the whole verification window. Telegram only restricts members
 // of supergroups, so a basic group cannot hold anyone: the challenge still runs, and failing it
 // still removes them, but they can speak in the meantime.
-func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID int64, supergroup bool) {
+func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID int64, supergroup bool, p *pending) {
 	if !supergroup {
 		return
 	}
 	seconds := int(v.gateTimeout(groupID, gateMute)/time.Second) + muteGraceSeconds
 	if err := v.verificationTransport(bot).Mute(ctx, groupID, userID, seconds); err != nil {
 		log.Printf("post-join verify: cannot mute %d in %d (%v); the challenge continues unheld", userID, groupID, err)
+		return
 	}
+	v.mu.Lock()
+	p.held = true
+	v.mu.Unlock()
 }
 
 // muteGraceSeconds keeps the hold slightly longer than the window so a mute cannot expire in the
@@ -1031,7 +1039,7 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	v.deleteChallenges(c, bot, gid, uid, oldMessages)
-	v.holdMember(c, bot, gid, uid, supergroup)
+	v.holdMember(c, bot, gid, uid, supergroup, p)
 
 	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name, p)
 	if !delivery.active {
@@ -1957,6 +1965,7 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 			log.Printf("approve %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.markPassing(gid, uid, p)
 			v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
 		}
@@ -2070,6 +2079,16 @@ type outcomeVoice struct {
 	TimeoutBanned   i18n.Format
 	AICaught        i18n.Format
 	AICaughtNoWait  i18n.Text
+}
+
+// markPassing records that the applicant already earned admission, so a settlement retry
+// completes the approval instead of falling into the generic timeout path, which declines.
+func (v *Service) markPassing(gid, uid int64, p *pending) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
+		p.passing = true
+	}
 }
 
 // pendingGate reads the gate of a live pending; a missing one reads as the join-request gate.
@@ -2194,12 +2213,16 @@ func strikesUser(reason string) bool {
 // executeRelease settles a held member by lifting the verification mute. There is no join request
 // to lose here, so the only outcomes are success and a failure worth retrying.
 func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, p *pending) approveOutcome {
-	if err := v.releaseMember(c, bot, gid, uid); err != nil {
-		log.Printf("post-join verify: cannot lift the hold on %d in %d: %v", uid, gid, err)
-		admin := &v.messages.Verification.Admin
-		v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
-		return approveFailed
+	// A basic group could never be held, so there is nothing to lift and nothing to retry.
+	if p.held {
+		if err := v.releaseMember(c, bot, gid, uid); err != nil {
+			log.Printf("post-join verify: cannot lift the hold on %d in %d: %v", uid, gid, err)
+			admin := &v.messages.Verification.Admin
+			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.markPassing(gid, uid, p)
+			v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
+			return approveFailed
+		}
 	}
 	v.finishTerminal(gid, uid, p)
 	v.clearVerifyFails(gid, uid)

@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func TestHeldMemberIsReleasedOnPass(t *testing.T) {
 	v := newTestService(&config.Config{})
 	fb := &fakeVerifyBot{}
 	gid, uid := int64(-100), int64(7)
-	p := &pending{gate: gateMute, nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	p := &pending{gate: gateMute, held: true, nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
 	v.pend[pkey{gid, uid}] = p
 
 	if got := v.executeApprove(context.Background(), fb, gid, uid, p); got != approveConfirmed {
@@ -88,6 +89,60 @@ func TestHeldMemberIsReleasedOnPass(t *testing.T) {
 	}
 	if fb.approves != 0 {
 		t.Errorf("approveChatJoinRequest calls = %d, want 0: there is no join request to approve", fb.approves)
+	}
+}
+
+// A basic group could never be held, so passing has nothing to lift. Trying anyway fails with
+// "supergroups only" and, before this was fixed, that failure removed a member who answered
+// correctly.
+func TestPassingInAnUnheldGroupIsNotAFailure(t *testing.T) {
+	v := newTestService(&config.Config{})
+	fb := &fakeVerifyBot{unmuteErr: errors.New("Bad Request: method is available only for supergroups")}
+	gid, uid := int64(-100), int64(12)
+	p := &pending{gate: gateMute, nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = p
+	t.Cleanup(v.stopForShutdown)
+
+	if got := v.executeApprove(context.Background(), fb, gid, uid, p); got != approveConfirmed {
+		t.Fatalf("approve outcome = %v, want approveConfirmed", got)
+	}
+	if fb.unmutes != 0 {
+		t.Errorf("unmute calls = %d, want 0: nothing was ever held", fb.unmutes)
+	}
+	if fb.bans != 0 {
+		t.Errorf("bans = %d, want 0: this member answered correctly", fb.bans)
+	}
+}
+
+// A hold the bot genuinely cannot lift yet is retried as an admission, never settled as one.
+func TestFailedReleaseRetriesTheAdmissionInsteadOfRemoving(t *testing.T) {
+	v := newTestService(&config.Config{})
+	fb := &fakeVerifyBot{unmuteErr: errors.New("network unreachable")}
+	gid, uid := int64(-100), int64(13)
+	p := &pending{gate: gateMute, held: true, nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = p
+	v.markTerminalLocked(pkey{gid, uid}, p)
+	p.done = true
+	t.Cleanup(v.stopForShutdown)
+
+	if got := v.executeApprove(context.Background(), fb, gid, uid, p); got != approveFailed {
+		t.Fatalf("approve outcome = %v, want approveFailed", got)
+	}
+	v.mu.Lock()
+	passing := p.passing
+	v.mu.Unlock()
+	if !passing {
+		t.Fatal("a member who answered correctly must be recorded as passing, or the retry declines them")
+	}
+
+	// The re-armed timer settles: it must complete the admission, not remove them.
+	fb.unmuteErr = nil
+	v.onExpiry(context.Background(), fb, gid, uid, p.nonce, p.epoch, "approve-retry")
+	if fb.bans != 0 {
+		t.Errorf("bans = %d, want 0: retrying an admission must never remove the member", fb.bans)
+	}
+	if fb.unmutes == 0 {
+		t.Error("the retry must try to lift the hold again")
 	}
 }
 
@@ -129,13 +184,23 @@ func TestHeldWordingDiffersFromRequestWording(t *testing.T) {
 func TestBasicGroupIsNotHeld(t *testing.T) {
 	v := newTestService(&config.Config{})
 	fb := &fakeVerifyBot{}
-	v.holdMember(context.Background(), fb, -100, 5, false)
+	basic := &pending{gate: gateMute, nonce: "b"}
+	v.pend[pkey{-100, 5}] = basic
+	v.holdMember(context.Background(), fb, -100, 5, false, basic)
 	if fb.mutes != 0 {
 		t.Errorf("mutes = %d, want 0: Telegram only restricts members of supergroups", fb.mutes)
 	}
-	v.holdMember(context.Background(), fb, -100, 5, true)
+	if basic.held {
+		t.Error("a group that cannot be held must not be recorded as held")
+	}
+	super := &pending{gate: gateMute, nonce: "s"}
+	v.pend[pkey{-200, 5}] = super
+	v.holdMember(context.Background(), fb, -200, 5, true, super)
 	if fb.mutes != 1 {
 		t.Errorf("mutes = %d, want 1", fb.mutes)
+	}
+	if !super.held {
+		t.Error("a placed hold must be recorded, or passing has nothing to lift")
 	}
 }
 
