@@ -18,6 +18,14 @@ Most settings are reachable from `/settings`, per group, without a restart. Putt
 
 verification on/off · challenge delivery · verification mode · applicant-name hiding · ban duration · mute duration · warning limit · verification timeout · maximum failures · retry cooldown · whether invited members verify · lookup cleanup and its lifetime · group language · required channel and invite · quiz and fallback question banks · sender-channel blocking and whitelist · trusted groups · known chats · rich output · the alert chat · the bot-wide private-query rate.
 
+## Editions
+
+`gentoo-zh-verify-bot` is built with `-tags gentoo` and gives the Gentoo lookups the short names
+`/pkg` `/use` `/bug` `/news` `/bbs` `/arm`. `gentoo-zhbot` is the default build for Linux
+communities in general and prefixes those with `g`, leaving `/pkg` free. Both answer `/pkgs`
+`/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. Nothing else differs,
+and no setting selects between them: the choice is which binary you install.
+
 ## Fields
 
 Only `group_ids` is worth setting by hand in a fresh deployment, and only if you already know the group.
@@ -75,7 +83,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | `rich_messages` | `false` | Rich Bot API output with an HTML fallback. |
 | `private_reply` | built-in | Reply to non-command direct messages. |
 | `overlays` | `gentoo-zh/overlay`, `gentoo/guru` | Overlays searched by `/pkg`. |
-| `news_url` | gentoo.org news items | Source for `/news`. |
+| `news_url` | gentoo.org news items | Source for `/news` (`/gnews` in the general edition). |
 | `user_agent` | `gentoo-zh-verify-bot` | Outbound HTTP User-Agent. |
 | `stats_timezone` | `Asia/Shanghai` | Day boundary for `/stats`. |
 

@@ -18,6 +18,13 @@
 
 验证开关 · 验证题发送方式 · 验证方式 · 姓名遮盖 · 封禁时长 · 禁言时长 · 警告上限 · 验证超时 · 最多失败次数 · 重试冷却 · 被邀请成员是否验证 · 查询结果自动删除及保留时间 · 群组语言 · 必加频道与邀请链接 · 选择题库与备用题库 · 频道身份发言拦截与白名单 · 受信任群组 · 已知聊天 · 富文本输出 · 告警聊天 · 全局私聊查询频率。
 
+## 两个版本
+
+`gentoo-zh-verify-bot` 用 `-tags gentoo` 构建，Gentoo 查询使用短名 `/pkg` `/use` `/bug` `/news`
+`/bbs` `/arm`。`gentoo-zhbot` 是面向一般 Linux 社区的默认构建，上述命令加 `g` 前缀，`/pkg`
+留给群组自己使用。两者都提供 `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve`
+`/repology`。其余没有差别，也没有任何配置项在两者之间切换：选择的是安装哪个二进制。
+
 ## 字段
 
 全新部署中值得手工填写的只有 `group_ids`，而且仅在你已经知道群组 ID 时才需要。
@@ -75,7 +82,7 @@
 | `rich_messages` | `false` | 使用富文本输出，并保留 HTML 回退。 |
 | `private_reply` | 内置 | 对非命令私聊消息的回复。 |
 | `overlays` | `gentoo-zh/overlay`、`gentoo/guru` | `/pkg` 搜索的 overlay。 |
-| `news_url` | gentoo.org 新闻条目 | `/news` 的数据源。 |
+| `news_url` | gentoo.org 新闻条目 | `/news` 的数据源（通用版为 `/gnews`）。 |
 | `user_agent` | `gentoo-zh-verify-bot` | 出站 HTTP User-Agent。 |
 | `stats_timezone` | `Asia/Shanghai` | `/stats` 的日界时区。 |
 

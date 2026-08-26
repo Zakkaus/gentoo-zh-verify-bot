@@ -1,18 +1,4 @@
 {
-  "pkgs": {
-    "repology_unavailable": "Repology is temporarily unavailable, so cross-distribution information for “%[1]s” could not be retrieved. Try again later.",
-    "repology_not_found": "❓ Repology has no cross-distribution package matching “%[1]s”. Try a more specific package name.",
-    "usage": "Usage: /pkgs <package>. Example: /pkgs firefox. Compare package versions across Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL, CentOS Stream, and openSUSE. Debian and similar distributions show stable/testing channels; RHEL data comes from AlmaLinux and Rocky Linux.",
-    "no_supported_distro": "No packaged version of “%[1]s” was found in Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL, CentOS Stream, EPEL, or openSUSE. It may be available only in another distribution.",
-    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> versions across distributions",
-    "closest_match": " <i>(closest match for “%[1]s”)</i>",
-    "plain_heading": "%[1]s:",
-    "release_role": " <i>(%[1]s)</i>",
-    "plain_row": "\n • <b>%[1]s</b>: %[2]s%[3]s",
-    "rich_row": "<li><b>%[1]s</b>: %[2]s%[3]s</li>",
-    "alternatives": "\nOther matches: %[1]s",
-    "rich_alternatives": "<details><summary>Other matches (%[1]d)</summary>%[2]s</details>"
-  },
   "armpkgs": {
     "usage": "Usage: /armpkgs <package>. Example: /armpkgs htop. Compare arm64 (AArch64) support for the package across Gentoo, Debian, Ubuntu, Fedora, Arch Linux ARM, and AUR.",
     "heading": "🦾 <b>%[1]s</b> · cross-distribution arm64 (AArch64) support",
@@ -40,7 +26,51 @@
     "not_packaged": "❌ Not packaged",
     "packaged": "✅ Packaged"
   },
+  "cve": {
+    "heading": "🔒 <a href=\"%[1]s\">%[2]s</a>",
+    "not_found": "❓ %[1]s was not found. Check the identifier, or it is not published yet.",
+    "published": "Published %[1]s, currently %[2]s",
+    "severity": "<b>%[1]s</b>　CVSS %[2]s",
+    "unavailable": "⚠️ The NVD feed is temporarily unavailable. Try again later.",
+    "usage": "Usage: /cve CVE-2024-3094"
+  },
+  "kernel": {
+    "eol": "(end of life)",
+    "footer": "When verifying, send the version your own machine runs, not one from this list.",
+    "heading": "🐧 Current releases on <a href=\"https://www.kernel.org/\">kernel.org</a>:",
+    "row": "%[1]s <b>%[2]s</b>　%[3]s",
+    "unavailable": "⚠️ The kernel.org release list is temporarily unavailable. Try again later."
+  },
+  "man": {
+    "heading": "📖 <a href=\"%[1]s\">%[2]s</a>",
+    "not_found": "❓ No manual page for “%[1]s”. Check the name, or name the section, such as %[1]s.5.",
+    "synopsis": "<b>Synopsis</b>\n<code>%[1]s</code>",
+    "unavailable": "⚠️ Manual pages are temporarily unavailable. Try again later.",
+    "usage": "Usage: /man <name>　Examples: /man ls, /man fstab.5"
+  },
+  "pkgs": {
+    "repology_unavailable": "Repology is temporarily unavailable, so cross-distribution information for “%[1]s” could not be retrieved. Try again later.",
+    "repology_not_found": "❓ Repology has no cross-distribution package matching “%[1]s”. Try a more specific package name.",
+    "usage": "Usage: /pkgs <package>. Example: /pkgs firefox. Compare package versions across Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL, CentOS Stream, and openSUSE. Debian and similar distributions show stable/testing channels; RHEL data comes from AlmaLinux and Rocky Linux.",
+    "no_supported_distro": "No packaged version of “%[1]s” was found in Gentoo, AUR, Arch, Alpine, Debian, Ubuntu, Nixpkgs, Fedora, RHEL, CentOS Stream, EPEL, or openSUSE. It may be available only in another distribution.",
+    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> versions across distributions",
+    "closest_match": " <i>(closest match for “%[1]s”)</i>",
+    "plain_heading": "%[1]s:",
+    "release_role": " <i>(%[1]s)</i>",
+    "plain_row": "\n • <b>%[1]s</b>: %[2]s%[3]s",
+    "rich_row": "<li><b>%[1]s</b>: %[2]s%[3]s</li>",
+    "alternatives": "\nOther matches: %[1]s",
+    "rich_alternatives": "<details><summary>Other matches (%[1]d)</summary>%[2]s</details>"
+  },
   "release": {
     "standard_support_ended": " · standard support ended"
+  },
+  "repology": {
+    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> across distributions:",
+    "more": "%[1]d more repositories are not listed.",
+    "not_found": "❓ repology has no project named “%[1]s”. Check the name.",
+    "row": "%[1]s　<b>%[2]s</b>",
+    "unavailable": "⚠️ repology is temporarily unavailable. Try again later.",
+    "usage": "Usage: /repology <package>　Example: /repology bash"
   }
 }

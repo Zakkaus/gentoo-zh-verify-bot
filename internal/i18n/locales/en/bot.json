@@ -1,19 +1,23 @@
 {
   "menu": {
     "member": {
-      "help": "Show available commands",
-      "pkg": "Search Gentoo packages",
-      "use": "Show package details and USE flags",
-      "bug": "Look up a Gentoo Bugzilla issue",
-      "news": "Browse or search Gentoo news",
-      "wiki": "Search Gentoo Wiki and ArchWiki",
-      "bbs": "Search Linux forums (Chinese first)",
-      "pkgs": "Compare package versions across distributions",
-      "distro": "Alias for /pkgs",
       "arm": "Show Gentoo arm64 keyword status",
       "arm_pkgs": "Compare arm64 support across distributions",
+      "bbs": "Search Linux forums (Chinese first)",
+      "bug": "Look up a Gentoo Bugzilla issue",
+      "cve": "Look up a vulnerability by identifier",
+      "distro": "Alias for /pkgs",
+      "help": "Show available commands",
+      "kernel": "Kernel versions currently published on kernel.org",
+      "man": "Look up a Linux manual page",
+      "news": "Browse or search Gentoo news",
       "ping": "Show bot status and uptime",
-      "stats": "Show today's approvals and rejections"
+      "pkg": "Search Gentoo packages",
+      "pkgs": "Compare package versions across distributions",
+      "repology": "Package versions across distribution repositories",
+      "stats": "Show today's approvals and rejections",
+      "use": "Show package details and USE flags",
+      "wiki": "Search Gentoo Wiki and ArchWiki"
     },
     "admin": {
       "start": "[Administrator] Enable join verification",

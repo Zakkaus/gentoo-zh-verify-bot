@@ -2,11 +2,24 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`gentoo-zh-verify-bot` is a Telegram join-request verification bot for Gentoo Chinese community groups that need to filter bulk spam applications. It keeps each request pending until the applicant passes or fails verification. It also provides group moderation, Gentoo and Linux lookups, and optional Bugzilla and news feeds.
+A Telegram verification bot for Linux community groups that need to filter bulk spam applications, built and run by the [Gentoo-zh Community](https://gentoozh.org). Somebody applying to join is held until they pass or fail; somebody who joins a group that does not ask people to apply is muted until they do. It also provides group moderation, package and documentation lookups across distributions, and optional bug and news feeds.
+
+## Two editions
+
+One codebase, two binaries. They differ only in who gets the unqualified command names.
+
+| | Built for | Gentoo lookups |
+| --- | --- | --- |
+| `gentoo-zh-verify-bot` | the Gentoo-zh Community | `/pkg` `/use` `/bug` `/news` `/bbs` `/arm` |
+| `gentoo-zhbot` | Linux communities in general | `/gpkg` `/guse` `/gbug` `/gnews` `/gbbs` `/garm` |
+
+Everything else is identical, including verification, moderation, the settings panel, and the lookups every Linux community shares: `/pkgs` `/distro` `/armpkgs` `/wiki` `/kernel` `/man` `/cve` `/repology`. A group running Arch or Debian keeps `/pkg` free for whatever it wants to bind it to, and can still ask a Gentoo question when one comes up.
+
+Build the Gentoo edition with `-tags gentoo`; the default build is the general one. Both are published on every release, for `amd64` and `arm64`.
 
 ## Fit and operating footprint
 
-The bot works with Telegram groups and supergroups that use join requests. It must be a group administrator with **Invite Users**, **Ban Users**, and **Delete Messages** permissions. If a required-channel gate is enabled, the bot must also be an administrator of that channel. BotFather privacy mode only needs to be disabled for `/bc`.
+The bot works with Telegram groups and supergroups, whether or not they use join requests. It must be a group administrator with **Invite Users**, **Ban Users**, and **Delete Messages** permissions. If a required-channel gate is enabled, the bot must also be an administrator of that channel. BotFather privacy mode only needs to be disabled for `/bc`.
 
 Releases are static Linux binaries for `amd64` and `arm64`. With Telegram's hosted Bot API and the default data sources, the bot requires outbound HTTPS only; it needs no database, reverse proxy, or inbound port. The supplied systemd unit keeps durable state in a private directory and sets `MemoryMax=512M`. The `512M` value is a safety limit, not a claim about resident memory use.
 
@@ -109,11 +122,11 @@ The systemd unit uses `Restart=always`. Unless systemd stops it deliberately, th
 
 When Telegram is unreachable, an expiring verification receives a new full window without being declined or recording a failure. After an in-process outage longer than 90 seconds, every in-memory verification receives a fresh window. After a restart, restored `pending.json` entries also receive fresh windows when `heartbeat.json` proves that the service was down for more than 90 seconds. Each recovery attempts to re-notify at most 30 applicants. Telegram retains updates for a disconnected bot for about 24 hours, so a longer outage may lose join requests the bot never received. On recovery, the bot alerts administrators to inspect Telegram's pending join-request queue manually when `heartbeat.json` is readable.
 
-## Forking for another community
+## Adapting it to another community
 
-Groups, verification modes, both question banks, the three existing locales, overlays, the news source, feed destinations, and message policy can all be changed through configuration or the settings panel without modifying code.
+Most communities need no fork. Run the `gentoo-zhbot` edition and configure it: groups, verification modes, both question banks, the three existing locales, overlays, the news source, feed destinations, and message policy are all set through `config.json` or the settings panel without touching code.
 
-A rename or replacement of the Gentoo-specific behavior requires a complete cutover of:
+Replacing the Gentoo-specific behaviour outright, rather than leaving it behind a `g` prefix, requires a complete cutover of:
 
 - the module path in `go.mod` and every Go import;
 - the command name, binary and release asset names, systemd paths, and state directory in `cmd/gentoo-zh-verify-bot`, `deploy/gentoo-zh-verify-bot.service`, and `.github/workflows/release.yml`;
