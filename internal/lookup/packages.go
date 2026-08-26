@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -25,7 +26,8 @@ type overlay struct {
 	branch string
 }
 
-var userAgent = "gentoo-zh-verify-bot"
+// Identify as the build that is actually running; operators can still override it.
+var userAgent = edition.Name
 
 var overlays []overlay
 
@@ -1439,7 +1441,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		var b strings.Builder
 		b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
 		for _, a := range atoms {
-			fmt.Fprintf(&b, "\n • /%suse %s", i18n.CommandPrefix, a)
+			fmt.Fprintf(&b, "\n • /%suse %s", edition.CommandPrefix, a)
 		}
 		if availability.anyUnavailable() {
 			fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 )
@@ -132,7 +133,7 @@ func TestDMRejectsUnregisteredCommand(t *testing.T) {
 // A build that is not the Gentoo edition must not present itself as the Gentoo-zh Community's
 // bot, and must not ask joiners about that community's website.
 func TestGenericBuildClaimsNoCommunity(t *testing.T) {
-	if i18n.CommandPrefix == "" {
+	if edition.CommandPrefix == "" {
 		t.Skip("the Gentoo build is the Gentoo-zh Community's bot")
 	}
 	for _, l := range helpLocales {
@@ -157,7 +158,7 @@ func TestGenericBuildClaimsNoCommunity(t *testing.T) {
 }
 
 func TestGentooBuildKeepsItsIdentity(t *testing.T) {
-	if i18n.CommandPrefix != "" {
+	if edition.CommandPrefix != "" {
 		t.Skip("only the Gentoo build names the community")
 	}
 	reply := i18n.Messages.Bot.DirectMessage.AutoReply.Render(i18n.LangZH, 5, i18n.Messages.Bot.DirectMessage.Who(i18n.LangZH))

@@ -53,6 +53,8 @@ sudoedit /etc/gentoo-zh-verify-bot/bot.env   # add BOT_TOKEN=<token from @BotFat
 sudo systemctl start gentoo-zh-verify-bot
 ```
 
+Pass `--generic` for the other edition. Its binary, configuration directory, systemd unit, and state directory are all named `gentoo-zhbot`, so both editions can be installed on one machine.
+
 Read the script before running it; it is short and does nothing but the steps above.
 
 ### Building from source instead

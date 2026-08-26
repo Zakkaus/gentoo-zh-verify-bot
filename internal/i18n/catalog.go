@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 )
 
 // Lang identifies one supported catalogue locale.
@@ -107,7 +109,7 @@ func applyCommandPrefix(s string) string {
 	if !strings.Contains(s, commandPrefixToken) {
 		return s
 	}
-	return strings.ReplaceAll(s, commandPrefixToken, CommandPrefix)
+	return strings.ReplaceAll(s, commandPrefixToken, edition.CommandPrefix)
 }
 
 // Text is a localized value that is returned without formatting.

@@ -6,7 +6,7 @@
 
 **实现位置：**`main` 包；`cmd/gentoo-zh-verify-bot/main.go` 中的 `main` 和 `loadRuntimeState`；`internal/config` 包；`internal/config/config.go` 中的 `LoadConfig`；`internal/store` 包；`internal/store/baseline.go` 中的 `LoadBaseline` 和 `EffectiveConfig`。
 
-除 `-version` 外，应用只强制要求 `BOT_TOKEN`。默认配置路径为 `/etc/gentoo-zh-verify-bot/config.json`。文件不存在时按 `{}` 处理，以零个已配置群组启动。现有文件不可读、JSON 损坏、群组、模式、题目、频道或 baseline 无效时，启动失败。未知 key 只记录警告。
+除 `-version` 外，应用只强制要求 `BOT_TOKEN`。默认配置路径由构建决定：Gentoo 版为 `/etc/gentoo-zh-verify-bot/config.json`，通用版为 `/etc/gentoo-zhbot/config.json`。文件不存在时按 `{}` 处理，以零个已配置群组启动。现有文件不可读、JSON 损坏、群组、模式、题目、频道或 baseline 无效时，启动失败。未知 key 只记录警告。
 
 `STATE_DIRECTORY` 非空时，`loadRuntimeState` 尝试以 `0700` 创建目录，清理遗留的 `.<name>.tmp-*`，并把 `settings.json` 放在该目录中。创建失败只记录警告，启动继续，之后的持久化可能失败。变量为空时，普通设置只存在于内存，验证、警告和 feed 状态都不能跨重启保存。Owner 认领和运行时群组注册要求更严格：没有持久设置存储时直接拒绝。
 
@@ -65,6 +65,10 @@ Feed 目标另有非致命启动检查。频道要求机器人是管理员且具
 /etc/gentoo-zh-verify-bot/config.json`，读取 `/etc/gentoo-zh-verify-bot/bot.env`，使用
 `DynamicUser=yes`，并以 `0700` 模式创建 `/var/lib/gentoo-zh-verify-bot` 作为
 `STATE_DIRECTORY`。
+
+通用版另有一份 `deploy/gentoo-zhbot.service`，除名称与描述外与之逐字相同：路径中的
+`gentoo-zh-verify-bot` 全部换成 `gentoo-zhbot`，因此两个版本可以装在同一台机器上，
+配置、状态和单元互不共用。
 
 `Restart=always` 覆盖崩溃、watchdog 终止和意外的正常退出。30 秒重启间隔可避免高频崩溃
 循环。`StartLimitIntervalSec=0` 会停用 systemd 的启动速率限制，因此持续的启动错误会每

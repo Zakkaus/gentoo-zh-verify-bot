@@ -53,6 +53,8 @@ sudoedit /etc/gentoo-zh-verify-bot/bot.env   # 填入 BOT_TOKEN=<@BotFather 给�
 sudo systemctl start gentoo-zh-verify-bot
 ```
 
+装通用版加 `--generic`，二进制、配置目录、systemd 单元和状态目录全部换成 `gentoo-zhbot`，因此两个版本可以装在同一台机器上互不干扰。
+
 运行前请先读一遍脚本，它很短，做的就是上面这几件事。
 
 ### 改为从源代码构建
