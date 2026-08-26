@@ -71,6 +71,7 @@ type verifyTransport interface {
 	Delete(ctx context.Context, chatID int64, messageID int)
 	Alert(ctx context.Context, adminLogChatID int64, text string)
 	FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string)
+	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
 	Ban(ctx context.Context, chatID, userID int64, seconds int, revokeMessages bool) error
 }
 
@@ -605,6 +606,10 @@ func (v *Service) joinGate(c context.Context, bot modBot, gid, uid int64, applic
 	// Early retries are declined without posting another challenge.
 	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 {
 		if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
+			if tg.JoinRequestGone(err) {
+				log.Printf("verify cooldown: join request from %d in %d is already gone: %v", uid, gid, err)
+				return true
+			}
 			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
@@ -1353,6 +1358,10 @@ func (v *Service) isGroupAdmin(ctx context.Context, bot modBot, chatID, userID i
 	return ok
 }
 
+// Verification keeps no permanent record in the group: the failure notice for an
+// administrator button is cleaned up like the challenge it belongs to.
+const adminActionNoticeTTL = 240
+
 // OnAdminAction settles one administrator approval or ban callback.
 func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 	cq := update.CallbackQuery
@@ -1386,7 +1395,7 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 		// Acknowledge the pending action; failures reopen the request, tell the group, and alert admins.
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Approving.For(l)))
 		if !v.executeApprove(c, bot, gid, target, p) {
-			_, _ = bot.SendMessage(c, tu.Message(tu.ID(gid), admin.ActionFailed.For(l)))
+			v.verificationTransport(bot).Notify(c, gid, admin.ActionFailed.For(l), adminActionNoticeTTL)
 		}
 	case "ban":
 		p, ok := v.consume(gid, target)
@@ -1398,7 +1407,7 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 		duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(gid))
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Banning.Render(l, duration)))
 		if !v.executeBan(c, bot, gid, target, p) {
-			_, _ = bot.SendMessage(c, tu.Message(tu.ID(gid), admin.ActionFailed.For(l)))
+			v.verificationTransport(bot).Notify(c, gid, admin.ActionFailed.For(l), adminActionNoticeTTL)
 		}
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
@@ -1741,12 +1750,21 @@ func (v *Service) decline(c context.Context, bot verifyBot, gid, uid int64, nonc
 // Settle an already-claimed decline, striking at claim time only after Telegram confirms rejection.
 func (v *Service) finishDecline(c context.Context, bot verifyBot, gid, uid int64, p *pending, reason string) (settled, banned bool) {
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
-		log.Printf("decline %d in %d failed: %v", uid, gid, err)
-		admin := &v.messages.Verification.Admin
-		v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.reopenPending(bot, gid, uid, p, "decline-retry")
+		if !tg.JoinRequestGone(err) {
+			log.Printf("decline %d in %d failed: %v", uid, gid, err)
+			admin := &v.messages.Verification.Admin
+			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.reopenPending(bot, gid, uid, p, "decline-retry")
+			v.save()
+			return false, false
+		}
+		// Telegram no longer holds the request, so no retry can settle it. Close the pending
+		// without striking: whatever removed the request was not the applicant's doing.
+		log.Printf("decline %d in %d: join request is already gone: %v", uid, gid, err)
+		v.deleteChallenges(c, bot, gid, uid, p.messages())
+		v.finishTerminal(gid, uid, p)
 		v.save()
-		return false, false
+		return true, false
 	}
 	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	var count int
@@ -1814,12 +1832,16 @@ func (v *Service) executeBan(c context.Context, bot verifyBot, gid, uid int64, p
 		return false
 	}
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
-		log.Printf("decline after ban %d in %d: %v", uid, gid, err)
-		admin := &v.messages.Verification.Admin
-		v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.reopenPending(bot, gid, uid, p, "ban-retry")
-		v.save()
-		return false
+		if !tg.JoinRequestGone(err) {
+			log.Printf("decline after ban %d in %d: %v", uid, gid, err)
+			admin := &v.messages.Verification.Admin
+			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.reopenPending(bot, gid, uid, p, "ban-retry")
+			v.save()
+			return false
+		}
+		// The ban is confirmed and the request is gone; retrying the decline cannot help.
+		log.Printf("decline after ban %d in %d: join request is already gone: %v", uid, gid, err)
 	}
 	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	v.recordDecision(false)
