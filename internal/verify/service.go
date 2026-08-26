@@ -101,6 +101,7 @@ const (
 
 type pending struct {
 	gate               string // gateRequest or gateMute
+	invited            bool   // somebody else added this member, so the group notice tells administrators they can vouch
 	groupMsgID         int
 	privateMsgID       int
 	challengeDelivered bool
@@ -181,6 +182,7 @@ type pendingRec struct {
 	DeferredSince      int64    `json:"deferred_since,omitempty"`
 	DeferralCapReached bool     `json:"deferral_cap_reached,omitempty"`
 	Gate               string   `json:"gate,omitempty"`                // gateMute for a member verified after joining; empty means the join-request gate
+	Invited            bool     `json:"invited,omitempty"`             // the member was added by somebody else
 	SettleFailures     int      `json:"settle_failures,omitempty"`     // consecutive unconfirmed settlements; bounds the retry
 	SettlePendingSaid  bool     `json:"settle_pending_said,omitempty"` // the "still being settled" notice was already sent
 }
@@ -810,11 +812,18 @@ type challengeDeliveryResult struct {
 // deliverPendingChallenge is the single delivery-mode decision for initial and recovery challenges.
 // gateOf reads the gate of the pending a delivery belongs to; a delivery with no owner follows
 // the join-request wording, which is what a user-triggered resend of a request challenge wants.
-func gateOf(owner *pending) string {
+func gateOf(owner *pending) challengeVoice {
 	if owner == nil {
-		return gateRequest
+		return challengeVoice{gate: gateRequest}
 	}
-	return owner.gate
+	return challengeVoice{gate: owner.gate, invited: owner.invited}
+}
+
+// challengeVoice selects the public challenge wording: applying, arriving on their own, or
+// being brought in by somebody who can vouch for them.
+type challengeVoice struct {
+	gate    string
+	invited bool
 }
 
 func (v *Service) deliverPendingChallenge(
@@ -979,8 +988,8 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	supergroup := member.Chat.Type == telego.ChatTypeSupergroup
 	mode, text, opts, correctIdx := v.newChallenge(gid, applicantLang)
 	name := applicantDisplayName(&user)
-	p := &pending{gate: gateMute, mode: mode, lang: applicantLang, qText: text, qOpts: opts,
-		correctIdx: correctIdx, nonce: newNonce(), name: name}
+	p := &pending{gate: gateMute, invited: member.From.ID != uid, mode: mode, lang: applicantLang,
+		qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(), name: name}
 	oldMessages, status := v.startPending(bot, gid, uid, p)
 	switch status {
 	case pendingBlockedCapacity:

@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,4 +173,50 @@ func botJoinUpdate(gid, uid int64) telego.Update {
 		User:   telego.User{ID: uid, IsBot: true},
 	}
 	return update
+}
+
+// Someone brought in by another member still verifies, but the group notice says so and points
+// administrators at the button that vouches for them.
+func TestInvitedMemberGetsItsOwnNotice(t *testing.T) {
+	v := newTestService(&config.Config{})
+	fb := &fakeVerifyBot{}
+	gid, uid := int64(-100), int64(9)
+	v.botUsername = "bot"
+
+	invited := challengeVoice{gate: gateMute, invited: true}
+	arrived := challengeVoice{gate: gateMute}
+	applying := challengeVoice{gate: gateRequest}
+
+	texts := map[string]string{}
+	for name, voice := range map[string]challengeVoice{"invited": invited, "arrived": arrived, "applying": applying} {
+		fb.lastSendText = ""
+		v.postGroupChallenge(context.Background(), fb, gid, uid, "Alice", i18n.LangEN, voice)
+		texts[name] = fb.lastSendText
+	}
+	if texts["invited"] == texts["arrived"] {
+		t.Error("an invited member and one who arrived alone must not get the same notice")
+	}
+	if texts["arrived"] == texts["applying"] {
+		t.Error("a member and an applicant must not get the same notice")
+	}
+	if !strings.Contains(texts["invited"], "invited") {
+		t.Errorf("the invited notice must say so, got %q", texts["invited"])
+	}
+	release := i18n.Messages.Verification.Admin.ReleaseButton.For(i18n.LangEN)
+	if !strings.Contains(texts["invited"], release) {
+		t.Errorf("the invited notice must point at %q, got %q", release, texts["invited"])
+	}
+}
+
+// Being added by somebody else is what marks a member as invited; walking in alone is not.
+func TestInvitedIsDecidedByWhoActed(t *testing.T) {
+	joiner := joinUpdate(-100, 5, telego.ChatTypeSupergroup, nil)
+	if joiner.ChatMember.From.ID != 5 {
+		t.Fatal("a member who joins alone acts on their own behalf")
+	}
+	added := joinUpdate(-100, 5, telego.ChatTypeSupergroup, nil)
+	added.ChatMember.From = telego.User{ID: 42}
+	if added.ChatMember.From.ID == added.ChatMember.NewChatMember.MemberUser().ID {
+		t.Fatal("fixture error: the actor must differ from the member")
+	}
 }

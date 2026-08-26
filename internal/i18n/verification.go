@@ -76,6 +76,8 @@ type VerificationGroupCatalog struct {
 	Body Format
 	// BodyJoined formats the public challenge for someone who is already a member.
 	BodyJoined Format
+	// BodyInvited formats the public challenge for a member somebody else added.
+	BodyInvited Format
 	// LinkText formats the optional deep-link clause.
 	LinkText Format
 	// ChannelHint formats the required-channel suffix.

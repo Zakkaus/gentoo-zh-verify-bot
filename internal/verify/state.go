@@ -462,7 +462,7 @@ func (v *Service) save() {
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
 				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
-				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate})
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited})
 		}
 		return recs
 	})
@@ -521,7 +521,7 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited,
 			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
@@ -764,7 +764,7 @@ func (v *Service) deferExpiry(bot modBot, gid, uid int64, nonce string, epoch ui
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.
-func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, l i18n.Lang, gate string) int {
+func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, l i18n.Lang, voice challengeVoice) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 	mention := joinerLabel(uid, name, v.NameSpoilerOn(gid))
 	link := ""
@@ -783,7 +783,11 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 		linkText = group.LinkText.Render(l, link)
 	}
 	template := group.Body
-	if gate == gateMute {
+	switch {
+	case voice.gate != gateMute:
+	case voice.invited:
+		template = group.BodyInvited
+	default:
 		template = group.BodyJoined
 	}
 	body := template.Render(l, mention, linkText, int(v.timeout(gid)/time.Second), channelHint)
@@ -793,8 +797,8 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: group.VerifyButton.For(l), URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
-		telego.InlineKeyboardButton{Text: adminPassLabel(admin, l, gate), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: adminRejectLabel(admin, l, gate), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: adminPassLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: adminRejectLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
 	))
 	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	if err != nil {

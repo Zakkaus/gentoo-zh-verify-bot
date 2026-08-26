@@ -76,7 +76,8 @@
     "channel_hint": "\n⚠️ You must also join the channel %[1]s before approval.",
     "link_text": " (or use <a href=\"%[1]s\">this link</a>)",
     "verify_button": "✅ Start verification",
-    "body_joined": "👋 %[1]s joined and needs to verify. Tap “✅ Start verification” below%[2]s to open a direct message with the bot and finish. Not finishing within %[3]d seconds removes them from the group.%[4]s"
+    "body_joined": "👋 %[1]s joined and needs to verify. Tap “✅ Start verification” below%[2]s to open a direct message with the bot and finish. Not finishing within %[3]d seconds removes them from the group.%[4]s",
+    "body_invited": "👋 %[1]s was invited in and still needs to verify. Tap “✅ Start verification” below%[2]s to open a direct message with the bot and finish. An administrator who vouches for them can tap “👮 Let in (administrator)” instead; without that they still have to verify, and not finishing within %[3]d seconds removes them from the group.%[4]s"
   },
   "input": {
     "no_linux_phrases": [
