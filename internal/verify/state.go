@@ -461,7 +461,8 @@ func (v *Service) save() {
 				Tries: p.tries, Hinted: p.hinted, SampleBounced: p.sampleBounced,
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
-				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached})
+				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid})
 		}
 		return recs
 	})
@@ -520,7 +521,8 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures,
+			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
 		reason := challengeExpiryReason(p.challengeDelivered && !p.fallbackPending)
@@ -672,6 +674,9 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 		return
 	}
 	outcome, banned := v.finishDecline(c, bot, gid, uid, p, reason)
+	if outcome == declineUnsettled && !v.claimSettlePendingNotice(gid, uid, p) {
+		return // one notice per applicant: a settlement the bot keeps retrying must not DM them each round
+	}
 	text := v.declineResultText(outcome, p.lang, func() string {
 		if capped {
 			return v.messages.Verification.Result.DeferralExpired.For(p.lang)
@@ -679,6 +684,18 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 		return v.timeoutResultText(gid, uid, p.lang, banned)
 	})
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
+}
+
+// claimSettlePendingNotice spends the one-shot "still being settled" notice for this pending.
+func (v *Service) claimSettlePendingNotice(gid, uid int64, p *pending) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	cur, ok := v.pend[pkey{gid, uid}]
+	if !ok || cur != p || p.settlePendingSaid {
+		return false
+	}
+	p.settlePendingSaid = true
+	return true
 }
 
 // deferralCapState also claims the one-time warning marker while the pending is locked.

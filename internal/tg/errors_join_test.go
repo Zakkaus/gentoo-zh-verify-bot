@@ -55,3 +55,34 @@ func TestPrivateChatMessagesAreNeverScheduledForDeletion(t *testing.T) {
 		t.Fatalf("cleanup timers armed for a group = %d, want 1", got)
 	}
 }
+
+// Two identical moderation actions are two facts, so the audit channel never collapses them.
+func TestAuditLogKeepsIdenticalRecords(t *testing.T) {
+	caller := &scriptedCaller{}
+	client := newTestClient(t, caller)
+	for range 3 {
+		client.AuditLog(context.Background(), -200, "banned user 7")
+	}
+	if calls := caller.methodCalls("sendMessage"); len(calls) != 3 {
+		t.Fatalf("sendMessage calls = %d, want 3: an audit record must never be deduplicated", len(calls))
+	}
+}
+
+func TestGroupUnreachable(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{errors.New(`api: 403 "Forbidden: bot is not a member of the supergroup chat"`), true},
+		{errors.New(`api: 403 "Forbidden: bot was kicked from the supergroup chat"`), true},
+		{errors.New(`api: 400 "Bad Request: chat not found"`), true},
+		{errors.New(`api: 400 "Bad Request: not enough rights"`), false},
+		{errors.New("connection reset by peer"), false},
+		{nil, false},
+	}
+	for _, tc := range cases {
+		if got := GroupUnreachable(tc.err); got != tc.want {
+			t.Errorf("GroupUnreachable(%v) = %v, want %v", tc.err, got, tc.want)
+		}
+	}
+}

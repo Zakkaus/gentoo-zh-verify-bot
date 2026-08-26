@@ -211,14 +211,30 @@ func (c *Client) alertAllowed(chatID int64, text string) bool {
 	return true
 }
 
-// Alert sends an operator alert when an admin-log chat is configured.
+// Alert sends a repeat-suppressed diagnostic to the admin-log chat when one is configured.
+// Use it for conditions that recur while a fault persists, never for a record of something
+// that happened once — see AuditLog.
 func (c *Client) Alert(ctx context.Context, adminLogChatID int64, text string) {
 	if adminLogChatID == 0 {
 		return
 	}
 	if !c.alertAllowed(adminLogChatID, text) {
+		log.Printf("adminAlert to %d suppressed as a repeat: %s", adminLogChatID, text)
 		return
 	}
+	c.sendAlert(ctx, adminLogChatID, text)
+}
+
+// AuditLog records one moderation action that actually happened. Two identical actions are two
+// facts, so this channel is never deduplicated: the same ban an hour apart must appear twice.
+func (c *Client) AuditLog(ctx context.Context, adminLogChatID int64, text string) {
+	if adminLogChatID == 0 {
+		return
+	}
+	c.sendAlert(ctx, adminLogChatID, text)
+}
+
+func (c *Client) sendAlert(ctx context.Context, adminLogChatID int64, text string) {
 	if _, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(adminLogChatID), text)); err != nil {
 		log.Printf("adminAlert to %d failed (check admin_log_chat_id / bot membership): %v", adminLogChatID, err)
 	}

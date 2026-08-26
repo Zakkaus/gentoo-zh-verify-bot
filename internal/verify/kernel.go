@@ -513,7 +513,7 @@ func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, no
 		model, total := v.recordAgent(text)
 		log.Printf("verify: automated-agent tripwire triggered by %d in %d (model %q, %d total) — declining", uid, gid, model, total)
 		alert := v.messages.Verification.Admin.AgentCaught.Render(v.groupLanguage(gid), uid, gid, model, total)
-		v.adminAlert(c, bot, alert)
+		v.adminRecord(c, bot, alert)
 	} else {
 		log.Printf("verify: declining %d in %d — the same reply tripped the tripwire in another group", uid, gid)
 	}

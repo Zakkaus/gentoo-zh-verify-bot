@@ -70,6 +70,7 @@ type verifyTransport interface {
 	SendHTMLFallback(ctx context.Context, chatID int64, rich, simpler string) (*telego.Message, error)
 	Delete(ctx context.Context, chatID int64, messageID int)
 	Alert(ctx context.Context, adminLogChatID int64, text string)
+	AuditLog(ctx context.Context, adminLogChatID int64, text string)
 	FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string)
 	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
 	Ban(ctx context.Context, chatID, userID int64, seconds int, revokeMessages bool) error
@@ -115,6 +116,8 @@ type pending struct {
 	lastRenotify       time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
 	failedAt           time.Time // claim time for rolling-window strike accounting
 	deferralCapReached bool      // persisted so the operator warning and short settlement retries survive restart
+	settleFailures     int       // consecutive unconfirmed settlements; persisted so the retry stays bounded across restarts
+	settlePendingSaid  bool      // the "still being settled" notice was already sent; retries stay silent
 	done               bool
 	removed            bool // group removal cancels an in-flight settlement without charging the applicant
 }
@@ -164,6 +167,8 @@ type pendingRec struct {
 	Deadline           int64    `json:"deadline"`
 	DeferredSince      int64    `json:"deferred_since,omitempty"`
 	DeferralCapReached bool     `json:"deferral_cap_reached,omitempty"`
+	SettleFailures     int      `json:"settle_failures,omitempty"`     // consecutive unconfirmed settlements; bounds the retry
+	SettlePendingSaid  bool     `json:"settle_pending_said,omitempty"` // the "still being settled" notice was already sent
 }
 
 // Per-pending randomness makes stale quiz buttons unable to answer replacements.
@@ -1585,6 +1590,11 @@ func (v *Service) adminAlert(c context.Context, bot verifyBot, text string) {
 	v.verificationTransport(bot).Alert(c, v.adminLogChatID(), text)
 }
 
+// adminRecord logs an action that happened once, so identical repeats must all appear.
+func (v *Service) adminRecord(c context.Context, bot verifyBot, text string) {
+	v.verificationTransport(bot).AuditLog(c, v.adminLogChatID(), text)
+}
+
 // Failure notices fall back to the acting group when no admin-log chat is configured.
 // This keeps optimistic callback acknowledgements from hiding rare network failures.
 func (v *Service) failAlert(c context.Context, bot verifyBot, gid int64, text string) {
@@ -1681,7 +1691,7 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 			log.Printf("approve %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.reopenPending(bot, gid, uid, p, "approve-retry")
+			v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
 		}
 		// An administrator settled this request in Telegram's own interface. The same error
@@ -1715,14 +1725,53 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 	return approveConfirmed
 }
 
+// A settlement the bot cannot complete — it lost the rights to approve and decline — would
+// otherwise retry every minute forever, DMing the applicant each round. Give up after this many
+// attempts and leave the request for an administrator: Telegram still holds it, so nobody gets
+// in without verification.
+const maxSettleFailures = 10
+
+// giveUpSettling reports a failure no retry can repair, so the attempt budget is spent at once.
+func giveUpSettling(err error) bool { return tg.GroupUnreachable(err) }
+
+// stopRetrying reopens a failed settlement for another attempt, unless the error proves no
+// attempt can succeed — then the budget is spent immediately rather than a minute at a time.
+func (v *Service) stopRetrying(bot modBot, gid, uid int64, p *pending, reason string, err error) {
+	if giveUpSettling(err) {
+		v.abandonSettlement(gid, uid, p, reason, err)
+		return
+	}
+	v.reopenPending(bot, gid, uid, p, reason)
+}
+
+// abandonSettlement drops a pending the bot can never settle. The join request stays with
+// Telegram for an administrator, so abandoning it admits nobody.
+func (v *Service) abandonSettlement(gid, uid int64, p *pending, reason string, err error) {
+	log.Printf("WARNING: cannot settle verification for %d in %d (%s): %v; "+
+		"the join request stays with Telegram for an administrator", uid, gid, reason, err)
+	v.discardPending(gid, uid, p)
+	v.save()
+}
+
 // Reopen a bot-caused failed settlement unless the pending was replaced or consumed.
-func (v *Service) reopenPending(bot modBot, gid, uid int64, p *pending, reason string) {
+// Reports whether the retry was armed; false means the attempt limit is spent.
+func (v *Service) reopenPending(bot modBot, gid, uid int64, p *pending, reason string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	key := pkey{gid, uid}
 	defer v.releaseTerminalLocked(key, p)
 	if cur, ok := v.pend[key]; !ok || cur != p || !p.done {
-		return
+		return false
+	}
+	p.settleFailures++
+	if p.settleFailures >= maxSettleFailures {
+		log.Printf("WARNING: giving up on settling verification for %d in %d after %d attempts (%s); "+
+			"the join request stays with Telegram for an administrator", uid, gid, p.settleFailures, reason)
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		delete(v.pend, key)
+		return false
 	}
 	p.done = false
 	p.failedAt = time.Time{}
@@ -1732,6 +1781,7 @@ func (v *Service) reopenPending(bot modBot, gid, uid int64, p *pending, reason s
 		p.deadline = v.wallNow().Add(delay)
 	}
 	v.armExpiry(bot, p, gid, uid, delay, reason)
+	return true
 }
 
 // Wrong-answer feedback distinguishes automatic ban from cooldown retry.
@@ -1857,7 +1907,7 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 			log.Printf("decline %d in %d failed: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.reopenPending(bot, gid, uid, p, "decline-retry")
+			v.stopRetrying(bot, gid, uid, p, "decline-retry", err)
 			v.save()
 			return declineUnsettled, false
 		}
@@ -1907,7 +1957,7 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 		} else {
 			l := v.groupLanguage(gid)
 			duration := verificationBanDurationText(v.messages, l, secs)
-			v.adminAlert(c, bot, v.messages.Verification.Admin.AutoBanned.Render(l, uid, gid, count, duration))
+			v.adminRecord(c, bot, v.messages.Verification.Admin.AutoBanned.Render(l, uid, gid, count, duration))
 			banned = true
 		}
 		if banned {
@@ -1944,7 +1994,7 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
 		admin := &v.messages.Verification.Admin
 		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.reopenPending(bot, gid, uid, p, "ban-retry")
+		v.stopRetrying(bot, gid, uid, p, "ban-retry", err)
 		v.save()
 		return false
 	}
@@ -1953,7 +2003,7 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 			log.Printf("decline after ban %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.reopenPending(bot, gid, uid, p, "ban-retry")
+			v.stopRetrying(bot, gid, uid, p, "ban-retry", err)
 			v.save()
 			return false
 		}

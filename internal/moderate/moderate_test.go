@@ -150,6 +150,10 @@ func (b *fakeModBot) Alert(_ context.Context, chatID int64, text string) {
 	}
 }
 
+func (b *fakeModBot) AuditLog(ctx context.Context, chatID int64, text string) {
+	b.Alert(ctx, chatID, text)
+}
+
 func (b *fakeModBot) FailAlert(_ context.Context, adminLogChatID, groupID int64, text string) {
 	b.failAlerts = append(b.failAlerts, fakeModFailAlert{
 		adminLogChatID: adminLogChatID,

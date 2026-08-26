@@ -23,6 +23,7 @@ type Telegram interface {
 	Delete(ctx context.Context, chatID int64, messageID int)
 	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
 	Alert(ctx context.Context, adminLogChatID int64, text string)
+	AuditLog(ctx context.Context, adminLogChatID int64, text string)
 	FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string)
 	CachedAdmin(ctx context.Context, chatID, userID int64) (bool, error)
 	FreshAdmin(ctx context.Context, chatID, userID int64) (bool, error)
@@ -296,7 +297,7 @@ func (s *Service) OnWarn(ctx *th.Context, update telego.Update) error {
 			outcome = i18n.Messages.Moderate.Warning.KickUnbanFailed.For(l)
 		}
 		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Warning.LimitReached.Render(l, displayName(target), limit, outcome, displayName(msg.From)))
-		s.telegram.Alert(requestCtx, s.adminLogChatID(),
+		s.telegram.AuditLog(requestCtx, s.adminLogChatID(),
 			i18n.Messages.Moderate.Warning.KickAlert.Render(l, groupID, target.ID, displayName(target), displayName(msg.From)))
 		log.Printf("/warn-kick user=%d group=%d by=%d", target.ID, groupID, msg.From.ID)
 		return nil
@@ -370,7 +371,7 @@ func (s *Service) moderate(ctx *th.Context, update telego.Update, command string
 	}
 	action := i18n.Messages.Moderate.Ban.Action.Render(l, verb, banDurationStatus(l, seconds))
 	s.notify(requestCtx, groupID, i18n.Messages.Moderate.Ban.Applied.Render(l, action, displayName(target), target.ID, displayName(msg.From)))
-	s.telegram.Alert(requestCtx, s.adminLogChatID(),
+	s.telegram.AuditLog(requestCtx, s.adminLogChatID(),
 		i18n.Messages.Moderate.Ban.Alert.Render(l, command, action, groupID, target.ID, displayName(target), displayName(msg.From)))
 	log.Printf("%s by admin=%d target=%d group=%d ban_secs=%d", command, msg.From.ID, target.ID, groupID, seconds)
 	return nil
@@ -412,7 +413,7 @@ func (s *Service) OnMute(ctx *th.Context, update telego.Update) error {
 	s.telegram.Delete(requestCtx, groupID, msg.ReplyToMessage.MessageID)
 	s.notify(requestCtx, groupID, i18n.Messages.Moderate.Mute.Applied.Render(l,
 		displayName(target), target.ID, banDurationStatus(l, seconds), displayName(msg.From)))
-	s.telegram.Alert(requestCtx, s.adminLogChatID(),
+	s.telegram.AuditLog(requestCtx, s.adminLogChatID(),
 		i18n.Messages.Moderate.Mute.Alert.Render(l, banDurationStatus(l, seconds), groupID, target.ID, displayName(target), displayName(msg.From)))
 	log.Printf("/mute by admin=%d target=%d group=%d secs=%d", msg.From.ID, target.ID, groupID, seconds)
 	return nil

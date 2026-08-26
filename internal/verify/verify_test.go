@@ -653,6 +653,10 @@ func (b *fakeVerifyBot) Alert(ctx context.Context, adminLogChatID int64, text st
 	}
 }
 
+func (b *fakeVerifyBot) AuditLog(ctx context.Context, adminLogChatID int64, text string) {
+	b.Alert(ctx, adminLogChatID, text)
+}
+
 func (b *fakeVerifyBot) FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string) {
 	if adminLogChatID == 0 {
 		adminLogChatID = groupID

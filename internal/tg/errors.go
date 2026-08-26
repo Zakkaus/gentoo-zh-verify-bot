@@ -71,6 +71,20 @@ func JoinRequestGone(err error) bool {
 		strings.Contains(message, "participant_id_invalid")
 }
 
+// GroupUnreachable reports a chat the bot can no longer act in at all: it was removed, or the
+// chat is gone. Unlike missing rights, this cannot be repaired by retrying — only by an
+// administrator putting the bot back.
+func GroupUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "bot is not a member of") ||
+		strings.Contains(message, "bot was kicked from") ||
+		strings.Contains(message, "chat not found") ||
+		strings.Contains(message, "the group chat was deleted")
+}
+
 // IsBlocked reports Telegram 403 responses indicating that the bot cannot contact the target.
 func IsBlocked(err error) bool {
 	if err == nil {
