@@ -104,3 +104,72 @@ func TestGivingUpLiftsTheHold(t *testing.T) {
 		t.Errorf("unmutes = %d, want 1: dropping the verification must release the member", fb.unmutes)
 	}
 }
+
+// Switching verification off must not leave its timers running: an applicant would still be
+// declined and a member still removed, minutes later, for a rule the administrator withdrew.
+func TestDisablingVerificationCancelsWhatIsRunning(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	gid := int64(-100)
+	waiting := &pending{nonce: "a", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour), groupMsgID: 1}
+	held := &pending{gate: gateMute, held: true, nonce: "b", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, 5}] = waiting
+	v.pend[pkey{gid, 6}] = held
+	other := &pending{nonce: "c", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{-200, 7}] = other
+	t.Cleanup(v.stopForShutdown)
+
+	if err := v.SetEnabled(gid, false); err != nil {
+		t.Fatal(err)
+	}
+
+	v.mu.Lock()
+	_, stillWaiting := v.pend[pkey{gid, 5}]
+	_, stillHeld := v.pend[pkey{gid, 6}]
+	_, untouched := v.pend[pkey{-200, 7}]
+	strikes := len(v.vfail)
+	v.mu.Unlock()
+	if stillWaiting || stillHeld {
+		t.Error("verifications in the group must be cancelled, not left to settle")
+	}
+	if !untouched {
+		t.Error("another group's verification is none of this command's business")
+	}
+	if strikes != 0 {
+		t.Errorf("strike records = %d, want 0: a withdrawn rule is nobody's failure", strikes)
+	}
+}
+
+// Passing restores the group's default permissions, which would also lift a restriction somebody
+// else added. The hold is only lifted while the one in force is still the one verification placed.
+func TestReleaseLeavesSomebodyElsesRestrictionAlone(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	gid, uid := int64(-100), int64(8)
+	ours := v.wallNow().Add(5 * time.Minute).Unix()
+	p := &pending{gate: gateMute, held: true, holdUntil: ours, nonce: "n", lang: i18n.LangEN,
+		deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = p
+	t.Cleanup(v.stopForShutdown)
+
+	// An administrator replaced the restriction with one of their own, expiring much later.
+	theirs := &fakeVerifyBot{member: &telego.ChatMemberRestricted{
+		Status: telego.MemberStatusRestricted, IsMember: true, UntilDate: ours + 86400,
+	}}
+	if got := v.executeApprove(context.Background(), theirs, gid, uid, p); got != approveConfirmed {
+		t.Fatalf("approve outcome = %v, want approveConfirmed", got)
+	}
+	if theirs.unmutes != 0 {
+		t.Errorf("unmutes = %d, want 0: that restriction is not the one verification placed", theirs.unmutes)
+	}
+
+	// Our own restriction is still ours to lift.
+	v.pend[pkey{gid, uid}] = p
+	mine := &fakeVerifyBot{member: &telego.ChatMemberRestricted{
+		Status: telego.MemberStatusRestricted, IsMember: true, UntilDate: ours,
+	}}
+	if got := v.executeApprove(context.Background(), mine, gid, uid, p); got != approveConfirmed {
+		t.Fatalf("approve outcome = %v, want approveConfirmed", got)
+	}
+	if mine.unmutes != 1 {
+		t.Errorf("unmutes = %d, want 1: passing lifts the hold verification placed", mine.unmutes)
+	}
+}

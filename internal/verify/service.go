@@ -103,6 +103,7 @@ type pending struct {
 	gate               string // gateRequest or gateMute
 	invited            bool   // somebody else added this member, so the group notice tells administrators they can vouch
 	held               bool   // a verification mute is actually in place, so passing has something to lift
+	holdUntil          int64  // Unix expiry of the mute this verification placed, so another one is recognisable
 	passing            bool   // the applicant answered correctly; a retry must complete the approval, never decline
 	groupMsgID         int
 	privateMsgID       int
@@ -186,6 +187,7 @@ type pendingRec struct {
 	Gate               string   `json:"gate,omitempty"`                // gateMute for a member verified after joining; empty means the join-request gate
 	Invited            bool     `json:"invited,omitempty"`             // the member was added by somebody else
 	Held               bool     `json:"held,omitempty"`                // a verification mute is in place
+	HoldUntil          int64    `json:"hold_until,omitempty"`          // Unix expiry of the mute this verification placed
 	Passing            bool     `json:"passing,omitempty"`             // answered correctly; the settlement retry must approve
 	SettleFailures     int      `json:"settle_failures,omitempty"`     // consecutive unconfirmed settlements; bounds the retry
 	SettlePendingSaid  bool     `json:"settle_pending_said,omitempty"` // the "still being settled" notice was already sent
@@ -394,9 +396,77 @@ func (v *Service) DeliveryMode(groupID int64) string {
 
 // SetEnabled updates automated join verification for one group.
 func (v *Service) SetEnabled(groupID int64, enabled bool) error {
-	return v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
+	if err := v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
 		overrides.Enabled = &enabled
-	})
+	}); err != nil {
+		return err
+	}
+	if !enabled {
+		// Verifications already running would otherwise keep their timers and settle after the
+		// administrator turned verification off: applicants declined, members removed, failures
+		// recorded, all for a rule that no longer applies.
+		v.cancelGroupVerifications(groupID)
+	}
+	return nil
+}
+
+// cancelGroupVerifications abandons every verification in one group without settling or striking
+// it, and lifts the holds it placed. Nobody is punished for a rule that was withdrawn.
+func (v *Service) cancelGroupVerifications(groupID int64) {
+	type releaseTarget struct {
+		uid      int64
+		messages challengeMessages
+		held     bool
+	}
+	var targets []releaseTarget
+	v.mu.Lock()
+	for key, p := range v.pend {
+		if key.gid != groupID || p == nil {
+			continue
+		}
+		p.removed = true
+		p.done = true
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		targets = append(targets, releaseTarget{uid: key.uid, messages: p.messages(), held: p.gate == gateMute && p.held})
+		delete(v.pend, key)
+	}
+	v.mu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
+	bot := v.handlerBot()
+	if bot == nil {
+		log.Printf("verification disabled for %d: cancelled %d verification(s); no Telegram handle to clean up with", groupID, len(targets))
+		v.save()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cancelCleanupTimeout)
+	defer cancel()
+	for _, target := range targets {
+		v.deleteChallenges(ctx, bot, groupID, target.uid, target.messages)
+		if target.held {
+			if err := v.releaseMember(ctx, bot, groupID, target.uid, nil); err != nil {
+				log.Printf("verification disabled for %d: could not lift the hold on %d: %v", groupID, target.uid, err)
+			}
+		}
+	}
+	log.Printf("verification disabled for %d: cancelled %d verification(s) without settling them", groupID, len(targets))
+	v.save()
+}
+
+// cancelCleanupTimeout bounds the cleanup that follows switching verification off.
+const cancelCleanupTimeout = 30 * time.Second
+
+// handlerBot returns the concrete bot the handlers run with, or nil before one is known.
+func (v *Service) handlerBot() modBot {
+	v.tgMu.Lock()
+	defer v.tgMu.Unlock()
+	if v.telegramBot == nil {
+		return nil
+	}
+	return v.telegramBot
 }
 
 // RemoveGroup cancels every verification owned by an unregistered group without settling or striking it.
@@ -570,6 +640,7 @@ func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID
 		return
 	}
 	seconds := int(v.gateTimeout(groupID, gateMute)/time.Second) + muteGraceSeconds
+	until := v.wallNow().Add(time.Duration(seconds) * time.Second).Unix()
 	if err := v.verificationTransport(bot).Mute(ctx, groupID, userID, seconds); err != nil {
 		log.Printf("post-join verify: cannot mute %d in %d (%v); the challenge continues unheld", userID, groupID, err)
 		return
@@ -579,6 +650,7 @@ func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID
 	}
 	v.mu.Lock()
 	p.held = true
+	p.holdUntil = until
 	v.mu.Unlock()
 }
 
@@ -587,8 +659,35 @@ func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID
 const muteGraceSeconds = 60
 
 // releaseMember lifts the verification hold by restoring the group's own default permissions.
-func (v *Service) releaseMember(ctx context.Context, bot verifyBot, groupID, userID int64) error {
+// Restoring defaults would also lift a restriction somebody else added, so the hold is only
+// lifted while the one in force is still the one this verification placed.
+func (v *Service) releaseMember(ctx context.Context, bot modBot, groupID, userID int64, p *pending) error {
+	if p != nil && !v.holdStillOurs(ctx, bot, groupID, userID, p) {
+		log.Printf("post-join verify: the restriction on %d in %d is no longer the one verification placed; leaving it", userID, groupID)
+		return nil
+	}
 	return v.verificationTransport(bot).Unmute(ctx, groupID, userID)
+}
+
+// holdStillOurs reports that the restriction Telegram currently reports is the verification hold.
+// An unreadable answer counts as ours: failing to release would silence somebody indefinitely,
+// which is worse than lifting a restriction an administrator can simply re-apply.
+func (v *Service) holdStillOurs(ctx context.Context, bot modBot, groupID, userID int64, p *pending) bool {
+	v.mu.Lock()
+	until := p.holdUntil
+	v.mu.Unlock()
+	if until == 0 {
+		return true // placed before this was recorded, or by an older build
+	}
+	cm, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(groupID), UserID: userID})
+	if err != nil || cm == nil {
+		return true
+	}
+	restricted, ok := cm.(*telego.ChatMemberRestricted)
+	if !ok {
+		return true // not restricted any more, or restricted in a shape we cannot compare
+	}
+	return restricted.UntilDate == until
 }
 
 // removeMember takes a failed applicant out of the group without keeping them out: banning and
@@ -2146,7 +2245,7 @@ func (v *Service) releaseAbandonedHold(c context.Context, bot modBot, gid, uid i
 	if p.gate != gateMute || !p.held {
 		return
 	}
-	if err := v.releaseMember(c, bot, gid, uid); err != nil {
+	if err := v.releaseMember(c, bot, gid, uid, p); err != nil {
 		log.Printf("post-join verify: gave up on %d in %d and could not lift the hold: %v", uid, gid, err)
 	}
 }
@@ -2171,7 +2270,7 @@ func (v *Service) abandonSettlement(c context.Context, bot modBot, gid, uid int6
 	if p.gate == gateMute && p.held {
 		// Dropping the verification must not leave somebody silenced with nothing left to lift
 		// it. The restriction carries its own expiry, so a failure here only delays them.
-		if releaseErr := v.releaseMember(c, bot, gid, uid); releaseErr != nil {
+		if releaseErr := v.releaseMember(c, bot, gid, uid, p); releaseErr != nil {
 			log.Printf("post-join verify: giving up on %d in %d but could not lift the hold: %v", uid, gid, releaseErr)
 		}
 	}
@@ -2364,7 +2463,7 @@ func strikesUser(reason string) bool {
 func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, p *pending) approveOutcome {
 	// A basic group could never be held, so there is nothing to lift and nothing to retry.
 	if p.held {
-		if err := v.releaseMember(c, bot, gid, uid); err != nil {
+		if err := v.releaseMember(c, bot, gid, uid, p); err != nil {
 			log.Printf("post-join verify: cannot lift the hold on %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))

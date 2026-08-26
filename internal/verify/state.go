@@ -462,7 +462,7 @@ func (v *Service) save() {
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
 				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
-				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited, Held: p.held, Passing: p.passing})
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited, Held: p.held, HoldUntil: p.holdUntil, Passing: p.passing})
 		}
 		return recs
 	})
@@ -521,7 +521,7 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited, held: r.Held, passing: r.Passing,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited, held: r.Held, holdUntil: r.HoldUntil, passing: r.Passing,
 			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
