@@ -593,7 +593,15 @@ func (v *Service) releaseMember(ctx context.Context, bot verifyBot, groupID, use
 
 // removeMember takes a failed applicant out of the group without keeping them out: banning and
 // immediately unbanning removes them while leaving the invite link usable.
-func (v *Service) removeMember(ctx context.Context, bot verifyBot, groupID, userID int64) error {
+//
+// The unban is the dangerous half. An administrator who banned this person moments ago would
+// find their ban quietly lifted, so anyone Telegram already reports as banned or gone is left
+// exactly as they are: whoever put them there outranks this settlement.
+func (v *Service) removeMember(ctx context.Context, bot modBot, groupID, userID int64) error {
+	if settled, known := v.alreadyOut(ctx, bot, groupID, userID); known && settled {
+		log.Printf("post-join verify: %d is already out of %d; leaving that decision alone", userID, groupID)
+		return nil
+	}
 	transport := v.verificationTransport(bot)
 	if err := transport.Ban(ctx, groupID, userID, 0, false); err != nil {
 		return err
@@ -604,6 +612,21 @@ func (v *Service) removeMember(ctx context.Context, bot verifyBot, groupID, user
 		log.Printf("post-join verify: removed %d from %d but could not lift the ban: %v", userID, groupID, err)
 	}
 	return nil
+}
+
+// alreadyOut reports that somebody is banned or has left. known=false means the answer could not
+// be read, and the caller proceeds rather than guessing.
+func (v *Service) alreadyOut(ctx context.Context, bot modBot, groupID, userID int64) (out, known bool) {
+	cm, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(groupID), UserID: userID})
+	if err != nil || cm == nil {
+		return false, false
+	}
+	switch cm.MemberStatus() {
+	case telego.MemberStatusBanned, telego.MemberStatusLeft:
+		return true, true
+	default:
+		return false, true
+	}
 }
 
 // RequiredChannelID returns the channel applicants must join for one group.
@@ -1085,8 +1108,14 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	// leaving the group clears it, and leave the running deadline alone so nobody can extend
 	// their own window by walking in and out.
 	if live, ok := v.livePending(gid, uid); ok {
+		// A verification started while they were outside settles by declining a join request.
+		// They are inside now, so that call would settle nothing and the member would simply
+		// stay, unverified, forever. Move the running verification onto the gate that can
+		// actually end it, keeping the progress they have made.
+		v.adoptAsHeld(gid, uid, live)
 		v.holdMember(c, bot, gid, uid, member.Chat.Type == telego.ChatTypeSupergroup, live)
-		log.Printf("post-join verify: %d rejoined %d while still being verified; kept the running challenge", uid, gid)
+		v.save()
+		log.Printf("post-join verify: %d entered %d while still being verified; kept the running challenge", uid, gid)
 		return nil
 	}
 	// The bot tells a removed member how long to wait. Honour it, or that promise means nothing
@@ -1106,8 +1135,14 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	oldMessages, status := v.startPending(bot, gid, uid, p)
 	switch status {
 	case pendingBlockedCapacity:
-		log.Printf("post-join verify: %d in %d skipped, pending cap reached", uid, gid)
+		// An applicant blocked here waits outside and an administrator can still admit them. A
+		// member blocked here is already inside and would simply stay, unverified. Take them
+		// back out — no strike, they did nothing wrong — so they can return once the queue drains.
+		log.Printf("post-join verify: %d in %d skipped, pending cap reached; removing them until the queue drains", uid, gid)
 		v.alertPendingCap(c, bot, gid)
+		if err := v.removeMember(c, bot, gid, uid); err != nil {
+			log.Printf("post-join verify: cannot remove %d from %d at capacity: %v", uid, gid, err)
+		}
 		return nil
 	case pendingBlockedTerminal:
 		log.Printf("post-join verify: %d in %d skipped, terminal action still in flight", uid, gid)
@@ -2041,7 +2076,7 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.markPassing(gid, uid, p)
-			v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
+			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
 		}
 		// An administrator settled this request in Telegram's own interface. The same error
@@ -2094,19 +2129,52 @@ func giveUpSettling(err error) bool { return tg.GroupUnreachable(err) }
 
 // stopRetrying reopens a failed settlement for another attempt, unless the error proves no
 // attempt can succeed — then the budget is spent immediately rather than a minute at a time.
-func (v *Service) stopRetrying(bot modBot, gid, uid int64, p *pending, reason string, err error) {
+func (v *Service) stopRetrying(c context.Context, bot modBot, gid, uid int64, p *pending, reason string, err error) {
 	if giveUpSettling(err) {
-		v.abandonSettlement(gid, uid, p, reason, err)
+		v.abandonSettlement(c, bot, gid, uid, p, reason, err)
 		return
 	}
-	v.reopenPending(bot, gid, uid, p, reason)
+	if !v.reopenPending(bot, gid, uid, p, reason) {
+		v.releaseAbandonedHold(c, bot, gid, uid, p)
+	}
+}
+
+// releaseAbandonedHold lifts a verification mute the bot has stopped trying to settle. Dropping
+// the verification must not leave somebody silenced with nothing left to lift it; the restriction
+// carries its own expiry, so a failure here only delays them.
+func (v *Service) releaseAbandonedHold(c context.Context, bot modBot, gid, uid int64, p *pending) {
+	if p.gate != gateMute || !p.held {
+		return
+	}
+	if err := v.releaseMember(c, bot, gid, uid); err != nil {
+		log.Printf("post-join verify: gave up on %d in %d and could not lift the hold: %v", uid, gid, err)
+	}
+}
+
+// adoptAsHeld moves a verification that began outside the group onto the gate that can settle it
+// now that the applicant is inside. Their progress is untouched: same question, same attempts,
+// same deadline.
+func (v *Service) adoptAsHeld(gid, uid int64, p *pending) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p && p.gate != gateMute {
+		log.Printf("post-join verify: %d in %d entered the group mid-verification; settling as a member from here", uid, gid)
+		p.gate = gateMute
+	}
 }
 
 // abandonSettlement drops a pending the bot can never settle. The join request stays with
 // Telegram for an administrator, so abandoning it admits nobody.
-func (v *Service) abandonSettlement(gid, uid int64, p *pending, reason string, err error) {
+func (v *Service) abandonSettlement(c context.Context, bot modBot, gid, uid int64, p *pending, reason string, err error) {
 	log.Printf("WARNING: cannot settle verification for %d in %d (%s): %v; "+
 		"the join request stays with Telegram for an administrator", uid, gid, reason, err)
+	if p.gate == gateMute && p.held {
+		// Dropping the verification must not leave somebody silenced with nothing left to lift
+		// it. The restriction carries its own expiry, so a failure here only delays them.
+		if releaseErr := v.releaseMember(c, bot, gid, uid); releaseErr != nil {
+			log.Printf("post-join verify: giving up on %d in %d but could not lift the hold: %v", uid, gid, releaseErr)
+		}
+	}
 	v.discardPending(gid, uid, p)
 	v.save()
 }
@@ -2301,7 +2369,7 @@ func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, 
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.markPassing(gid, uid, p)
-			v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
+			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
 		}
 	}
@@ -2357,7 +2425,7 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 			log.Printf("decline %d in %d failed: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.stopRetrying(bot, gid, uid, p, "decline-retry", err)
+			v.stopRetrying(c, bot, gid, uid, p, "decline-retry", err)
 			v.save()
 			return declineUnsettled, false
 		}
@@ -2445,7 +2513,7 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
 		admin := &v.messages.Verification.Admin
 		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.stopRetrying(bot, gid, uid, p, "ban-retry", err)
+		v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 		v.save()
 		return false
 	}
@@ -2463,7 +2531,7 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 			log.Printf("decline after ban %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.stopRetrying(bot, gid, uid, p, "ban-retry", err)
+			v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 			v.save()
 			return false
 		}

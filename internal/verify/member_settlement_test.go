@@ -1,0 +1,106 @@
+package verify
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/mymmrac/telego"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
+)
+
+// A verification that began while somebody waited outside cannot be settled by declining a join
+// request once they are inside: the call settles nothing and the member simply stays, unverified.
+func TestVerificationFollowsTheApplicantIntoTheGroup(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	v.botUsername = "bot"
+	fb := &fakeVerifyBot{member: &telego.ChatMemberMember{Status: telego.MemberStatusMember}}
+	gid, uid := int64(-100), int64(5)
+	p := &pending{nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = p
+	t.Cleanup(v.stopForShutdown)
+
+	runFakeHandler(t, newAPITestBot(t, fb), v.OnMemberJoined, joinUpdate(gid, uid, telego.ChatTypeSupergroup, nil))
+
+	v.mu.Lock()
+	gate := v.pend[pkey{gid, uid}].gate
+	v.mu.Unlock()
+	if gate != gateMute {
+		t.Fatalf("gate = %q, want the member gate: they are inside the group now", gate)
+	}
+	v.onExpiry(context.Background(), fb, gid, uid, p.nonce, p.epoch, "timeout")
+	if fb.bans == 0 {
+		t.Error("the expired verification must remove the member; declining a request that no longer exists leaves them in")
+	}
+}
+
+// Being blocked by the queue is the bot's problem, but leaving an unverified member inside is
+// worse than asking them to come back. They are taken out without a strike.
+func TestQueueFullTakesTheMemberBackOut(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	v.botUsername = "bot"
+	fb := &fakeVerifyBot{member: &telego.ChatMemberMember{Status: telego.MemberStatusMember}}
+	for i := range pendingPerGroupCap {
+		v.pend[pkey{-100, int64(1000 + i)}] = &pending{nonce: "x", deadline: time.Now().Add(time.Hour)}
+	}
+	t.Cleanup(v.stopForShutdown)
+
+	runFakeHandler(t, newAPITestBot(t, fb), v.OnMemberJoined, joinUpdate(-100, 5, telego.ChatTypeSupergroup, nil))
+
+	if fb.bans != 1 || fb.unbans != 1 {
+		t.Errorf("bans = %d unbans = %d, want 1 and 1: removed so they can return later", fb.bans, fb.unbans)
+	}
+	v.mu.Lock()
+	strikes := len(v.vfail)
+	v.mu.Unlock()
+	if strikes != 0 {
+		t.Errorf("strike records = %d, want 0: a full queue is not the member's failure", strikes)
+	}
+}
+
+// Somebody an administrator already banned stays banned. Removing them again would ban and then
+// unban, quietly lifting the administrator's decision.
+func TestRemovalLeavesAnExistingBanAlone(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	fb := &fakeVerifyBot{member: &telego.ChatMemberBanned{Status: telego.MemberStatusBanned}}
+	gid, uid := int64(-100), int64(6)
+	p := &pending{gate: gateMute, nonce: "n", lang: i18n.LangEN, deadline: time.Now().Add(time.Hour)}
+	v.pend[pkey{gid, uid}] = p
+	t.Cleanup(v.stopForShutdown)
+
+	if _, _ = v.finishDecline(context.Background(), fb, gid, uid, p, "timeout"); fb.unbans != 0 {
+		t.Errorf("unbans = %d, want 0: an administrator's ban is not ours to lift", fb.unbans)
+	}
+	if fb.bans != 0 {
+		t.Errorf("bans = %d, want 0: they are already out", fb.bans)
+	}
+}
+
+// Giving up on a settlement must not leave somebody silenced with nothing left to lift it.
+func TestGivingUpLiftsTheHold(t *testing.T) {
+	v := newTestService(&config.Config{GroupIDs: []int64{-100}})
+	fb := &fakeVerifyBot{
+		member: &telego.ChatMemberMember{Status: telego.MemberStatusMember},
+		banErr: errors.New(`api: 403 "Forbidden: bot is not a member of the supergroup chat"`),
+	}
+	gid, uid := int64(-100), int64(7)
+	p := &pending{gate: gateMute, held: true, nonce: "n", lang: i18n.LangEN,
+		deadline: time.Now().Add(time.Hour), done: true}
+	v.pend[pkey{gid, uid}] = p
+	t.Cleanup(v.stopForShutdown)
+
+	_, _ = v.finishDecline(context.Background(), fb, gid, uid, p, "timeout")
+
+	v.mu.Lock()
+	_, still := v.pend[pkey{gid, uid}]
+	v.mu.Unlock()
+	if still {
+		t.Fatal("an unsettleable verification is dropped")
+	}
+	if fb.unmutes != 1 {
+		t.Errorf("unmutes = %d, want 1: dropping the verification must release the member", fb.unmutes)
+	}
+}
