@@ -30,6 +30,8 @@ type ModerateCommonCatalog struct {
 	ReplyUsage Format
 	// TargetAdminCheckFailed reports an unavailable target-admin check.
 	TargetAdminCheckFailed Text
+	// CallerAdminCheckFailed reports an unavailable admin check for the caller themselves.
+	CallerAdminCheckFailed Text
 	// TargetIsAdmin reports that an admin target was left unchanged.
 	TargetIsAdmin Text
 	// SettingsSaveFailed reports a moderation settings persistence failure.

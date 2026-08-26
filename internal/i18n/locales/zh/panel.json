@@ -102,7 +102,8 @@
       "fallback_detail": "备用问题\n问题：%[1]s\n可接受答案：\n%[2]s",
       "channel": "群组 %[1]d 的必需频道\nID：%[2]d\n显示名称：%[3]s\n邀请链接：%[4]s",
       "confirm": "请确认此操作：\n%[1]s",
-      "input": "正在等待输入\n%[1]s\n请回复下方单独发送的提示消息。"
+      "input": "正在等待输入\n%[1]s\n请回复下方单独发送的提示消息。",
+      "moderation": "群组 %[1]d 的管理设置\n频道身份发言：%[2]s\n禁言时长：%[3]s\n警告上限：%[4]s\n富文本输出（机器人全局）：%[5]s\n告警聊天（机器人全局）：%[6]s"
     },
     "field": {
       "runtime": "运行设置",
@@ -144,7 +145,14 @@
       "reset_builtin": "使用内置问题",
       "set_channel": "设置频道",
       "set_invite": "设置邀请链接",
-      "clear_invite": "清除邀请链接"
+      "clear_invite": "清除邀请链接",
+      "moderation": "管理设置",
+      "antispam": "切换频道身份发言拦截",
+      "mute_duration": "禁言时长",
+      "warn_limit": "警告上限",
+      "rich_text": "切换富文本输出",
+      "alert_chat": "设置告警聊天",
+      "clear_alert_chat": "清除告警聊天"
     },
     "prompt": {
       "ban_duration": "发送 0 可设置为永久，或发送 30m、12h、7d 等时长。",
@@ -161,7 +169,10 @@
       "channel_whitelist": "选择要加入白名单的频道。",
       "trusted_group": "选择受信任群组。",
       "known_chat": "选择已知聊天。",
-      "required_channel": "选择必需频道。"
+      "required_channel": "选择必需频道。",
+      "mute_duration": "发送禁言时长，例如 30m、12h、7d。",
+      "warn_limit": "发送触发踢出所需的警告次数。",
+      "alert_chat": "选择接收运维告警的聊天。"
     },
     "error": {
       "expired": "此面板已过期或状态失效。请使用 /settings 重新打开。",
@@ -201,7 +212,8 @@
       "builtins": "内置本地化问题",
       "custom": "自定义问题",
       "required_disabled": "已停用",
-      "invite_missing": "未设置"
+      "invite_missing": "未设置",
+      "alert_fallback": "发生问题的群组"
     }
   }
 }

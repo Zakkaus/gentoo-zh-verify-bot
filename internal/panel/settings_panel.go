@@ -250,6 +250,8 @@ func (v *Panel) dispatchCallback(ctx context.Context, bot *telego.Bot, session *
 		return v.dispatchList(ctx, bot, session, group, data)
 	case "vp":
 		return v.dispatchVerificationParameters(ctx, bot, session, data)
+	case "md":
+		return v.dispatchModeration(ctx, bot, session, group, data)
 	case "ct":
 		return v.navigate(ctx, bot, session, data.value)
 	case "qb":
@@ -499,6 +501,8 @@ func (v *Panel) buildScreen(ctx context.Context, bot *telego.Bot, session *panel
 		return v.buildList(session, token)
 	case "vp":
 		return v.buildVerificationParameters(session, token)
+	case "md":
+		return v.buildModeration(session, token)
 	case "ct":
 		return v.buildContent(session, token)
 	case "qb":
@@ -588,6 +592,7 @@ func (v *Panel) buildGroupHome(ctx context.Context, bot *telego.Bot, session *pa
 	buttons := []panelButton{
 		{text: i18n.Messages.Panel.Settings.Field.Runtime.For(session.language), field: "go", value: "rt"},
 		{text: i18n.Messages.Panel.Settings.Field.Lists.For(session.language), field: "go", value: "ls"},
+		{text: i18n.Messages.Panel.Settings.Field.Moderation.For(session.language), field: "go", value: "md"},
 		{text: i18n.Messages.Panel.Settings.Field.VerificationParameters.For(session.language), field: "go", value: "vp"},
 		{text: i18n.Messages.Panel.Settings.Field.Content.For(session.language), field: "go", value: "ct"},
 	}
@@ -727,6 +732,100 @@ func (v *Panel) buildVerificationParameters(session *panelSession, token string)
 		{text: i18n.Messages.Panel.Settings.Common.Back.For(session.language), field: "go", value: "gh"},
 	}
 	return v.screenWithSingleButtons(text, token, session, buttons)
+}
+
+// Moderation gathers the settings that shape how the bot polices an existing member,
+// plus the two bot-wide switches an operator changes from the control group.
+func (v *Panel) buildModeration(session *panelSession, token string) (string, *telego.InlineKeyboardMarkup, error) {
+	group, ok := v.settings.Group(session.groupID)
+	if !ok {
+		return "", nil, store.ErrUnknownGroup
+	}
+	global := v.settings.Global()
+	session.globalRevision = global.Revision()
+	text := i18n.Messages.Panel.Settings.Screen.Moderation.Render(session.language, session.groupID,
+		v.sourcedBool(session.language, group.AntispamEnabled()),
+		v.sourcedSeconds(session.language, group.MuteSeconds(), false),
+		v.sourcedLimit(session.language, group.WarnLimit()),
+		v.sourcedBool(session.language, global.RichMessages()),
+		i18n.Messages.Panel.Settings.Value.Sourced.Render(session.language,
+			v.alertChatText(session.language, global.AdminLogChatID().Value), v.sourceText(session.language, global.AdminLogChatID().Source)))
+	buttons := []panelButton{
+		{text: i18n.Messages.Panel.Settings.Field.Antispam.For(session.language), field: "as", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.MuteDuration.For(session.language), field: "ms", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.WarnLimit.For(session.language), field: "wl", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.RichText.For(session.language), field: "rx", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.AlertChat.For(session.language), field: "al", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Field.ClearAlertChat.For(session.language), field: "ac", value: "_"},
+		{text: i18n.Messages.Panel.Settings.Common.Back.For(session.language), field: "go", value: "gh"},
+	}
+	return v.screenWithSingleButtons(text, token, session, buttons)
+}
+
+// A zero alert chat is not "unset" in any confusing sense: it means alerts land in the group
+// the failure happened in, so the panel says exactly that.
+func (v *Panel) alertChatText(l i18n.Lang, chatID int64) string {
+	if chatID == 0 {
+		return i18n.Messages.Panel.Settings.Value.AlertFallback.For(l)
+	}
+	return strconv.FormatInt(chatID, 10)
+}
+
+func (v *Panel) dispatchModeration(ctx context.Context, bot *telego.Bot, session *panelSession, group store.GroupView, data callbackData) error {
+	switch data.field {
+	case "go":
+		return v.navigate(ctx, bot, session, data.value)
+	case "as":
+		next := group.Overrides()
+		value := !group.AntispamEnabled().Value
+		next.AntispamEnabled = &value
+		result, err := v.settings.CommitGroup(session.groupID, session.revision, next)
+		if err != nil {
+			return err
+		}
+		session.revision = result.Revision
+		return v.renderAfterCommit(ctx, bot, session)
+	case "ms":
+		return v.armTextInput(ctx, bot, session, inputMuteDuration, "md")
+	case "wl":
+		return v.armTextInput(ctx, bot, session, inputWarnLimit, "md")
+	case "rx":
+		return v.commitGlobalFromModeration(ctx, bot, session, func(o *store.GlobalOverrides) {
+			value := !v.settings.Global().RichMessages().Value
+			o.RichMessages = &value
+		})
+	case "al":
+		if session.groupID != v.settings.ControlGroupID() {
+			return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.ControlGroupOnly.For(session.language)}
+		}
+		return v.armChatInput(ctx, bot, session, inputAlertChat, "md")
+	case "ac":
+		return v.commitGlobalFromModeration(ctx, bot, session, func(o *store.GlobalOverrides) {
+			cleared := int64(0)
+			o.AdminLogChatID = &cleared
+		})
+	default:
+		return errors.New("invalid moderation action")
+	}
+}
+
+// Both bot-wide switches on this screen are gated on the control group and share one commit.
+func (v *Panel) commitGlobalFromModeration(ctx context.Context, bot *telego.Bot, session *panelSession, apply func(*store.GlobalOverrides)) error {
+	if session.groupID != v.settings.ControlGroupID() {
+		return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.ControlGroupOnly.For(session.language)}
+	}
+	global := v.settings.Global()
+	if global.Revision() != session.globalRevision {
+		return store.ErrSettingsConflict
+	}
+	overrides := global.Overrides()
+	apply(&overrides)
+	result, err := v.settings.CommitGlobal(session.globalRevision, overrides)
+	if err != nil {
+		return err
+	}
+	session.globalRevision = result.Revision
+	return v.renderAfterCommit(ctx, bot, session)
 }
 
 func (v *Panel) buildContent(session *panelSession, token string) (string, *telego.InlineKeyboardMarkup, error) {
@@ -1264,6 +1363,12 @@ func (v *Panel) inputPrompt(language i18n.Lang, kind inputKind) string {
 		return prompts.TrustedGroup.For(language)
 	case inputKnownChat:
 		return prompts.KnownChat.For(language)
+	case inputMuteDuration:
+		return prompts.MuteDuration.For(language)
+	case inputWarnLimit:
+		return prompts.WarnLimit.For(language)
+	case inputAlertChat:
+		return prompts.AlertChat.For(language)
 	default:
 		return prompts.RequiredChannel.For(language)
 	}

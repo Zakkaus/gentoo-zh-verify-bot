@@ -309,6 +309,73 @@ func (v *Service) fallbackQuestion(groupID int64, l i18n.Lang) (string, []string
 	return builtin[cryptoIntn(len(builtin))].For(l)
 }
 
+// answersAnotherFallback reports that this reply is the right answer to a fallback question the
+// same applicant was given for a different group.
+func (v *Service) answersAnotherFallback(gid, uid int64, text string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for k, p := range v.pend {
+		if k.uid != uid || k.gid == gid || p.done || len(p.fbAnswers) == 0 {
+			continue
+		}
+		if fallbackAnswerOK(text, p.fbAnswers) {
+			return true
+		}
+	}
+	return false
+}
+
+// sharedFallbackQuestion reuses a fallback already drawn for this applicant in another group when
+// both groups draw from the same source, so the common case never diverges in the first place.
+func (v *Service) sharedFallbackQuestion(gid, uid int64, l i18n.Lang) (string, []string) {
+	if reuseText, reuseAnswers, ok := v.drawnFallback(gid, uid); ok {
+		return reuseText, reuseAnswers
+	}
+	return v.fallbackQuestion(gid, l)
+}
+
+func (v *Service) drawnFallback(gid, uid int64) (string, []string, bool) {
+	source := v.fallbackSource(gid)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for k, p := range v.pend {
+		if k.uid != uid || k.gid == gid || p.done || len(p.fbAnswers) == 0 || p.qText == "" {
+			continue
+		}
+		if !sameFallbackSource(source, v.fallbackSource(k.gid)) {
+			continue // another group's own question bank is not this group's to reuse
+		}
+		return p.qText, append([]string(nil), p.fbAnswers...), true
+	}
+	return "", nil, false
+}
+
+// fallbackSource returns nil for the built-in bank, or the group's configured questions.
+func (v *Service) fallbackSource(groupID int64) []config.ShortQuestion {
+	group, ok := v.groupSettings(groupID)
+	if !ok || group.FallbackBuiltin().Value {
+		return nil
+	}
+	return group.FallbackQuestions().Value
+}
+
+func sameFallbackSource(a, b []config.ShortQuestion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Q != b[i].Q || len(a[i].Answers) != len(b[i].Answers) {
+			return false
+		}
+		for j := range a[i].Answers {
+			if a[i].Answers[j] != b[i].Answers[j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Accept one normalized whole reply, never a matching word embedded in prose.
 func fallbackAnswerOK(text string, answers []string) bool {
 	text = normalizeFallbackAnswer(text)
@@ -513,18 +580,15 @@ func (v *Service) declineAgent(c context.Context, bot modBot, gid, uid int64, no
 		model, total := v.recordAgent(text)
 		log.Printf("verify: automated-agent tripwire triggered by %d in %d (model %q, %d total) — declining", uid, gid, model, total)
 		alert := v.messages.Verification.Admin.AgentCaught.Render(v.groupLanguage(gid), uid, gid, model, total)
-		v.adminAlert(c, bot, alert)
+		v.adminRecord(c, bot, alert)
 	} else {
 		log.Printf("verify: declining %d in %d — the same reply tripped the tripwire in another group", uid, gid)
 	}
-	handled, settled, banned := v.decline(c, bot, gid, uid, cur, "wrong answer")
-	if !handled {
+	outcome, banned := v.decline(c, bot, gid, uid, cur, wrongAnswerReason)
+	if outcome == declineNoPending {
 		return
 	}
-	msg := v.messages.Verification.Result.DeclinePending.For(ul)
-	if settled {
-		msg = v.agentCaughtText(gid, ul, banned)
-	}
+	msg := v.declineResultText(outcome, ul, func() string { return v.agentCaughtText(gid, ul, banned) })
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 }
 
@@ -553,6 +617,13 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			v.finishKernelPass(c, bot, gid, uid, nonce, ul, groupLang)
 			return
 		}
+		// One reply lands in every group this applicant is verifying for. When the groups drew
+		// different fallback questions, a reply that correctly answers one of the others is not
+		// a wrong answer here — it just is not this group's turn yet.
+		if v.answersAnotherFallback(gid, uid, text) {
+			log.Printf("verify: %d answered another group's fallback question; not charging a try in %d", uid, gid)
+			return
+		}
 		left, curNonce, ok := v.recordKernelTry(gid, uid, nonce)
 		if !ok {
 			return
@@ -563,14 +634,11 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			return
 		}
 		// Decline only the nonce charged by recordKernelTry, never a replacement pending.
-		handled, settled, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer")
-		if !handled {
+		outcome, banned := v.decline(c, bot, gid, uid, curNonce, wrongAnswerReason)
+		if outcome == declineNoPending {
 			return
 		}
-		msg := v.messages.Verification.Result.DeclinePending.For(ul)
-		if settled {
-			msg = v.wrongAnswerText(gid, ul, banned)
-		}
+		msg := v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
@@ -592,10 +660,10 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 					return
 				}
 			} else {
-				qText, answers := v.fallbackQuestion(gid, ul)
+				qText, answers := v.sharedFallbackQuestion(gid, uid, ul)
 				if v.beginKernelFallback(bot, gid, uid, nonce, qText, answers) {
 					v.save()
-					prompt, current := v.pendingDMChallenge(gid, uid)
+					prompt, current := v.pendingDMChallenge(gid, uid, nil)
 					if !current {
 						return
 					}
@@ -619,14 +687,11 @@ func (v *Service) gradeKernelAnswer(c context.Context, bot modBot, gid, uid int6
 			_, _ = bot.SendMessage(c, htmlMessage(uid, challenge.KernelWrong.Render(ul, left)))
 			return
 		}
-		handled, settled, banned := v.decline(c, bot, gid, uid, curNonce, "wrong answer") // the nonce as of the charge, see above
-		if !handled {
+		outcome, banned := v.decline(c, bot, gid, uid, curNonce, wrongAnswerReason) // the nonce as of the charge, see above
+		if outcome == declineNoPending {
 			return
 		}
-		msg := v.messages.Verification.Result.DeclinePending.For(ul)
-		if settled {
-			msg = v.wrongAnswerText(gid, ul, banned)
-		}
+		msg := v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), msg))
 		return
 	}
@@ -643,7 +708,7 @@ func (v *Service) finishKernelPass(c context.Context, bot modBot, gid, uid int64
 		return
 	}
 	p, ok := v.claimPendingNonce(gid, uid, nonce)
-	if ok && v.executeApprove(c, bot, gid, uid, p) {
+	if ok && v.executeApprove(c, bot, gid, uid, p) == approveConfirmed {
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), result.Approved.For(ul)))
 		return
 	}
@@ -662,7 +727,7 @@ func (v *Service) kernelPendingInfo(gid, uid int64) (ul i18n.Lang, nonce string,
 }
 
 // Prepare a hidden fallback and suspend grading until its prompt delivery is confirmed.
-func (v *Service) beginKernelFallback(bot verifyBot, gid, uid int64, nonce, question string, answers []string) bool {
+func (v *Service) beginKernelFallback(bot modBot, gid, uid int64, nonce, question string, answers []string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	p, ok := v.pend[pkey{gid, uid}]

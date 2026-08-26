@@ -621,7 +621,7 @@ func TestUncertainFallbackPromptDeliveryDoesNotChargeAnswersBeforeRetry(t *testi
 	}
 
 	retry := newFakeVerifyBot()
-	active, _, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid, true)
+	active, _, _, err := v.sendDMChallengeForGroup(context.Background(), retry, key.gid, key.uid, true, nil)
 	if err != nil || !active {
 		t.Fatalf("fallback retry = active %v error %v, want confirmed delivery", active, err)
 	}
@@ -822,7 +822,7 @@ func TestUnpromptedDMIsNotAnAnswer(t *testing.T) {
 	if v.KernelAnswerDM(context.TODO(), dm) {
 		t.Error("a DM must not be graded before the question has been sent")
 	}
-	prompt, ok := v.pendingDMChallenge(-100, 5)
+	prompt, ok := v.pendingDMChallenge(-100, 5, nil)
 	if !ok {
 		t.Fatal("pending challenge disappeared")
 	}

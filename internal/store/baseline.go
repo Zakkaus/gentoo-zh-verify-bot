@@ -103,6 +103,8 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 		TimeoutSeconds:          BaselineValue[int]{Value: timeoutSeconds, Source: baselineSource(topHas("timeout_seconds"))},
 		VerifyMaxFails:          BaselineValue[int]{Value: verifyMaxFails, Source: baselineSource(topHas("verify_max_fails"))},
 		VerifyRetrySeconds:      BaselineValue[int]{Value: verifyRetrySeconds, Source: baselineSource(topHas("verify_retry_seconds"))},
+		MuteSeconds:             BaselineValue[int]{Value: cfg.MuteSeconds, Source: baselineSource(topHas("mute_seconds"))},
+		WarnLimit:               BaselineValue[int]{Value: cfg.WarnLimit, Source: baselineSource(topHas("warn_limit"))},
 		AntispamEnabled:         BaselineValue[bool]{Value: cfg.BlockChannelSenders, Source: baselineSource(topHas("block_channel_senders"))},
 		ChannelWhitelist:        BaselineValue[[]int64]{Value: cfg.ChannelWhitelist, Source: baselineSource(topHas("channel_whitelist"))},
 		TrustedMemberGroupIDs:   BaselineValue[[]int64]{Value: cfg.TrustedMemberGroupIDs, Source: baselineSource(topHas("trusted_member_group_ids"))},
@@ -125,6 +127,7 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 		Global: GlobalBaseline{
 			RichMessages:       BaselineValue[bool]{Value: cfg.RichMessages, Source: baselineSource(topHas("rich_messages"))},
 			PrivateQueryPerMin: BaselineValue[int]{Value: privateQueryPerMin, Source: baselineSource(topHas("private_query_per_min"))},
+			AdminLogChatID:     BaselineValue[int64]{Value: cfg.AdminLogChatID, Source: baselineSource(topHas("admin_log_chat_id"))},
 		},
 	}
 	baseline.Groups = make([]GroupBaseline, 0, max(len(cfg.Groups), len(cfg.GroupIDs)))

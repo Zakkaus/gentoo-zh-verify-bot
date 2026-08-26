@@ -140,6 +140,7 @@ type PanelSettingsScreenCatalog struct {
 	Lists          Format
 	List           Format
 	Verification   Format
+	Moderation     Format
 	Content        Format
 	QuizBank       Format
 	QuizDetail     Format
@@ -154,6 +155,7 @@ type PanelSettingsFieldCatalog struct {
 	Runtime                Text
 	Lists                  Text
 	VerificationParameters Text
+	Moderation             Text
 	Content                Text
 	ChangeGroup            Text
 	Verification           Text
@@ -191,6 +193,12 @@ type PanelSettingsFieldCatalog struct {
 	SetChannel             Text
 	SetInvite              Text
 	ClearInvite            Text
+	Antispam               Text
+	MuteDuration           Text
+	WarnLimit              Text
+	RichText               Text
+	AlertChat              Text
+	ClearAlertChat         Text
 }
 
 type PanelSettingsPromptCatalog struct {
@@ -209,6 +217,9 @@ type PanelSettingsPromptCatalog struct {
 	TrustedGroup     Text
 	KnownChat        Text
 	RequiredChannel  Text
+	MuteDuration     Text
+	WarnLimit        Text
+	AlertChat        Text
 }
 
 type PanelSettingsErrorCatalog struct {
@@ -251,4 +262,5 @@ type PanelSettingsValueCatalog struct {
 	Custom           Text
 	RequiredDisabled Text
 	InviteMissing    Text
+	AlertFallback    Text
 }

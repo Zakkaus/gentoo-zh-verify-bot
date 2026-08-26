@@ -71,6 +71,20 @@ func JoinRequestGone(err error) bool {
 		strings.Contains(message, "participant_id_invalid")
 }
 
+// GroupUnreachable reports a chat the bot can no longer act in at all: it was removed, or the
+// chat is gone. Unlike missing rights, this cannot be repaired by retrying — only by an
+// administrator putting the bot back.
+func GroupUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "bot is not a member of") ||
+		strings.Contains(message, "bot was kicked from") ||
+		strings.Contains(message, "chat not found") ||
+		strings.Contains(message, "the group chat was deleted")
+}
+
 // IsBlocked reports Telegram 403 responses indicating that the bot cannot contact the target.
 func IsBlocked(err error) bool {
 	if err == nil {
@@ -129,15 +143,37 @@ func PermanentEditError(err error) bool {
 		strings.Contains(message, "message_id_invalid")
 }
 
+// destinationError reports failures caused by the destination chat itself: the bot lost posting
+// rights, was muted, the topic closed, the chat migrated or vanished. They say nothing about the
+// item or the message being sent, so neither path may count them against one of those.
+func destinationError(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"chat not found",
+		"migrate to chat",
+		"not enough rights",
+		"have no rights",
+		"chat_write_forbidden",
+		"chat_send_plain_forbidden",
+		"chat_restricted",
+		"topic_closed",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // CountablePermanentEditError reports deterministic unclassified 400 edit rejections.
 func CountablePermanentEditError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "chat not found") {
+	if destinationError(err) {
 		return false
 	}
+	message := strings.ToLower(err.Error())
 	code := ErrorCode(err)
 	return code == 400 || code == 0 && strings.Contains(message, "bad request")
 }
@@ -159,12 +195,10 @@ func PermanentPostError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "chat not found") ||
-		strings.Contains(message, "migrate to chat") ||
-		strings.Contains(message, "not enough rights") {
+	if destinationError(err) {
 		return false
 	}
+	message := strings.ToLower(err.Error())
 	code := ErrorCode(err)
 	return code == 400 || code == 0 && strings.Contains(message, "bad request")
 }

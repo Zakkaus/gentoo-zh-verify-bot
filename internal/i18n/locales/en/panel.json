@@ -102,7 +102,8 @@
       "fallback_detail": "Fallback question\nQuestion: %[1]s\nAccepted answers:\n%[2]s",
       "channel": "Required channel for %[1]d\nID: %[2]d\nDisplay: %[3]s\nInvite link: %[4]s",
       "confirm": "Confirm this action:\n%[1]s",
-      "input": "Waiting for input\n%[1]s\nReply to the separate prompt below."
+      "input": "Waiting for input\n%[1]s\nReply to the separate prompt below.",
+      "moderation": "Moderation for %[1]d\nSender-channel posts: %[2]s\nMute duration: %[3]s\nWarning limit: %[4]s\nRich text (bot-wide): %[5]s\nAlert chat (bot-wide): %[6]s"
     },
     "field": {
       "runtime": "Runtime settings",
@@ -144,7 +145,14 @@
       "reset_builtin": "Use built-in questions",
       "set_channel": "Set channel",
       "set_invite": "Set invite link",
-      "clear_invite": "Clear invite link"
+      "clear_invite": "Clear invite link",
+      "moderation": "Moderation",
+      "antispam": "Toggle sender-channel blocking",
+      "mute_duration": "Mute duration",
+      "warn_limit": "Warning limit",
+      "rich_text": "Toggle rich text",
+      "alert_chat": "Set alert chat",
+      "clear_alert_chat": "Clear alert chat"
     },
     "prompt": {
       "ban_duration": "Send 0 for permanent, or a duration such as 30m, 12h, or 7d.",
@@ -161,7 +169,10 @@
       "channel_whitelist": "Select a channel for the allowlist.",
       "trusted_group": "Select a trusted group.",
       "known_chat": "Select a known chat.",
-      "required_channel": "Select the required channel."
+      "required_channel": "Select the required channel.",
+      "mute_duration": "Send a mute duration such as 30m, 12h, or 7d.",
+      "warn_limit": "Send the number of warnings before removal.",
+      "alert_chat": "Choose the chat that should receive operator alerts."
     },
     "error": {
       "expired": "This panel is stale or expired. Reopen it with /settings.",
@@ -201,7 +212,8 @@
       "builtins": "Built-in localized questions",
       "custom": "Custom questions",
       "required_disabled": "Disabled",
-      "invite_missing": "Not set"
+      "invite_missing": "Not set",
+      "alert_fallback": "the affected group"
     }
   }
 }

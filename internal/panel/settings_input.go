@@ -354,7 +354,7 @@ func (v *Panel) armChatInput(ctx context.Context, bot *telego.Bot, session *pane
 		RequestChat: (&telego.KeyboardButtonRequestChat{RequestID: primary, ChatIsChannel: isChannel}).
 			WithRequestTitle(true).WithRequestUsername(true).WithBotIsMember(true),
 	}}
-	if kind == inputKnownChat {
+	if kind == inputKnownChat || kind == inputAlertChat {
 		alternative := primary + 1
 		pending.requestAltID = alternative
 		buttons = append(buttons, telego.KeyboardButton{
@@ -567,6 +567,19 @@ func (v *Panel) applyTextInput(ctx context.Context, bot *telego.Bot, session *pa
 			return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.InvalidNumber.For(session.language)}
 		}
 		next.TimeoutSeconds = &value
+	case inputMuteDuration:
+		// A mute always has to lift on its own, so zero (permanent) is not accepted here.
+		value, ok := parsePanelBanDuration(text)
+		if !ok || value <= 0 || value != config.ClampBanSeconds(value) {
+			return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.InvalidDuration.For(session.language)}
+		}
+		next.MuteSeconds = &value
+	case inputWarnLimit:
+		value, ok := parseBoundedPositive(text, 1, 1000)
+		if !ok {
+			return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.InvalidNumber.For(session.language)}
+		}
+		next.WarnLimit = &value
 	case inputMaxFails:
 		value, ok := parsePositiveOrOff(text)
 		if !ok {
@@ -712,6 +725,24 @@ func (v *Panel) applySharedChat(ctx context.Context, bot *telego.Bot, session *p
 		if err := v.updateChannelWhitelist(ctx, bot, session, sharedID, true); err != nil {
 			return err
 		}
+		session.screen = pending.parent
+		return v.renderAfterCommit(ctx, bot, session)
+	}
+	if pending.kind == inputAlertChat {
+		if session.groupID != v.settings.ControlGroupID() {
+			return &panelNoticeError{text: i18n.Messages.Panel.Settings.Error.ControlGroupOnly.For(session.language)}
+		}
+		global := v.settings.Global()
+		if global.Revision() != session.globalRevision {
+			return store.ErrSettingsConflict
+		}
+		overrides := global.Overrides()
+		overrides.AdminLogChatID = &sharedID
+		result, err := v.settings.CommitGlobal(session.globalRevision, overrides)
+		if err != nil {
+			return err
+		}
+		session.globalRevision = result.Revision
 		session.screen = pending.parent
 		return v.renderAfterCommit(ctx, bot, session)
 	}

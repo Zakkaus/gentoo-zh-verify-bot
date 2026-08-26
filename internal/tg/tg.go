@@ -36,12 +36,16 @@ type Client struct {
 	alertMu   sync.Mutex
 	alertSeen map[alertKey]time.Time
 
+	linkedMu    sync.Mutex
+	linkedCache map[int64]linkedChatEntry
+
 	cleanupTimers atomic.Int32
 }
 
 // New wraps bot with transport helpers and a bounded positive admin cache.
 func New(bot *telego.Bot) *Client {
-	return &Client{bot: bot, adminCache: make(map[adminKey]time.Time), alertSeen: make(map[alertKey]time.Time)}
+	return &Client{bot: bot, adminCache: make(map[adminKey]time.Time), alertSeen: make(map[alertKey]time.Time),
+		linkedCache: make(map[int64]linkedChatEntry)}
 }
 
 // HTMLMessage builds the standard outbound HTML message with link previews disabled.
@@ -149,7 +153,7 @@ func (c *Client) SendRichOrHTML(ctx context.Context, chatID int64, replyTo int, 
 
 // ScheduleCleanup deletes a group response and its command after cleanupAfter.
 func (c *Client) ScheduleCleanup(chatID int64, commandMessageID, responseMessageID int, cleanupAfter time.Duration) {
-	if cleanupAfter <= 0 || responseMessageID == 0 || chatID >= 0 {
+	if cleanupAfter <= 0 || responseMessageID == 0 {
 		return
 	}
 	c.scheduleDelete(chatID, responseMessageID, commandMessageID, cleanupAfter)
@@ -211,14 +215,30 @@ func (c *Client) alertAllowed(chatID int64, text string) bool {
 	return true
 }
 
-// Alert sends an operator alert when an admin-log chat is configured.
+// Alert sends a repeat-suppressed diagnostic to the admin-log chat when one is configured.
+// Use it for conditions that recur while a fault persists, never for a record of something
+// that happened once — see AuditLog.
 func (c *Client) Alert(ctx context.Context, adminLogChatID int64, text string) {
 	if adminLogChatID == 0 {
 		return
 	}
 	if !c.alertAllowed(adminLogChatID, text) {
+		log.Printf("adminAlert to %d suppressed as a repeat: %s", adminLogChatID, text)
 		return
 	}
+	c.sendAlert(ctx, adminLogChatID, text)
+}
+
+// AuditLog records one moderation action that actually happened. Two identical actions are two
+// facts, so this channel is never deduplicated: the same ban an hour apart must appear twice.
+func (c *Client) AuditLog(ctx context.Context, adminLogChatID int64, text string) {
+	if adminLogChatID == 0 {
+		return
+	}
+	c.sendAlert(ctx, adminLogChatID, text)
+}
+
+func (c *Client) sendAlert(ctx context.Context, adminLogChatID int64, text string) {
 	if _, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(adminLogChatID), text)); err != nil {
 		log.Printf("adminAlert to %d failed (check admin_log_chat_id / bot membership): %v", adminLogChatID, err)
 	}
@@ -247,6 +267,44 @@ func (c *Client) FailAlert(ctx context.Context, adminLogChatID, groupID int64, t
 	if fallback && message != nil {
 		c.scheduleDelete(target, message.MessageID, 0, groupFallbackAlertTTL)
 	}
+}
+
+// A group and its linked channel can be paired or unpaired at any time, so the answer is cached
+// only briefly. A failed lookup is cached for a shorter spell so a flood of messages does not
+// become a flood of getChat calls.
+const (
+	linkedChatTTL     = time.Hour
+	linkedChatFailTTL = 45 * time.Second
+)
+
+type linkedChatEntry struct {
+	id      int64
+	known   bool
+	expires time.Time
+}
+
+// LinkedChat returns the channel linked to chatID. known=false means the pairing could not be
+// read; callers must not treat that as "there is no linked channel".
+func (c *Client) LinkedChat(ctx context.Context, chatID int64) (linked int64, known bool) {
+	now := time.Now()
+	c.linkedMu.Lock()
+	entry, cached := c.linkedCache[chatID]
+	c.linkedMu.Unlock()
+	if cached && now.Before(entry.expires) {
+		return entry.id, entry.known
+	}
+	chat, err := c.bot.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(chatID)})
+	entry = linkedChatEntry{known: err == nil && chat != nil, expires: now.Add(linkedChatFailTTL)}
+	if entry.known {
+		entry.id = chat.LinkedChatID
+		entry.expires = now.Add(linkedChatTTL)
+	} else {
+		log.Printf("linkedChat(%d): %v", chatID, err)
+	}
+	c.linkedMu.Lock()
+	c.linkedCache[chatID] = entry
+	c.linkedMu.Unlock()
+	return entry.id, entry.known
 }
 
 // CachedAdmin returns cached positive status or performs a Telegram membership lookup.
@@ -391,7 +449,13 @@ func (c *Client) pruneAdminCacheLocked(now time.Time) {
 	}
 }
 
+// A private chat is the applicant's own record of what the bot told them, so nothing there
+// is ever deleted on a timer. Timed cleanup exists to keep shared chats readable, and only
+// group and channel IDs are negative.
 func (c *Client) scheduleDelete(chatID int64, firstMessageID, secondMessageID int, after time.Duration) {
+	if chatID >= 0 {
+		return
+	}
 	if !c.reserveCleanupTimer() {
 		return
 	}

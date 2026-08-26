@@ -32,7 +32,7 @@ func (s *Service) channelWhitelisted(groupID, senderID int64) bool {
 }
 
 func (s *Service) isKnownChat(chatID int64) bool {
-	if s.settings.IsGroup(chatID) || s.cfg.AdminLogChatID == chatID {
+	if s.settings.IsGroup(chatID) || s.adminLogChatID() == chatID {
 		return true
 	}
 	for _, feed := range s.cfg.Feeds {
@@ -133,13 +133,24 @@ func (s *Service) FilterChannelSenders(ctx *th.Context, update telego.Update) er
 			!s.channelWhitelisted(msg.Chat.ID, sender.ID) {
 			requestCtx := ctx.Context()
 			l := s.groupLanguage(msg.Chat.ID)
-			s.telegram.Delete(requestCtx, msg.Chat.ID, msg.MessageID)
-			banned := true
-			if err := s.telegram.BanSenderChat(requestCtx, msg.Chat.ID, sender.ID); err != nil {
-				banned = false
-				log.Printf("antispam: ban sender_chat %d in %d: %v", sender.ID, msg.Chat.ID, err)
+			// A discussion group's own channel replying to a comment is not an impersonator.
+			linked, linkKnown := s.telegram.LinkedChat(requestCtx, msg.Chat.ID)
+			if linkKnown && linked != 0 && linked == sender.ID {
+				return ctx.Next(update)
 			}
-			s.telegram.Alert(requestCtx, s.cfg.AdminLogChatID,
+			s.telegram.Delete(requestCtx, msg.Chat.ID, msg.MessageID)
+			banned := false
+			if !linkKnown {
+				// A sender-chat ban is permanent and only an administrator can lift it. Never
+				// impose one on a guess: delete the advert, and leave the ban for a reading that
+				// can rule out this group's own channel.
+				log.Printf("antispam: linked channel for %d unknown; deleted message from %d without banning", msg.Chat.ID, sender.ID)
+			} else if err := s.telegram.BanSenderChat(requestCtx, msg.Chat.ID, sender.ID); err != nil {
+				log.Printf("antispam: ban sender_chat %d in %d: %v", sender.ID, msg.Chat.ID, err)
+			} else {
+				banned = true
+			}
+			s.telegram.Alert(requestCtx, s.adminLogChatID(),
 				channelSenderAlert(l, banned, sender.Title, sender.ID, msg.Chat.ID))
 			log.Printf("antispam: channel sender %d (%q) in group %d deleted, banned=%v", sender.ID, sender.Title, msg.Chat.ID, banned)
 			return nil
@@ -158,8 +169,8 @@ func (s *Service) OnBC(ctx *th.Context, update telego.Update) error {
 	groupID := msg.Chat.ID
 	l := s.groupLanguage(groupID)
 	defer s.telegram.Delete(requestCtx, groupID, msg.MessageID)
-	if !s.isGroupAdmin(requestCtx, groupID, msg.From.ID) {
-		s.notify(requestCtx, groupID, i18n.Messages.Moderate.Common.CommandAdminOnly.Render(l, "/bc"))
+	if admin, err := s.isGroupAdmin(requestCtx, groupID, msg.From.ID); !admin {
+		s.notify(requestCtx, groupID, callerRefusal(l, err, i18n.Messages.Moderate.Common.CommandAdminOnly.Render(l, "/bc")))
 		return nil
 	}
 
