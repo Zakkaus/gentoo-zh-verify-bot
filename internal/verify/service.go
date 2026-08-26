@@ -118,6 +118,7 @@ type pending struct {
 	deferralCapReached bool      // persisted so the operator warning and short settlement retries survive restart
 	settleFailures     int       // consecutive unconfirmed settlements; persisted so the retry stays bounded across restarts
 	settlePendingSaid  bool      // the "still being settled" notice was already sent; retries stay silent
+	channelUnreadable  bool      // the last required-channel reading failed, so a failure here is not the applicant's
 	done               bool
 	removed            bool // group removal cancels an in-flight settlement without charging the applicant
 }
@@ -1042,6 +1043,12 @@ func (v *Service) completeDMDelivery(
 
 func (v *Service) sendChannelPrompt(c context.Context, bot verifyBot, gid, uid int64, ul i18n.Lang) (int, error) {
 	channel := &v.messages.Verification.Channel
+	if v.channelWasUnreadable(gid, uid) {
+		// Asking someone to join a channel they may already be in is misleading when the bot
+		// simply could not look. Say what actually happened instead.
+		sent, err := bot.SendMessage(c, htmlMessage(uid, channel.Unreadable.For(ul)))
+		return msgID(sent), err
+	}
 	var rows [][]telego.InlineKeyboardButton
 	if curl := v.channelURL(gid); curl != "" {
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{
@@ -1154,6 +1161,23 @@ type privateDeliveryOutcome struct {
 }
 
 // attemptPrivateChallenge classifies private delivery without assuming that ambiguous failures rejected the send.
+// rateLimitSendMargin leaves room for the retried send itself after a flood wait.
+const rateLimitSendMargin = 10 * time.Second
+
+// deliveryBudget is the time left before the pending this delivery belongs to expires.
+func (v *Service) deliveryBudget(gid, uid int64, owner *pending) time.Duration {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p := owner
+	if p == nil {
+		p = v.pend[pkey{gid, uid}]
+	}
+	if p == nil {
+		return pendingDeliveryTimeout
+	}
+	return p.deadline.Sub(v.wallNow())
+}
+
 func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, uid int64, owner *pending) privateDeliveryOutcome {
 	active, privateMsgID, replacedPrivateMsgID, err := v.sendDMChallengeForGroup(c, bot, gid, uid, false, owner)
 	if !active {
@@ -1168,7 +1192,10 @@ func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, ui
 	}
 	if tg.IsRateLimited(err) {
 		wait := tg.RetryAfter(err)
-		if wait > 0 && wait < v.timeout(gid) {
+		// Waiting out a flood limit is only worth it if the applicant's own window outlives the
+		// wait. Sleeping past their deadline means they are declined before the question ever
+		// arrives; falling through instead lets the group challenge carry the verification.
+		if wait > 0 && wait < v.timeout(gid) && wait+rateLimitSendMargin <= v.deliveryBudget(gid, uid, owner) {
 			log.Printf("join %d in %d: private challenge rate-limited; retrying after %s", uid, gid, wait)
 			if !tg.Pace(c, wait) {
 				return privateDeliveryOutcome{result: privateUncertain}
@@ -1448,10 +1475,19 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 }
 
 // Required-channel lookup also renders a throttled operator alert when the gate is unavailable.
+// isChannelMember answers the required-channel gate and records, on the applicant's pending,
+// whether the answer could be read at all. An unreadable gate still refuses entry, but the
+// applicant must not carry a strike for a door the bot could not see through.
 func (v *Service) isChannelMember(c context.Context, bot modBot, gid, userID int64, groupLang i18n.Lang) bool {
+	member, known := v.channelGate(c, bot, gid, userID, groupLang)
+	v.markChannelReadable(gid, userID, known)
+	return member
+}
+
+func (v *Service) channelGate(c context.Context, bot modBot, gid, userID int64, groupLang i18n.Lang) (member, known bool) {
 	rc := v.RequiredChannelID(gid)
 	if rc == 0 {
-		return true
+		return true, true
 	}
 	cm, err := bot.GetChatMember(c, &telego.GetChatMemberParams{ChatID: tu.ID(rc), UserID: userID})
 	if err != nil {
@@ -1462,17 +1498,36 @@ func (v *Service) isChannelMember(c context.Context, bot modBot, gid, userID int
 				open := v.cfg.FailOpenChannel()
 				log.Printf("isChannelMember: bot cannot access required channel %d (%v) for applicant %d; fail_open=%v — make the bot an admin of that channel", rc, e2, userID, open)
 				v.channelAccessAlert(c, bot, groupLang, rc)
-				return open // configurable: default fail-open (don't lock everyone out); strict deployments set required_channel_fail_open:false
+				// configurable: default fail-open (don't lock everyone out); strict deployments set required_channel_fail_open:false
+				return open, false
 			}
 		}
 		log.Printf("getChatMember(channel=%d user=%d): %v", rc, userID, err)
-		return false
+		return false, false
 	}
 	switch cm.MemberStatus() {
 	case "creator", "administrator", "member":
-		return true
+		return true, true
 	default:
-		return cm.MemberIsMember()
+		return cm.MemberIsMember(), true
+	}
+}
+
+func (v *Service) channelWasUnreadable(gid, uid int64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	return ok && p.channelUnreadable
+}
+
+// markChannelReadable records the latest gate reading on the live pending. Clearing it on a
+// readable answer matters as much as setting it: one transient failure must not exempt an
+// applicant who genuinely never joined the channel.
+func (v *Service) markChannelReadable(gid, uid int64, known bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if p, ok := v.pend[pkey{gid, uid}]; ok {
+		p.channelUnreadable = !known
 	}
 }
 
@@ -1936,7 +1991,8 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 	v.deleteChallenges(c, bot, gid, uid, p.messages())
 	var count int
 	var doBan bool
-	if v.strikesFor(outcome, reason) {
+	// A gate the bot could not read is the bot's problem; the applicant does not carry it.
+	if v.strikesFor(outcome, reason) && !p.channelUnreadable {
 		failedAt := p.failedAt
 		if failedAt.IsZero() {
 			failedAt = v.wallNow()

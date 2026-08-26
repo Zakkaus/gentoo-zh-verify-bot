@@ -678,10 +678,15 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 		return // one notice per applicant: a settlement the bot keeps retrying must not DM them each round
 	}
 	text := v.declineResultText(outcome, p.lang, func() string {
-		if capped {
+		switch {
+		case capped:
 			return v.messages.Verification.Result.DeferralExpired.For(p.lang)
+		case reason == challengeExpiryReason(false):
+			// The applicant never saw a question; telling them they ran out of time is not true.
+			return v.messages.Verification.Result.Undelivered.For(p.lang)
+		default:
+			return v.timeoutResultText(gid, uid, p.lang, banned)
 		}
-		return v.timeoutResultText(gid, uid, p.lang, banned)
 	})
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
 }

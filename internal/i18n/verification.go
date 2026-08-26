@@ -102,6 +102,8 @@ type VerificationResultCatalog struct {
 	DeclinePending Text
 	// DeferralExpired reports a strike-free decline after a prolonged Telegram outage.
 	DeferralExpired Text
+	// Undelivered reports a decline for a challenge that never reached the applicant.
+	Undelivered Text
 	// TimeoutRetry formats a timeout rejection and its retry cooldown.
 	TimeoutRetry Format
 	// TimeoutNoWait reports a timeout rejection without a cooldown.
@@ -136,6 +138,8 @@ type VerificationChannelCatalog struct {
 	ContinueButton Text
 	// ContinueOK acknowledges a successful channel check.
 	ContinueOK Text
+	// Unreadable reports that the channel gate itself could not be read.
+	Unreadable Text
 	// NotFollowedYet formats an unsuccessful channel check.
 	NotFollowedYet Format
 	// NoPending reports that no join request is waiting.
@@ -194,6 +198,8 @@ type VerificationAdminCatalog struct {
 	AgentStats Format
 	// TrustedBypassFailed formats a failed trusted-member approval.
 	TrustedBypassFailed Format
+	// SettingsDegraded reports runtime settings that could not be loaded cleanly.
+	SettingsDegraded Format
 	// OutageBacklog asks administrators to inspect requests older than Telegram's retention window.
 	OutageBacklog Format
 	// PendingCap formats a pending-queue capacity alert.
