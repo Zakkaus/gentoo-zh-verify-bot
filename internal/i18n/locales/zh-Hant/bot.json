@@ -29,7 +29,7 @@
       "warn": "【管理】回覆並警告（滿 %[1]d 次移出群組）",
       "clear_warn": "【管理】回覆並清除警告",
       "channel": "【管理】管理頻道身分發言",
-      "rich_text": "【管理】切換 /pkg、/use 富文字",
+      "rich_text": "【管理】切換 /{g}pkg、/{g}use 富文字",
       "name_spoiler": "【管理】切換新成員姓名遮蔽",
       "verification_mode": "【管理】切換驗證方式",
       "auto_delete": "【管理】切換自動刪除查詢結果",

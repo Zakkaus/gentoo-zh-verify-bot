@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -25,7 +26,8 @@ type overlay struct {
 	branch string
 }
 
-var userAgent = "gentoo-zh-verify-bot"
+// Identify as the build that is actually running; operators can still override it.
+var userAgent = edition.Name
 
 var overlays []overlay
 
@@ -1212,7 +1214,7 @@ func renderUseRich(l i18n.Lang, info pkgFullInfo, srcLabel, pkgURL string, overl
 		hdr = append(hdr, esc(info.description))
 	}
 	if info.homepage != "" {
-		hdr = append(hdr, fmt.Sprintf("🏠 <a href=\"%s\">homepage</a>", esc(info.homepage)))
+		hdr = append(hdr, fmt.Sprintf("🏠 <a href=\"%s\">%s</a>", esc(info.homepage), esc(messages.Homepage.For(l))))
 	}
 	switch {
 	case info.stable != "" && info.latest != "" && info.latest != info.stable:
@@ -1401,6 +1403,21 @@ func appendUseAvailabilityNote(l i18n.Lang, plain, rich string, availability pkg
 }
 
 // OnUse handles package metadata and USE flag lookups.
+// renderUseMultipleMatches lists the candidate atoms with the command that queries each one.
+// The command carries the edition prefix, so the generic build suggests /guse, not /use.
+func renderUseMultipleMatches(l i18n.Lang, atoms []string, availability pkgLookupAvailability) string {
+	sort.Strings(atoms)
+	var b strings.Builder
+	b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
+	for _, a := range atoms {
+		fmt.Fprintf(&b, "\n • /%suse %s", edition.CommandPrefix, a)
+	}
+	if availability.anyUnavailable() {
+		fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))
+	}
+	return b.String()
+}
+
 func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 	msg := update.Message
 	if msg == nil || msg.From == nil {
@@ -1435,16 +1452,7 @@ func (v *Service) OnUse(ctx *th.Context, update telego.Update) error {
 		for a := range srcs {
 			atoms = append(atoms, a)
 		}
-		sort.Strings(atoms)
-		var b strings.Builder
-		b.WriteString(i18n.Messages.LookupPackages.Use.MultipleMatches.For(l))
-		for _, a := range atoms {
-			fmt.Fprintf(&b, "\n • /%suse %s", i18n.CommandPrefix, a)
-		}
-		if availability.anyUnavailable() {
-			fmt.Fprintf(&b, "\n%s", i18n.Messages.LookupPackages.Use.PartialMatches.Render(l, availability.unavailableSources(l)))
-		}
-		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, b.String())
+		v.replyLookupPlain(c, bot, msg.Chat.ID, msg.MessageID, renderUseMultipleMatches(l, atoms, availability))
 		return nil
 	}
 

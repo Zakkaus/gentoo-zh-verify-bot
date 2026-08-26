@@ -58,6 +58,8 @@ type LookupUseCatalog struct {
 	TruncatedCount Format
 	// SourceLabel formats a package source label.
 	SourceLabel Format
+	// Homepage labels the link to a package's own website.
+	Homepage Text
 	// VersionStableLatest formats distinct stable and latest versions.
 	VersionStableLatest Format
 	// VersionStable formats a stable version.

@@ -44,6 +44,7 @@
     "value_separator": "：",
     "version_latest": "版本：~%[1]s",
     "version_stable": "版本：%[1]s",
-    "version_stable_latest": "版本：%[1]s  ~%[2]s"
+    "version_stable_latest": "版本：%[1]s  ~%[2]s",
+    "homepage": "主页"
   }
 }

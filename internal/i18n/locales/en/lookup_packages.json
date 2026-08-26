@@ -44,6 +44,7 @@
     "value_separator": ": ",
     "version_latest": "Version: ~%[1]s",
     "version_stable": "Version: %[1]s",
-    "version_stable_latest": "Versions: %[1]s  ~%[2]s"
+    "version_stable_latest": "Versions: %[1]s  ~%[2]s",
+    "homepage": "homepage"
   }
 }

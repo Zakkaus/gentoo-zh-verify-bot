@@ -17,6 +17,7 @@ import (
 
 	botapp "github.com/Zakkaus/gentoo-zh-verify-bot/internal/bot"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/feed"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/lookup"
@@ -242,7 +243,7 @@ func exitOnRuntimeError(err error) {
 }
 
 func main() {
-	configPath := flag.String("config", "/etc/gentoo-zh-verify-bot/config.json", "path to config.json")
+	configPath := flag.String("config", "/etc/"+edition.Name+"/config.json", "path to config.json")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {

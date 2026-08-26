@@ -48,19 +48,28 @@ A group can exempt confirmed members of trusted groups or require applicants to 
 ```sh
 curl --fail --location --remote-name \
   https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/main/deploy/install.sh
+# Gentoo-zh Community edition
 sh install.sh                       # or: sh install.sh v4.3.0
 sudoedit /etc/gentoo-zh-verify-bot/bot.env   # add BOT_TOKEN=<token from @BotFather>
 sudo systemctl start gentoo-zh-verify-bot
+
+# edition for Linux communities in general
+sh install.sh --generic
+sudoedit /etc/gentoo-zhbot/bot.env
+sudo systemctl start gentoo-zhbot
 ```
+
+The two editions share no binary, configuration directory, systemd unit, or state directory name, so both can be installed on one machine. Commands below use the Gentoo edition's names; substitute `gentoo-zhbot` for the other one.
 
 Read the script before running it; it is short and does nothing but the steps above.
 
 ### Building from source instead
 
-Requires Go 1.26.7 or later. The unit and paths are the same as above.
+Requires Go 1.26.7 or later. `-tags gentoo` selects the Gentoo edition; leaving the tag out
+builds `gentoo-zhbot`, in which case substitute that name in every path below.
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -trimpath -tags gentoo -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
 sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
 sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
@@ -110,7 +119,7 @@ External lookups in private chats are limited per user to `private_query_per_min
 
 ## State, restarts, and outages
 
-The supplied unit uses `StateDirectory=gentoo-zh-verify-bot` to create `/var/lib/gentoo-zh-verify-bot` with mode `0700`. Without `$STATE_DIRECTORY`, ordinary runtime state is memory-only, and owner claims and runtime group registration fail.
+The supplied unit uses `StateDirectory=` with the build's own name, creating `/var/lib/gentoo-zh-verify-bot` or `/var/lib/gentoo-zhbot` with mode `0700`. Without `$STATE_DIRECTORY`, ordinary runtime state is memory-only, and owner claims and runtime group registration fail.
 
 | File | State preserved across restarts |
 | --- | --- |
@@ -128,7 +137,7 @@ When Telegram is unreachable, an expiring verification receives a new full windo
 
 ## Adapting it to another community
 
-Most communities need no fork. Run the `gentoo-zhbot` edition and configure it: groups, verification modes, both question banks, the three existing locales, overlays, the news source, feed destinations, and message policy are all set through `config.json` or the settings panel without touching code.
+Most communities need no fork. Run the `gentoo-zhbot` edition and configure it, without touching code. Groups, verification modes, both question banks, the three existing locales, message policy, and moderation settings are in the settings panel. Overlays, the news source, feed destinations, `user_agent`, and `stats_timezone` live in `config.json` only, and changing them needs a restart.
 
 Replacing the Gentoo-specific behaviour outright, rather than leaving it behind a `g` prefix, requires a complete cutover of:
 

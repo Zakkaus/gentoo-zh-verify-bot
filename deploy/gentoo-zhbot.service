@@ -1,0 +1,57 @@
+[Unit]
+Description=Telegram join-verification bot for Linux communities
+After=network-online.target
+Wants=network-online.target
+# Retry forever: a 30-second backoff avoids a hot crash loop, while interval 0
+# disables the start-limit latch (the explicit burst is therefore informational).
+StartLimitIntervalSec=0
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+# A quiet poll completes within 30 seconds; a stuck call is cut off after 45 seconds
+# and retried after 5 seconds. 120 seconds is over twice that 50-second worst case.
+WatchdogSec=120s
+ExecStart=/usr/bin/env -- /usr/local/bin/gentoo-zhbot --config /etc/gentoo-zhbot/config.json
+EnvironmentFile=/etc/gentoo-zhbot/bot.env
+# persistent state dir (/var/lib/gentoo-zhbot) so in-progress verifications survive restarts
+StateDirectory=gentoo-zhbot
+StateDirectoryMode=0700
+Restart=always
+RestartSec=30s
+# main bounds handler and background flush waits at 20 seconds.
+TimeoutStopSec=30s
+
+# 512M is a safety boundary; explicit queue, cache, and handler caps bound join floods.
+# If the cgroup still reaches it, the OOM-killed process is restarted after 30 seconds.
+MemoryMax=512M
+
+# hardening — the bot only needs outbound HTTPS + its StateDirectory, nothing else.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

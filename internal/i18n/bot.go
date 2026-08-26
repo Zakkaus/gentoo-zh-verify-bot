@@ -1,5 +1,7 @@
 package i18n
 
+import "github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
+
 // BotCatalog contains bot lifecycle and command text.
 type BotCatalog struct {
 	// Menu contains Telegram command-menu descriptions.
@@ -149,7 +151,7 @@ type BotRegistrationCatalog struct {
 // Who returns the identity sentence for this build. Only the Gentoo build may claim to be the
 // Gentoo-zh Community's bot; every other build states what it does without naming a community.
 func (c BotDirectMessageCatalog) Who(l Lang) string {
-	if CommandPrefix == "" {
+	if edition.IsGentoo {
 		return c.Identity.For(l)
 	}
 	return c.IdentityGeneric.For(l)

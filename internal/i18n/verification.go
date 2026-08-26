@@ -1,5 +1,7 @@
 package i18n
 
+import "github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
+
 type localizedStrings [langCount][]string
 
 func (s localizedStrings) value(l Lang) []string {
@@ -294,7 +296,7 @@ type VerificationAdminCatalog struct {
 // the Gentoo-zh Community cannot answer a question about its website, so the generic build
 // asks about Linux itself instead.
 func (c VerificationChallengeCatalog) BuiltinFallback() []Question {
-	if CommandPrefix == "" {
+	if edition.IsGentoo {
 		return c.FallbackQuestions[:]
 	}
 	return c.FallbackQuestionsGeneric[:]

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 )
 
 // Lang identifies one supported catalogue locale.
@@ -101,13 +103,19 @@ func (s localized) value(l Lang) string {
 // commandPrefixToken marks where an edition-specific command name begins, so one catalogue
 // serves both builds: "/{g}pkg" renders as /pkg in the Gentoo build and /gpkg in the generic
 // one. Substituting here rather than at each call site means no message can be missed.
-const commandPrefixToken = "{g}"
+const (
+	commandPrefixToken = "{g}"
+	kernelSuffixToken  = "{ks}"
+)
 
 func applyCommandPrefix(s string) string {
-	if !strings.Contains(s, commandPrefixToken) {
-		return s
+	if strings.Contains(s, commandPrefixToken) {
+		s = strings.ReplaceAll(s, commandPrefixToken, edition.CommandPrefix)
 	}
-	return strings.ReplaceAll(s, commandPrefixToken, CommandPrefix)
+	if strings.Contains(s, kernelSuffixToken) {
+		s = strings.ReplaceAll(s, kernelSuffixToken, edition.KernelExampleSuffix)
+	}
+	return s
 }
 
 // Text is a localized value that is returned without formatting.

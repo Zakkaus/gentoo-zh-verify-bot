@@ -48,19 +48,27 @@ Gentoo 版用 `-tags gentoo` 构建，默认构建即通用版。每次发布同
 ```sh
 curl --fail --location --remote-name \
   https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/main/deploy/install.sh
+# Gentoo 中文社区版
 sh install.sh                       # 或指定版本：sh install.sh v4.3.0
 sudoedit /etc/gentoo-zh-verify-bot/bot.env   # 填入 BOT_TOKEN=<@BotFather 给的令牌>
 sudo systemctl start gentoo-zh-verify-bot
+
+# 一般 Linux 社区版
+sh install.sh --generic
+sudoedit /etc/gentoo-zhbot/bot.env
+sudo systemctl start gentoo-zhbot
 ```
+
+两个版本的二进制、配置目录、systemd 单元和状态目录名称全部不同，可以装在同一台机器上互不干扰。后文命令按 Gentoo 版的名称书写，装通用版时换成 `gentoo-zhbot`。
 
 运行前请先读一遍脚本，它很短，做的就是上面这几件事。
 
 ### 改为从源代码构建
 
-需要 Go 1.26.7 或更高版本，单元文件与路径与上面相同。
+需要 Go 1.26.7 或更高版本。加 `-tags gentoo` 构建 Gentoo 版；不加标签构建出的是 `gentoo-zhbot`，此时下面每处路径都要换成该名称。
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -trimpath -tags gentoo -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
 sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
 sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
@@ -110,7 +118,7 @@ Owner 可以在私聊中执行 `/unregister <group-id>`。该命令只接受运�
 
 ## 状态、重启与中断
 
-随附的 unit 通过 `StateDirectory=gentoo-zh-verify-bot` 创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot`。未设置 `$STATE_DIRECTORY` 时，普通运行状态只存在于内存，owner 认领和运行时群组登记会失败。
+随附的 unit 的 `StateDirectory=` 取本构建自己的名称，创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot` 或 `/var/lib/gentoo-zhbot`。未设置 `$STATE_DIRECTORY` 时，普通运行状态只存在于内存，owner 认领和运行时群组登记会失败。
 
 | 文件 | 跨重启保留的内容 |
 | --- | --- |
@@ -128,7 +136,7 @@ Telegram 不可达时，到期验证会获得新的完整时限，不会被拒�
 
 ## 适配到其它社区
 
-多数社区不需要 fork：运行 `gentoo-zhbot` 版本再配置即可。群组、验证模式、两种题库、三个现有 locale、overlay、新闻源、推送目标和消息策略都可通过 `config.json` 或设置面板修改，不需要改代码。
+多数社区不需要 fork：运行 `gentoo-zhbot` 版本再配置即可，不需要改代码。群组、验证模式、两种题库、三个现有 locale、消息策略和群管理设置在设置面板里改；overlay、新闻源、推送目标、`user_agent` 和 `stats_timezone` 只能改 `config.json`，改完需要重启。
 
 若要彻底替换 Gentoo 语义，而不是让它保留在 `g` 前缀之后，必须完整修改以下位置：
 

@@ -6,7 +6,7 @@ This document follows first startup, durable owner claim, runtime group registra
 
 **Implementation:** package `main`, `main` and `loadRuntimeState` in `cmd/gentoo-zh-verify-bot/main.go`; package `internal/config`, `LoadConfig` in `internal/config/config.go`; package `internal/store`, `LoadBaseline` and `EffectiveConfig` in `internal/store/baseline.go`.
 
-Outside `-version`, `BOT_TOKEN` is the only required application input. The default config path is `/etc/gentoo-zh-verify-bot/config.json`. A missing file is treated as `{}` and starts with zero configured groups. An unreadable existing file, malformed JSON, invalid group/mode/question/channel values, or invalid baseline stops startup. Unknown keys only log warnings.
+Outside `-version`, `BOT_TOKEN` is the only required application input. The default config path follows the build: `/etc/gentoo-zh-verify-bot/config.json` for the Gentoo edition, `/etc/gentoo-zhbot/config.json` for the general one. A missing file is treated as `{}` and starts with zero configured groups. An unreadable existing file, malformed JSON, invalid group/mode/question/channel values, or invalid baseline stops startup. Unknown keys only log warnings.
 
 When `STATE_DIRECTORY` is nonempty, `loadRuntimeState` tries to create it with mode `0700`, removes orphan `.<name>.tmp-*` files, and places `settings.json` there. Directory-creation failure logs a warning but does not stop startup; subsequent persistence can fail. When the variable is empty, ordinary settings changes are memory-only and all verification/warning/feed state is non-durable. Owner claim and runtime registration are stricter: they refuse to operate without durable settings storage.
 
@@ -65,6 +65,10 @@ The supplied unit runs `/usr/local/bin/gentoo-zh-verify-bot --config
 /etc/gentoo-zh-verify-bot/config.json`, reads `/etc/gentoo-zh-verify-bot/bot.env`, uses
 `DynamicUser=yes`, and creates `/var/lib/gentoo-zh-verify-bot` as `STATE_DIRECTORY` with mode
 `0700`.
+
+`deploy/gentoo-zhbot.service` is the same unit for the general edition, word for word apart from
+the name and description: every `gentoo-zh-verify-bot` in a path becomes `gentoo-zhbot`. The two
+editions therefore share no configuration, state, or unit, and can be installed side by side.
 
 `Restart=always` covers crashes, watchdog termination, and an unexpected clean exit. An explicit
 30-second delay prevents a hot crash loop. `StartLimitIntervalSec=0` disables systemd's start-rate
