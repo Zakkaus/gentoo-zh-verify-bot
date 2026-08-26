@@ -27,7 +27,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `group_ids` | none | Guarded group IDs. `groups` accepts the same list with per-group settings; `group_id` is the legacy singular form. |
-| `control_group_id` | first effective group | The group whose administrators may change bot-wide settings. |
+| `control_group_id` | first effective group | The group whose administrators may change bot-wide settings. It must name a group that is configured here or registered at runtime; anything else fails at startup. |
 | `known_chat_ids` | none | Chats the bot stays in without verifying them. Not a bypass. |
 | `trusted_member_group_ids` | none | Membership in one of these skips verification entirely. |
 
@@ -39,10 +39,10 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | `delivery_mode` | `both` | `group`, `dm`, or `both`. |
 | `timeout_seconds` | `240` | How long an applicant has. A member verified after joining gets ten minutes unless this is set in the panel. |
 | `verify_max_fails` | `3` | Failures before an automatic ban. Negative disables it. |
-| `verify_retry_seconds` | `180` | Cooldown after a failure. Negative disables it. |
+| `verify_retry_seconds` | `180` | Cooldown after a failure, before applying again or rejoining. Negative disables it. |
 | `verify_invited` | `true` | Whether a member somebody else added still has to verify. |
 | `ban_seconds` | `0` (permanent) | Automatic-ban duration. |
-| `questions` | built-in | Quiz bank. See [`examples/quiz-bank.json`](../examples/quiz-bank.json). |
+| `questions` | none | Quiz bank. There is no built-in one: with an empty bank `verify_mode: quiz` falls back to `kernel`. See [`examples/quiz-bank.json`](../examples/quiz-bank.json). |
 | `fallback_questions` | built-in | Short-answer bank for applicants with no Linux machine. See [`examples/fallback-questions.json`](../examples/fallback-questions.json). |
 
 ### Required channel
@@ -50,7 +50,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `required_channel_id` | `0` (disabled) | Applicants must be in this channel. |
-| `channel_display` | derived | Name shown for that channel. |
+| `channel_display` | none | The channel's `@handle`. Required once `required_channel_id` is set, unless `channel_invite_url` is given instead; without either, startup fails. |
 | `channel_invite_url` | none | Needed only for a private channel with no public handle. |
 | `required_channel_fail_open` | `true` | Whether an unreadable membership check still admits people. |
 

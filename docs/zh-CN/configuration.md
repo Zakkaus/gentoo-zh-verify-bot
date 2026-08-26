@@ -27,7 +27,7 @@
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `group_ids` | 无 | 受保护群组 ID。`groups` 接受同一份列表并支持按群设置；`group_id` 是旧的单数写法。 |
-| `control_group_id` | 第一个有效群组 | 其管理员可以修改机器人全局设置的群组。 |
+| `control_group_id` | 第一个有效群组 | 其管理员可以修改机器人全局设置的群组。该值必须是本文件中配置过或运行时注册过的群组，否则启动失败。 |
 | `known_chat_ids` | 无 | 机器人留在其中但不验证的聊天，不等于免验证。 |
 | `trusted_member_group_ids` | 无 | 已在其中的成员完全跳过验证。 |
 
@@ -39,10 +39,10 @@
 | `delivery_mode` | `both` | `group`、`dm` 或 `both`。 |
 | `timeout_seconds` | `240` | 申请人可用的时长。进群后才验证的成员默认十分钟，除非在面板中设置了本项。 |
 | `verify_max_fails` | `3` | 触发自动封禁的失败次数。负值关闭。 |
-| `verify_retry_seconds` | `180` | 失败后的冷却时间。负值关闭。 |
+| `verify_retry_seconds` | `180` | 失败后的冷却时间，重新申请与重新加入都要等待。负值关闭。 |
 | `verify_invited` | `true` | 被他人邀请入群的成员是否仍需验证。 |
 | `ban_seconds` | `0`（永久） | 自动封禁的时长。 |
-| `questions` | 内置 | 选择题库。参见 [`examples/quiz-bank.json`](../../examples/quiz-bank.json)。 |
+| `questions` | 无 | 选择题库。没有内置题库：题库为空时 `verify_mode: quiz` 回退到 `kernel`。参见 [`examples/quiz-bank.json`](../../examples/quiz-bank.json)。 |
 | `fallback_questions` | 内置 | 面向没有 Linux 设备的申请人的简答题库。参见 [`examples/fallback-questions.json`](../../examples/fallback-questions.json)。 |
 
 ### 必加频道
@@ -50,7 +50,7 @@
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `required_channel_id` | `0`（停用） | 申请人必须加入的频道。 |
-| `channel_display` | 自动推导 | 该频道的显示名称。 |
+| `channel_display` | 无 | 频道的 `@handle`。设置 `required_channel_id` 后必填，除非改用 `channel_invite_url`；两者都没有时启动失败。 |
 | `channel_invite_url` | 无 | 仅当频道是没有公开用户名的私有频道时需要。 |
 | `required_channel_fail_open` | `true` | 无法读取频道成员状态时是否仍然放行。 |
 
