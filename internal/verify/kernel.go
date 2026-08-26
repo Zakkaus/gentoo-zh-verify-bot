@@ -94,8 +94,38 @@ func plausibleKernel(major, minor int) bool {
 }
 
 // Unknown ASCII context rejects otherwise plausible dotted versions; Chinese prose is allowed.
+// People paste what their terminal showed them, prompt and command included. The echo of the
+// command we asked for carries no answer, so drop those lines and judge what the machine printed.
+// Only echoes of the commands the prompt names are removed, so nothing else can hide behind this.
+// A prompt is whatever precedes the last $, # or > on the line, so "[user@host ~]$" and
+// "user@host ~ $" are both recognised. Dropping a whole line can never admit something that
+// could not be sent on its own, because the release alone is always a valid answer.
+var kernelCommandEchoRe = regexp.MustCompile(`(?i)^\s*(?:[^$#>]*[$#>]\s*)?(?:sudo\s+)?(?:uname\b|cat\s+/proc/version\b|hostnamectl\b).*$`)
+
+func stripCommandEcho(text string) string {
+	if !strings.ContainsAny(text, "\n\r") {
+		return text
+	}
+	lines := strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == '\r' })
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" || kernelCommandEchoRe.MatchString(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if len(kept) == 0 {
+		return text
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
 func kernelAnswerOK(text string) bool {
 	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	text = stripCommandEcho(text)
 	if text == "" {
 		return false
 	}
