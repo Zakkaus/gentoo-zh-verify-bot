@@ -149,7 +149,7 @@ func (c *Client) SendRichOrHTML(ctx context.Context, chatID int64, replyTo int, 
 
 // ScheduleCleanup deletes a group response and its command after cleanupAfter.
 func (c *Client) ScheduleCleanup(chatID int64, commandMessageID, responseMessageID int, cleanupAfter time.Duration) {
-	if cleanupAfter <= 0 || responseMessageID == 0 || chatID >= 0 {
+	if cleanupAfter <= 0 || responseMessageID == 0 {
 		return
 	}
 	c.scheduleDelete(chatID, responseMessageID, commandMessageID, cleanupAfter)
@@ -391,7 +391,13 @@ func (c *Client) pruneAdminCacheLocked(now time.Time) {
 	}
 }
 
+// A private chat is the applicant's own record of what the bot told them, so nothing there
+// is ever deleted on a timer. Timed cleanup exists to keep shared chats readable, and only
+// group and channel IDs are negative.
 func (c *Client) scheduleDelete(chatID int64, firstMessageID, secondMessageID int, after time.Duration) {
+	if chatID >= 0 {
+		return
+	}
 	if !c.reserveCleanupTimer() {
 		return
 	}
