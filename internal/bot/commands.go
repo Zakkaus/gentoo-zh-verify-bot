@@ -26,6 +26,9 @@ func memberCommands(l i18n.Lang) []telego.BotCommand {
 		{Command: gentooPrefix + "arm", Description: menu.Arm.For(l)},
 		{Command: "armpkgs", Description: menu.ArmPkgs.For(l)},
 		{Command: "kernel", Description: menu.Kernel.For(l)},
+		{Command: "man", Description: menu.Man.For(l)},
+		{Command: "cve", Description: menu.CVE.For(l)},
+		{Command: "repology", Description: menu.Repology.For(l)},
 		{Command: "ping", Description: menu.Ping.For(l)},
 		{Command: "stats", Description: menu.Stats.For(l)},
 	}

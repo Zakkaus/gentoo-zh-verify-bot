@@ -26,12 +26,27 @@
     "not_packaged": "❌ 未打包",
     "packaged": "✅ 已打包"
   },
+  "cve": {
+    "heading": "🔒 <a href=\"%[1]s\">%[2]s</a>",
+    "not_found": "❓ 未找到 %[1]s。请检查编号，或该漏洞尚未收录。",
+    "published": "公开于 %[1]s，当前状态 %[2]s",
+    "severity": "<b>%[1]s</b>　CVSS %[2]s",
+    "unavailable": "⚠️ 暂时无法读取 NVD 数据。请稍后重试。",
+    "usage": "用法：/cve CVE-2024-3094"
+  },
   "kernel": {
     "eol": "（已停止维护）",
     "footer": "验证入群时请发送本机实际运行的版本号，而不是这里的版本号。",
     "heading": "🐧 <a href=\"https://www.kernel.org/\">kernel.org</a> 当前发布版本：",
     "row": "%[1]s <b>%[2]s</b>　%[3]s",
     "unavailable": "⚠️ 暂时无法读取 kernel.org 的版本信息。请稍后重试。"
+  },
+  "man": {
+    "heading": "📖 <a href=\"%[1]s\">%[2]s</a>",
+    "not_found": "❓ 未找到「%[1]s」的手册页。请检查名称，或指定章节，例如 %[1]s.5。",
+    "synopsis": "<b>用法</b>\n<code>%[1]s</code>",
+    "unavailable": "⚠️ 暂时无法读取手册页。请稍后重试。",
+    "usage": "用法：/man <名称>　示例：/man ls、/man fstab.5"
   },
   "pkgs": {
     "repology_unavailable": "暂时无法查询 Repology 中「%[1]s」的跨发行版信息。请稍后重试。",
@@ -49,5 +64,13 @@
   },
   "release": {
     "standard_support_ended": " · 标准支持已结束"
+  },
+  "repology": {
+    "heading": "📦 <a href=\"%[1]s\">%[2]s</a> 在各发行版中的版本：",
+    "more": "另有 %[1]d 个仓库未列出。",
+    "not_found": "❓ repology 中没有「%[1]s」。请检查名称。",
+    "row": "%[1]s　<b>%[2]s</b>",
+    "unavailable": "⚠️ 暂时无法读取 repology 数据。请稍后重试。",
+    "usage": "用法：/repology <软件包名>　示例：/repology bash"
   }
 }

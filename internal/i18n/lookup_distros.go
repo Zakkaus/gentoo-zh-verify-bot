@@ -6,6 +6,12 @@ type LookupDistrosCatalog struct {
 	Pkgs LookupDistrosPkgsCatalog
 	// Armpkgs contains cross-distribution arm64 lookup text.
 	Armpkgs LookupDistrosArmpkgsCatalog
+	// Man contains manual-page lookup text.
+	Man LookupDistrosManCatalog
+	// CVE contains vulnerability lookup text.
+	CVE LookupDistrosCVECatalog
+	// Repology contains cross-repository version listing text.
+	Repology LookupDistrosRepologyCatalog
 	// Kernel contains the kernel.org release listing.
 	Kernel LookupDistrosKernelCatalog
 	// Release contains distribution release-role labels.
@@ -41,6 +47,35 @@ type LookupDistrosPkgsCatalog struct {
 }
 
 // LookupDistrosArmpkgsCatalog contains /armpkgs text.
+// LookupDistrosManCatalog covers manual-page lookup, which every Linux community needs.
+type LookupDistrosManCatalog struct {
+	Usage       Text
+	Heading     Format
+	Synopsis    Format
+	NotFound    Format
+	Unavailable Text
+}
+
+// LookupDistrosCVECatalog covers vulnerability lookup by identifier.
+type LookupDistrosCVECatalog struct {
+	Usage       Text
+	Heading     Format
+	Severity    Format
+	Published   Format
+	NotFound    Format
+	Unavailable Text
+}
+
+// LookupDistrosRepologyCatalog covers one package's version in every repository that ships it.
+type LookupDistrosRepologyCatalog struct {
+	Usage       Text
+	Heading     Format
+	Row         Format
+	More        Format
+	NotFound    Format
+	Unavailable Text
+}
+
 // LookupDistrosKernelCatalog covers the kernel.org release listing, which every Linux community
 // asks about and which this bot's own verification depends on.
 type LookupDistrosKernelCatalog struct {

@@ -99,3 +99,19 @@ func withCountingFixture(t *testing.T, url, body string, calls *int, fn func()) 
 	t.Cleanup(func() { httpClient = old })
 	fn()
 }
+
+// withStatusFixture answers every request with one status and an empty body.
+func withStatusFixture(t *testing.T, code int, fn func()) {
+	t.Helper()
+	old := httpClient
+	httpClient = &http.Client{Transport: fixtureRoundTrip(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: code,
+			Header:     http.Header{},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	})}
+	t.Cleanup(func() { httpClient = old })
+	fn()
+}

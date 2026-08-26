@@ -48,6 +48,12 @@ type BotMemberMenuCatalog struct {
 	ArmPkgs Text
 	// Kernel labels the kernel.org release listing.
 	Kernel Text
+	// Man labels manual-page lookup.
+	Man Text
+	// CVE labels vulnerability lookup.
+	CVE Text
+	// Repology labels the cross-repository version listing.
+	Repology Text
 	// Ping describes bot status.
 	Ping Text
 	// Stats describes daily verification statistics.
