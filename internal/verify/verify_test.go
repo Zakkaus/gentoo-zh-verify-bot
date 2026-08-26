@@ -2098,8 +2098,8 @@ func TestPendingCapAlertThrottled(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			v := newTestService(&config.Config{AdminLogChatID: tt.adminLogID})
 			fb := &fakeVerifyBot{}
-			v.alertPendingCap(context.Background(), fb, tt.groupID)
-			v.alertPendingCap(context.Background(), fb, -300)
+			v.alertPendingCap(context.Background(), fb, tt.groupID, gateRequest)
+			v.alertPendingCap(context.Background(), fb, -300, gateRequest)
 			if fb.sends != 1 {
 				t.Fatalf("two over-cap joins inside the cooldown sent %d alerts, want 1", fb.sends)
 			}
@@ -2109,7 +2109,7 @@ func TestPendingCapAlertThrottled(t *testing.T) {
 			v.mu.Lock()
 			v.pendingCapAlertAt = time.Now().Add(-pendingCapAlertCooldown)
 			v.mu.Unlock()
-			v.alertPendingCap(context.Background(), fb, tt.groupID)
+			v.alertPendingCap(context.Background(), fb, tt.groupID, gateRequest)
 			if fb.sends != 2 {
 				t.Errorf("an alert after the cooldown brought sends to %d, want 2", fb.sends)
 			}

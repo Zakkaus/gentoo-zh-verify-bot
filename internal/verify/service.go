@@ -560,8 +560,7 @@ func (v *Service) livePending(gid, uid int64) (*pending, bool) {
 func (v *Service) removeDuringCooldown(c context.Context, bot modBot, gid, uid int64, l i18n.Lang, wait time.Duration) {
 	if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 		log.Printf("post-join verify: cannot remove %d from %d during cooldown: %v", uid, gid, err)
-		admin := &v.messages.Verification.Admin
-		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		v.failAlert(c, bot, gid, v.adminSays(gateMute).BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
 		return
 	}
 	log.Printf("post-join verify: %d rejoined %d during the failure cooldown (%s left); removed again", uid, gid, wait.Round(time.Second))
@@ -894,8 +893,7 @@ func (v *Service) joinGate(c context.Context, bot modBot, gid, uid int64, applic
 				return true
 			}
 			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
-			admin := &v.messages.Verification.Admin
-			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.failAlert(c, bot, gid, v.adminSays(gateRequest).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.messages.Verification.Result.DeclinePending.For(applicantLang)))
 			return true
 		}
@@ -998,7 +996,7 @@ func (v *Service) finishPendingChallenge(
 }
 
 // One process-wide throttle prevents a multi-group flood from spamming operator alerts.
-func (v *Service) alertPendingCap(c context.Context, bot modBot, gid int64) {
+func (v *Service) alertPendingCap(c context.Context, bot modBot, gid int64, gate string) {
 	now := time.Now()
 	v.mu.Lock()
 	if !v.pendingCapAlertAt.IsZero() && now.Sub(v.pendingCapAlertAt) < pendingCapAlertCooldown {
@@ -1007,8 +1005,7 @@ func (v *Service) alertPendingCap(c context.Context, bot modBot, gid int64) {
 	}
 	v.pendingCapAlertAt = now
 	v.mu.Unlock()
-	admin := &v.messages.Verification.Admin
-	v.failAlert(c, bot, gid, admin.PendingCap.Render(v.groupLanguage(gid), pendingGlobalCap, pendingPerGroupCap, gid))
+	v.failAlert(c, bot, gid, v.adminSays(gate).PendingCap.Render(v.groupLanguage(gid), pendingGlobalCap, pendingPerGroupCap, gid))
 }
 
 type challengeDeliveryResult struct {
@@ -1118,7 +1115,7 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	switch status {
 	case pendingBlockedCapacity:
 		log.Printf("join %d in group %d: pending cap reached; left for manual review", uid, gid)
-		v.alertPendingCap(c, bot, gid)
+		v.alertPendingCap(c, bot, gid, gateRequest)
 		return nil
 	case pendingBlockedTerminal:
 		log.Printf("join %d in group %d: terminal action still in flight; deferred re-application", uid, gid)
@@ -1244,7 +1241,7 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		// member blocked here is already inside and would simply stay, unverified. Take them
 		// back out — no strike, they did nothing wrong — so they can return once the queue drains.
 		log.Printf("post-join verify: %d in %d skipped, pending cap reached; removing them until the queue drains", uid, gid)
-		v.alertPendingCap(c, bot, gid)
+		v.alertPendingCap(c, bot, gid, gateMute)
 		if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 			log.Printf("post-join verify: cannot remove %d from %d at capacity: %v", uid, gid, err)
 		}
@@ -1888,32 +1885,36 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 	}
 	switch action {
 	case "pass":
+		gate := v.pendingGate(gid, target)
+		says := v.adminSays(gate)
 		p, ok := v.claimPending(gid, target)
 		if !ok {
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.CannotApprove.For(l)))
+			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(says.CannotApprove.For(l)))
 			return nil
 		}
 		// Acknowledge the pending action; failures reopen the request, tell the group, and alert admins.
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Approving.For(l)))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(says.Approving.For(l)))
 		switch v.executeApprove(c, bot, gid, target, p) {
 		case approveFailed:
-			v.verificationTransport(bot).Notify(c, gid, admin.ActionFailed.For(l), adminActionNoticeTTL)
+			v.verificationTransport(bot).Notify(c, gid, says.ActionFailed.For(l), adminActionNoticeTTL)
 		case approveGone:
 			// Someone settled the request in Telegram itself; do not claim the button did it.
-			v.verificationTransport(bot).Notify(c, gid, admin.AlreadyHandled.For(l), adminActionNoticeTTL)
+			v.verificationTransport(bot).Notify(c, gid, says.AlreadyHandled.For(l), adminActionNoticeTTL)
 		case approveConfirmed:
 		}
 	case "ban":
+		gate := v.pendingGate(gid, target)
+		says := v.adminSays(gate)
 		p, ok := v.consume(gid, target)
 		if !ok {
-			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.AlreadyHandled.For(l)))
+			_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(says.AlreadyHandled.For(l)))
 			return nil
 		}
 		// Acknowledge the pending action; failures retain the request and evidence.
 		duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(gid))
-		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.Banning.Render(l, duration)))
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(says.Banning.Render(l, duration)))
 		if !v.executeBan(c, bot, gid, target, p) {
-			v.verificationTransport(bot).Notify(c, gid, admin.ActionFailed.For(l), adminActionNoticeTTL)
+			v.verificationTransport(bot).Notify(c, gid, says.ActionFailed.For(l), adminActionNoticeTTL)
 		}
 	default:
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
@@ -2194,8 +2195,7 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("approve %d in %d: %v", uid, gid, err)
-			admin := &v.messages.Verification.Admin
-			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.failAlert(c, bot, gid, v.adminSays(p.gate).ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.markPassing(gid, uid, p)
 			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
@@ -2379,6 +2379,40 @@ func (v *Service) pendingGate(gid, uid int64) string {
 	return gateRequest
 }
 
+// adminVoice is the operator-facing wording for one gate. Telling an administrator that a join
+// request is still pending, when the person is standing in the group muted, sends them looking
+// for a queue entry that does not exist.
+type adminVoice struct {
+	Approving           i18n.Text
+	Banning             i18n.Format
+	ApproveFailed       i18n.Format
+	BanFailed           i18n.Format
+	DeclineFailed       i18n.Format
+	ActionFailed        i18n.Text
+	CannotApprove       i18n.Text
+	AlreadyHandled      i18n.Text
+	ChallengePostFailed i18n.Format
+	PendingCap          i18n.Format
+}
+
+func (v *Service) adminSays(gate string) adminVoice {
+	a := &v.messages.Verification.Admin
+	if gate == gateMute {
+		return adminVoice{
+			Approving: a.ApprovingHeld, Banning: a.BanningHeld, ApproveFailed: a.ApproveFailedHeld,
+			BanFailed: a.BanFailedHeld, DeclineFailed: a.DeclineFailedHeld, ActionFailed: a.ActionFailedHeld,
+			CannotApprove: a.CannotApproveHeld, AlreadyHandled: a.AlreadyHandledHeld,
+			ChallengePostFailed: a.ChallengePostFailedHeld, PendingCap: a.PendingCapHeld,
+		}
+	}
+	return adminVoice{
+		Approving: a.Approving, Banning: a.Banning, ApproveFailed: a.ApproveFailed,
+		BanFailed: a.BanFailed, DeclineFailed: a.DeclineFailed, ActionFailed: a.ActionFailed,
+		CannotApprove: a.CannotApprove, AlreadyHandled: a.AlreadyHandled,
+		ChallengePostFailed: a.ChallengePostFailed, PendingCap: a.PendingCap,
+	}
+}
+
 func (v *Service) voice(gate string) outcomeVoice {
 	if gate == gateMute {
 		held := &v.messages.Verification.Held
@@ -2498,8 +2532,7 @@ func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, 
 	if p.held {
 		if err := v.releaseMember(c, bot, gid, uid, p); err != nil {
 			log.Printf("post-join verify: cannot lift the hold on %d in %d: %v", uid, gid, err)
-			admin := &v.messages.Verification.Admin
-			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.failAlert(c, bot, gid, v.adminSays(p.gate).ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.markPassing(gid, uid, p)
 			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
@@ -2558,8 +2591,7 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 		// removal either worked or is worth retrying.
 		if p.gate == gateMute || !tg.JoinRequestGone(err) {
 			log.Printf("decline %d in %d failed: %v", uid, gid, err)
-			admin := &v.messages.Verification.Admin
-			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.failAlert(c, bot, gid, v.adminSays(p.gate).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.stopRetrying(c, bot, gid, uid, p, "decline-retry", err)
 			v.save()
 			return declineUnsettled, false
@@ -2653,8 +2685,7 @@ func (v *Service) banApplicant(c context.Context, bot modBot, gid, uid int64) (h
 func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *pending) bool {
 	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil {
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
-		admin := &v.messages.Verification.Admin
-		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		v.failAlert(c, bot, gid, v.adminSays(p.gate).BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
 		v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 		v.save()
 		return false
@@ -2671,8 +2702,7 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("decline after ban %d in %d: %v", uid, gid, err)
-			admin := &v.messages.Verification.Admin
-			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.failAlert(c, bot, gid, v.adminSays(p.gate).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 			v.save()
 			return false

@@ -562,7 +562,7 @@ func (v *Service) load(bot modBot) {
 		if _, replacing := v.pend[key]; !replacing && !v.pendingCapacityOKLocked(gid) {
 			v.mu.Unlock()
 			log.Printf("state load: pending cap reached; leaving user %d in group %d for manual review", uid, gid)
-			v.alertPendingCap(context.Background(), bot, gid)
+			v.alertPendingCap(context.Background(), bot, gid, r.Gate)
 			continue
 		}
 		v.pend[key] = p
@@ -819,7 +819,7 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	if err != nil {
 		log.Printf("join %d in %d: post challenge failed: %v", uid, gid, err)
-		v.adminAlert(c, bot, admin.ChallengePostFailed.Render(l, gid, uid, err))
+		v.adminAlert(c, bot, v.adminSays(voice.gate).ChallengePostFailed.Render(l, gid, uid, err))
 		return 0
 	}
 	return msgID(sent)
