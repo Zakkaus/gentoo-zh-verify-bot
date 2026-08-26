@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -27,7 +28,7 @@ const (
 	// AnswerCallbackPrefix identifies applicant quiz-answer callbacks.
 	AnswerCallbackPrefix = "v:" // v:<gid>:<uid>:<nonce>:<idx>
 	// AdminCallbackPrefix identifies administrator verification callbacks.
-	AdminCallbackPrefix = "adm:" // adm:<action>:<gid>:<uid>
+	AdminCallbackPrefix = "adm:" // adm:<action>:<gid>:<uid>[:<nonce>]
 	// ChannelRecheckCallbackPrefix identifies required-channel recheck callbacks.
 	ChannelRecheckCallbackPrefix = "ch:" // ch:<gid>:<uid>
 )
@@ -74,6 +75,9 @@ type verifyTransport interface {
 	FailAlert(ctx context.Context, adminLogChatID, groupID int64, text string)
 	Notify(ctx context.Context, chatID int64, text string, ttlSeconds int)
 	Ban(ctx context.Context, chatID, userID int64, seconds int, revokeMessages bool) error
+	Unban(ctx context.Context, chatID, userID int64, onlyIfBanned bool) error
+	Mute(ctx context.Context, chatID, userID int64, seconds int) error
+	Unmute(ctx context.Context, chatID, userID int64) error
 }
 
 // adminTransport is the caller-owned authorization and notice surface used outside moderation.
@@ -88,7 +92,20 @@ type challengeMessages struct {
 	privateMsgID int
 }
 
+// A verification either holds a join request the applicant has not entered on yet, or holds
+// someone who is already inside the group and muted until they pass. The two settle through
+// entirely different Telegram calls, so every pending records which one it is.
+const (
+	gateRequest = ""     // default, and what every pre-existing stored record means
+	gateMute    = "mute" // the applicant is already a member; passing lifts the restriction
+)
+
 type pending struct {
+	gate               string // gateRequest or gateMute
+	invited            bool   // somebody else added this member, so the group notice tells administrators they can vouch
+	held               bool   // a verification mute is actually in place, so passing has something to lift
+	holdUntil          int64  // Unix expiry of the mute this verification placed, so another one is recognisable
+	passing            bool   // the applicant answered correctly; a retry must complete the approval, never decline
 	groupMsgID         int
 	privateMsgID       int
 	challengeDelivered bool
@@ -168,6 +185,11 @@ type pendingRec struct {
 	Deadline           int64    `json:"deadline"`
 	DeferredSince      int64    `json:"deferred_since,omitempty"`
 	DeferralCapReached bool     `json:"deferral_cap_reached,omitempty"`
+	Gate               string   `json:"gate,omitempty"`                // gateMute for a member verified after joining; empty means the join-request gate
+	Invited            bool     `json:"invited,omitempty"`             // the member was added by somebody else
+	Held               bool     `json:"held,omitempty"`                // a verification mute is in place
+	HoldUntil          int64    `json:"hold_until,omitempty"`          // Unix expiry of the mute this verification placed
+	Passing            bool     `json:"passing,omitempty"`             // answered correctly; the settlement retry must approve
 	SettleFailures     int      `json:"settle_failures,omitempty"`     // consecutive unconfirmed settlements; bounds the retry
 	SettlePendingSaid  bool     `json:"settle_pending_said,omitempty"` // the "still being settled" notice was already sent
 }
@@ -211,6 +233,7 @@ type Service struct {
 	lastOnline        time.Time           // last time a heartbeat confirmed the bot can reach Telegram (guarded by mu); seeded to start time so we begin "online"
 	hbPath            string              // persistence path for the online heartbeat, so a restart can estimate how long the bot was down
 	probe             liveProbe           // liveness prober (the bot) for reachable(); nil in tests => assume reachable
+	passed            map[pkey]time.Time  // group+user -> recent verification pass, so the bot's own approval is not re-challenged (guarded by mu)
 	timeNow           func() time.Time
 }
 
@@ -374,9 +397,77 @@ func (v *Service) DeliveryMode(groupID int64) string {
 
 // SetEnabled updates automated join verification for one group.
 func (v *Service) SetEnabled(groupID int64, enabled bool) error {
-	return v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
+	if err := v.updateGroupSettings(groupID, func(_ store.GroupView, overrides *store.GroupOverrides) {
 		overrides.Enabled = &enabled
-	})
+	}); err != nil {
+		return err
+	}
+	if !enabled {
+		// Verifications already running would otherwise keep their timers and settle after the
+		// administrator turned verification off: applicants declined, members removed, failures
+		// recorded, all for a rule that no longer applies.
+		v.cancelGroupVerifications(groupID)
+	}
+	return nil
+}
+
+// cancelGroupVerifications abandons every verification in one group without settling or striking
+// it, and lifts the holds it placed. Nobody is punished for a rule that was withdrawn.
+func (v *Service) cancelGroupVerifications(groupID int64) {
+	type releaseTarget struct {
+		uid      int64
+		messages challengeMessages
+		held     bool
+	}
+	var targets []releaseTarget
+	v.mu.Lock()
+	for key, p := range v.pend {
+		if key.gid != groupID || p == nil {
+			continue
+		}
+		p.removed = true
+		p.done = true
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+		targets = append(targets, releaseTarget{uid: key.uid, messages: p.messages(), held: p.gate == gateMute && p.held})
+		delete(v.pend, key)
+	}
+	v.mu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
+	bot := v.handlerBot()
+	if bot == nil {
+		log.Printf("verification disabled for %d: cancelled %d verification(s); no Telegram handle to clean up with", groupID, len(targets))
+		v.save()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cancelCleanupTimeout)
+	defer cancel()
+	for _, target := range targets {
+		v.deleteChallenges(ctx, bot, groupID, target.uid, target.messages)
+		if target.held {
+			if err := v.releaseMember(ctx, bot, groupID, target.uid, nil); err != nil {
+				log.Printf("verification disabled for %d: could not lift the hold on %d: %v", groupID, target.uid, err)
+			}
+		}
+	}
+	log.Printf("verification disabled for %d: cancelled %d verification(s) without settling them", groupID, len(targets))
+	v.save()
+}
+
+// cancelCleanupTimeout bounds the cleanup that follows switching verification off.
+const cancelCleanupTimeout = 30 * time.Second
+
+// handlerBot returns the concrete bot the handlers run with, or nil before one is known.
+func (v *Service) handlerBot() modBot {
+	v.tgMu.Lock()
+	defer v.tgMu.Unlock()
+	if v.telegramBot == nil {
+		return nil
+	}
+	return v.telegramBot
 }
 
 // RemoveGroup cancels every verification owned by an unregistered group without settling or striking it.
@@ -448,11 +539,65 @@ func (v *Service) ToggleNameSpoiler(groupID int64) (bool, error) {
 	return enabled, err
 }
 func (v *Service) timeout(groupID int64) time.Duration {
+	return v.gateTimeout(groupID, gateRequest)
+}
+
+// livePending returns the unfinished verification for this exact group and member, if any.
+func (v *Service) livePending(gid, uid int64) (*pending, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	if !ok || p.done {
+		return nil, false
+	}
+	return p, true
+}
+
+// removeDuringCooldown takes a member out again without starting a verification they are not yet
+// allowed to attempt. The notice is throttled: a rejoin loop must not become a direct-message
+// loop, and the removal alone already conveys the answer.
+func (v *Service) removeDuringCooldown(c context.Context, bot modBot, gid, uid int64, l i18n.Lang, wait time.Duration) {
+	if _, err := v.removeMember(c, bot, gid, uid); err != nil {
+		log.Printf("post-join verify: cannot remove %d from %d during cooldown: %v", uid, gid, err)
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		return
+	}
+	log.Printf("post-join verify: %d rejoined %d during the failure cooldown (%s left); removed again", uid, gid, wait.Round(time.Second))
+	if !v.challengeResendOK(gid, uid) {
+		return
+	}
+	text := v.messages.Verification.Held.CooldownActive.Render(l, durationSecondsCeil(wait))
+	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
+}
+
+// verifyInvited reports whether a member somebody else added still has to verify here.
+func (v *Service) verifyInvited(groupID int64) bool {
+	group, ok := v.groupSettings(groupID)
+	if !ok {
+		return v.cfg.VerifyInvitedMembers()
+	}
+	return group.VerifyInvited().Value
+}
+
+// postJoinTimeout is the default window for someone verified after joining. An applicant waiting
+// outside is watching for the challenge; a member who is already in the group may not notice it
+// for a while, and the hold keeps them harmless in the meantime, so they get longer.
+const postJoinTimeout = 10 * time.Minute
+
+// gateTimeout returns the verification window. timeout_seconds describes how long an applicant
+// waits outside, so the post-join window keeps its own longer default; an administrator who sets
+// the timeout in the panel is making a deliberate choice and it applies to both.
+func (v *Service) gateTimeout(groupID int64, gate string) time.Duration {
 	group, ok := v.groupSettings(groupID)
 	if !ok {
 		return 0
 	}
-	duration, ok := config.SecondsToDuration(group.TimeoutSeconds().Value)
+	setting := group.TimeoutSeconds()
+	if gate == gateMute && setting.Source != store.SourceRuntime {
+		return postJoinTimeout
+	}
+	duration, ok := config.SecondsToDuration(setting.Value)
 	if !ok {
 		return 0
 	}
@@ -486,6 +631,105 @@ func verificationBanDurationText(messages *i18n.Catalog, l i18n.Lang, seconds in
 
 func (v *Service) applyVerificationBan(ctx context.Context, bot verifyBot, groupID, userID int64, seconds int, revoke bool) error {
 	return v.verificationTransport(bot).Ban(ctx, groupID, userID, seconds, revoke)
+}
+
+// holdMember mutes a member for the whole verification window. Telegram only restricts members
+// of supergroups, so a basic group cannot hold anyone: the challenge still runs, and failing it
+// still removes them, but they can speak in the meantime.
+func (v *Service) holdMember(ctx context.Context, bot verifyBot, groupID, userID int64, supergroup bool, p *pending) {
+	if !supergroup {
+		return
+	}
+	seconds := int(v.gateTimeout(groupID, gateMute)/time.Second) + muteGraceSeconds
+	until := v.wallNow().Add(time.Duration(seconds) * time.Second).Unix()
+	if err := v.verificationTransport(bot).Mute(ctx, groupID, userID, seconds); err != nil {
+		log.Printf("post-join verify: cannot mute %d in %d (%v); the challenge continues unheld", userID, groupID, err)
+		return
+	}
+	if p == nil {
+		return
+	}
+	v.mu.Lock()
+	p.held = true
+	p.holdUntil = until
+	v.mu.Unlock()
+}
+
+// muteGraceSeconds keeps the hold slightly longer than the window so a mute cannot expire in the
+// instant between the deadline and the settlement that acts on it.
+const muteGraceSeconds = 60
+
+// releaseMember lifts the verification hold by restoring the group's own default permissions.
+// Restoring defaults would also lift a restriction somebody else added, so the hold is only
+// lifted while the one in force is still the one this verification placed.
+func (v *Service) releaseMember(ctx context.Context, bot modBot, groupID, userID int64, p *pending) error {
+	if p != nil && !v.holdStillOurs(ctx, bot, groupID, userID, p) {
+		log.Printf("post-join verify: the restriction on %d in %d is no longer the one verification placed; leaving it", userID, groupID)
+		return nil
+	}
+	return v.verificationTransport(bot).Unmute(ctx, groupID, userID)
+}
+
+// holdStillOurs reports that the restriction Telegram currently reports is the verification hold.
+// An unreadable answer counts as ours: failing to release would silence somebody indefinitely,
+// which is worse than lifting a restriction an administrator can simply re-apply.
+func (v *Service) holdStillOurs(ctx context.Context, bot modBot, groupID, userID int64, p *pending) bool {
+	v.mu.Lock()
+	until := p.holdUntil
+	v.mu.Unlock()
+	if until == 0 {
+		return true // placed before this was recorded, or by an older build
+	}
+	cm, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(groupID), UserID: userID})
+	if err != nil || cm == nil {
+		return true
+	}
+	restricted, ok := cm.(*telego.ChatMemberRestricted)
+	if !ok {
+		return true // not restricted any more, or restricted in a shape we cannot compare
+	}
+	return restricted.UntilDate == until
+}
+
+// removeMember takes a failed applicant out of the group without keeping them out: banning and
+// immediately unbanning removes them while leaving the invite link usable.
+//
+// The unban is the dangerous half. An administrator who banned this person moments ago would
+// find their ban quietly lifted, so anyone Telegram already reports as banned or gone is left
+// exactly as they are: whoever put them there outranks this settlement.
+// It reports whether the member was left banned, which happens when the ban lands but the unban
+// that follows it does not.
+func (v *Service) removeMember(ctx context.Context, bot modBot, groupID, userID int64) (stillBanned bool, err error) {
+	if settled, known := v.alreadyOut(ctx, bot, groupID, userID); known && settled {
+		log.Printf("post-join verify: %d is already out of %d; leaving that decision alone", userID, groupID)
+		return false, nil
+	}
+	transport := v.verificationTransport(bot)
+	if err := transport.Ban(ctx, groupID, userID, 0, false); err != nil {
+		return false, err
+	}
+	if err := transport.Unban(ctx, groupID, userID, true); err != nil {
+		// The removal worked, but they are still banned. Telling them to come back would be
+		// false, so the caller is told to word it as a ban and operators are told to lift it.
+		log.Printf("post-join verify: removed %d from %d but could not lift the ban: %v", userID, groupID, err)
+		return true, nil
+	}
+	return false, nil
+}
+
+// alreadyOut reports that somebody is banned or has left. known=false means the answer could not
+// be read, and the caller proceeds rather than guessing.
+func (v *Service) alreadyOut(ctx context.Context, bot modBot, groupID, userID int64) (out, known bool) {
+	cm, err := bot.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: tu.ID(groupID), UserID: userID})
+	if err != nil || cm == nil {
+		return false, false
+	}
+	switch cm.MemberStatus() {
+	case telego.MemberStatusBanned, telego.MemberStatusLeft:
+		return true, true
+	default:
+		return false, true
+	}
 }
 
 // RequiredChannelID returns the channel applicants must join for one group.
@@ -589,6 +833,20 @@ func (v *Service) isChatMember(c context.Context, bot modBot, chatID, uid int64)
 // Confirmed members of trusted chats bypass verification and cooldowns.
 // Lookup failure is untrusted and follows normal verification.
 // Approval failure returns trusted=true so normal verification runs without cooldown rejection.
+// trustedMember reports confirmed membership of any group this one trusts. An unreadable lookup
+// is not trust, so verification proceeds.
+func (v *Service) trustedMember(c context.Context, bot modBot, gid, uid int64) bool {
+	for _, src := range v.trustedGroups(gid) {
+		if src == 0 || src == gid {
+			continue
+		}
+		if v.isChatMember(c, bot, src, uid) {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *Service) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64) (handled, trusted bool) {
 	for _, src := range v.trustedGroups(gid) {
 		if src == 0 || src == gid {
@@ -611,6 +869,7 @@ func (v *Service) tryTrustedBypass(c context.Context, bot modBot, gid, uid int64
 		}
 		v.clearVerifyFails(gid, uid) // a now-trusted member starts with a clean slate
 		v.recordDecision(true)
+		v.notePassed(gid, uid)
 		log.Printf("verify: trusted-bypass auto-approved %d in %d (already a member of trusted group %d)", uid, gid, src)
 		return true, true
 	}
@@ -640,8 +899,12 @@ func (v *Service) joinGate(c context.Context, bot modBot, gid, uid int64, applic
 			return true
 		}
 		seconds := durationSecondsCeil(v.verifyCooldownRemaining(gid, uid))
-		_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.messages.Verification.Result.CooldownActive.Render(applicantLang, seconds)))
 		log.Printf("verify cooldown: declined early re-apply from %d in %d (%ds left)", uid, gid, seconds)
+		// The decline is the answer; repeating the explanation on every re-apply would turn a
+		// determined applicant into a direct-message loop. Same throttle the post-join gate uses.
+		if v.challengeResendOK(gid, uid) {
+			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.messages.Verification.Result.CooldownActive.Render(applicantLang, seconds)))
+		}
 		return true
 	}
 	return false
@@ -672,11 +935,11 @@ func challengeExpiryReason(delivered bool) string {
 // Delivery has its own no-fault deadline; the applicant's answer window starts only after confirmation.
 const pendingDeliveryTimeout = 60 * time.Second
 
-func (v *Service) expiryDelay(gid int64, reason string) time.Duration {
+func (v *Service) expiryDelay(gid int64, gate, reason string) time.Duration {
 	if reason == challengeExpiryReason(false) {
 		return pendingDeliveryTimeout
 	}
-	return v.timeout(gid)
+	return v.gateTimeout(gid, gate)
 }
 
 // Reserve capacity before delivery; only a confirmed challenge may install a striking timeout.
@@ -727,7 +990,7 @@ func (v *Service) finishPendingChallenge(
 	p.groupMsgID = messages.groupMsgID
 	p.privateMsgID = messages.privateMsgID
 	p.challengeDelivered = delivered
-	delay := v.timeout(gid)
+	delay := v.gateTimeout(gid, p.gate)
 	p.deadline = v.wallNow().Add(delay)
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(delivered))
 	return true
@@ -756,6 +1019,23 @@ type challengeDeliveryResult struct {
 }
 
 // deliverPendingChallenge is the single delivery-mode decision for initial and recovery challenges.
+// gateOf reads the gate of the pending a delivery belongs to; a delivery with no owner follows
+// the join-request wording, which is what a user-triggered resend of a request challenge wants.
+func gateOf(owner *pending) challengeVoice {
+	if owner == nil {
+		return challengeVoice{gate: gateRequest}
+	}
+	return challengeVoice{gate: owner.gate, invited: owner.invited, nonce: owner.nonce}
+}
+
+// challengeVoice selects the public challenge wording: applying, arriving on their own, or
+// being brought in by somebody who can vouch for them.
+type challengeVoice struct {
+	gate    string
+	invited bool
+	nonce   string
+}
+
 func (v *Service) deliverPendingChallenge(
 	c context.Context,
 	bot modBot,
@@ -767,10 +1047,10 @@ func (v *Service) deliverPendingChallenge(
 	groupLang := v.groupLanguage(gid)
 	switch result.modeLabel {
 	case config.DeliveryGroup:
-		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, gateOf(owner))
 		result.delivered = result.messages.groupMsgID != 0
 	case config.DeliveryBoth:
-		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, gateOf(owner))
 		result.delivered = result.messages.groupMsgID != 0
 		outcome := v.attemptPrivateChallenge(c, bot, gid, uid, owner)
 		result.messages.privateMsgID = outcome.privateMsgID
@@ -797,7 +1077,7 @@ func (v *Service) deliverPendingChallenge(
 			result.modeLabel = "private"
 		case privateRejected:
 			result.modeLabel = "group-fallback"
-			result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang)
+			result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, gateOf(owner))
 			result.delivered = result.messages.groupMsgID != 0
 		case privateUncertain:
 			result.modeLabel = "private-uncertain"
@@ -860,6 +1140,155 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 	log.Printf("join %d (@%s) in group %d: pending (%s challenge), delivery=%s, group message=%d, private message=%d",
 		uid, jr.From.Username, gid, mode, delivery.modeLabel, delivery.messages.groupMsgID, delivery.messages.privateMsgID)
 	return nil
+}
+
+// recentPassWindow suppresses a second verification for someone the bot itself just let in:
+// approving a join request produces a membership update that would otherwise read as a fresh
+// arrival needing a challenge.
+const recentPassWindow = 5 * time.Minute
+
+func (v *Service) notePassed(gid, uid int64) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.passed == nil {
+		v.passed = make(map[pkey]time.Time)
+	}
+	now := v.wallNow()
+	for key, at := range v.passed {
+		if now.Sub(at) > recentPassWindow {
+			delete(v.passed, key)
+		}
+	}
+	v.passed[pkey{gid, uid}] = now
+}
+
+func (v *Service) recentlyPassed(gid, uid int64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	at, ok := v.passed[pkey{gid, uid}]
+	return ok && v.wallNow().Sub(at) <= recentPassWindow
+}
+
+// OnMemberJoined verifies someone who is already inside a guarded group. Groups that ask people
+// to apply never reach this for their applicants — the bot's own approval is remembered — but a
+// group without join approval, and anyone an administrator adds directly, both arrive here.
+func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
+	member := update.ChatMember
+	if member == nil || !joinedNow(member) {
+		return nil
+	}
+	gid := member.Chat.ID
+	user := member.NewChatMember.MemberUser()
+	uid := user.ID
+	if !v.settings.IsGroup(gid) || !v.IsEnabled(gid) || user.IsBot || uid == v.botID {
+		return nil
+	}
+	if v.recentlyPassed(gid, uid) {
+		return nil // the bot let them in a moment ago; that was the verification
+	}
+	bot := ctx.Bot()
+	c := ctx.Context()
+	applicantLang := i18n.FromTelegram(user.LanguageCode)
+	if v.trustedMember(c, bot, gid, uid) {
+		// Someone already inside the group needs no admitting: trusting them simply means not
+		// asking. Calling approve here would fail — there is no join request — and the failure
+		// would quietly put a trusted member through the challenge anyway.
+		v.clearVerifyFails(gid, uid)
+		v.recordDecision(true)
+		v.notePassed(gid, uid)
+		log.Printf("post-join verify: %d in %d is a member of a trusted group; not challenged", uid, gid)
+		return nil
+	}
+	if v.isGroupAdmin(c, bot, gid, uid) {
+		return nil // administrators are not challenged in their own group
+	}
+	invited := member.From.ID != uid
+	if invited && !v.verifyInvited(gid) {
+		log.Printf("post-join verify: %d was invited into %d and invited members are exempt here", uid, gid)
+		return nil
+	}
+	// A member already being verified must not be re-challenged by a second arrival: rejoining
+	// would otherwise post a fresh notice and question every time. Re-apply the hold, since
+	// leaving the group clears it, and leave the running deadline alone so nobody can extend
+	// their own window by walking in and out.
+	if live, ok := v.livePending(gid, uid); ok {
+		// A verification started while they were outside settles by declining a join request.
+		// They are inside now, so that call would settle nothing and the member would simply
+		// stay, unverified, forever. Move the running verification onto the gate that can
+		// actually end it, keeping the progress they have made.
+		v.adoptAsHeld(gid, uid, live)
+		v.holdMember(c, bot, gid, uid, member.Chat.Type == telego.ChatTypeSupergroup, live)
+		v.save()
+		log.Printf("post-join verify: %d entered %d while still being verified; kept the running challenge", uid, gid)
+		return nil
+	}
+	// The bot tells a removed member how long to wait. Honour it, or that promise means nothing
+	// and every rejoin costs a fresh notice and question. Somebody an administrator just added is
+	// exempt: removing them seconds later would be the bot overruling the person who added them.
+	// They still verify — being vouched for is not verification — they are just not thrown out
+	// over an earlier failure.
+	if wait := v.verifyCooldownRemaining(gid, uid); wait > 0 && !invited {
+		v.removeDuringCooldown(c, bot, gid, uid, applicantLang, wait)
+		return nil
+	}
+	supergroup := member.Chat.Type == telego.ChatTypeSupergroup
+	mode, text, opts, correctIdx := v.newChallenge(gid, applicantLang)
+	name := applicantDisplayName(&user)
+	p := &pending{gate: gateMute, invited: invited, mode: mode, lang: applicantLang,
+		qText: text, qOpts: opts, correctIdx: correctIdx, nonce: newNonce(), name: name}
+	oldMessages, status := v.startPending(bot, gid, uid, p)
+	switch status {
+	case pendingBlockedCapacity:
+		// An applicant blocked here waits outside and an administrator can still admit them. A
+		// member blocked here is already inside and would simply stay, unverified. Take them
+		// back out — no strike, they did nothing wrong — so they can return once the queue drains.
+		log.Printf("post-join verify: %d in %d skipped, pending cap reached; removing them until the queue drains", uid, gid)
+		v.alertPendingCap(c, bot, gid)
+		if _, err := v.removeMember(c, bot, gid, uid); err != nil {
+			log.Printf("post-join verify: cannot remove %d from %d at capacity: %v", uid, gid, err)
+		}
+		return nil
+	case pendingBlockedTerminal:
+		log.Printf("post-join verify: %d in %d skipped, terminal action still in flight", uid, gid)
+		return nil
+	}
+	v.deleteChallenges(c, bot, gid, uid, oldMessages)
+	v.holdMember(c, bot, gid, uid, supergroup, p)
+
+	delivery := v.deliverPendingChallenge(c, bot, gid, uid, name, p)
+	if !delivery.active {
+		return nil
+	}
+	if delivery.replacedPrivateMsgID != 0 {
+		v.deleteChallenge(c, bot, uid, delivery.replacedPrivateMsgID)
+	}
+	if !v.finishPendingChallenge(bot, gid, uid, p, delivery.messages, delivery.delivered) {
+		v.deleteChallenges(c, bot, gid, uid, delivery.messages)
+		return nil
+	}
+	v.save()
+	log.Printf("post-join verify: %d (@%s) joined %d: pending (%s challenge), held=%v, delivery=%s",
+		uid, user.Username, gid, mode, supergroup, delivery.modeLabel)
+	return nil
+}
+
+// joinedNow reports a membership update where someone who was outside the group is now an
+// ordinary member. Promotions, demotions and departures are not arrivals.
+func joinedNow(member *telego.ChatMemberUpdated) bool {
+	if member.NewChatMember == nil || member.OldChatMember == nil {
+		return false
+	}
+	if member.NewChatMember.MemberStatus() != telego.MemberStatusMember {
+		return false
+	}
+	switch member.OldChatMember.MemberStatus() {
+	case telego.MemberStatusLeft, telego.MemberStatusBanned:
+		return true
+	case telego.MemberStatusRestricted:
+		return !member.OldChatMember.MemberIsMember()
+	default:
+		return false
+	}
 }
 
 func (v *Service) hasPending(uid int64) bool {
@@ -1002,7 +1431,7 @@ func (v *Service) completeDMDelivery(
 				if p.timer != nil {
 					p.timer.Stop()
 				}
-				delay := v.timeout(prompt.gid)
+				delay := v.gateTimeout(prompt.gid, prompt.pending.gate)
 				p.deadline = v.wallNow().Add(delay)
 				v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 			}
@@ -1030,7 +1459,7 @@ func (v *Service) completeDMDelivery(
 		if p.timer != nil {
 			p.timer.Stop()
 		}
-		delay := v.timeout(prompt.gid)
+		delay := v.gateTimeout(prompt.gid, prompt.pending.gate)
 		p.deadline = v.wallNow().Add(delay)
 		v.armExpiry(bot, p, prompt.gid, uid, delay, challengeExpiryReason(true))
 	}
@@ -1078,9 +1507,10 @@ func (v *Service) sendDMQuestionRetainingPrevious(
 		if prompt.fallback {
 			render = fallbackPromptHTML
 		}
+		gate := gateOf(prompt.pending).gate
 		sent, err = v.sendVerifyDM(c, bot, uid,
-			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, true),
-			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, false))
+			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, true, gate),
+			render(v.messages, prompt.lang, prompt.text, left, prompt.nonce, false, gate))
 	} else {
 		gidStr, uidStr := strconv.FormatInt(prompt.gid, 10), strconv.FormatInt(uid, 10)
 		rows := make([][]telego.InlineKeyboardButton, 0, len(prompt.opts))
@@ -1195,7 +1625,7 @@ func (v *Service) attemptPrivateChallenge(c context.Context, bot modBot, gid, ui
 		// Waiting out a flood limit is only worth it if the applicant's own window outlives the
 		// wait. Sleeping past their deadline means they are declined before the question ever
 		// arrives; falling through instead lets the group challenge carry the verification.
-		if wait > 0 && wait < v.timeout(gid) && wait+rateLimitSendMargin <= v.deliveryBudget(gid, uid, owner) {
+		if wait > 0 && wait < v.gateTimeout(gid, gateOf(owner).gate) && wait+rateLimitSendMargin <= v.deliveryBudget(gid, uid, owner) {
 			log.Printf("join %d in %d: private challenge rate-limited; retrying after %s", uid, gid, wait)
 			if !tg.Pace(c, wait) {
 				return privateDeliveryOutcome{result: privateUncertain}
@@ -1379,10 +1809,11 @@ func (v *Service) OnAnswer(ctx *th.Context, update telego.Update) error {
 	}
 
 	if choice != correctIdx {
+		gate := v.pendingGate(gid, owner)
 		outcome, banned := v.decline(c, bot, gid, owner, nonce, wrongAnswerReason)
-		text := result.AlreadyHandled.For(ul)
+		text := v.voice(gate).AlreadyHandled.For(ul)
 		if outcome != declineNoPending {
-			text = v.declineResultText(outcome, ul, func() string { return v.wrongAnswerText(gid, ul, banned) })
+			text = v.declineResultText(outcome, ul, gate, func() string { return v.wrongAnswerText(gid, ul, gate, banned) })
 		}
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(text).WithShowAlert())
 		return nil
@@ -1394,7 +1825,7 @@ func (v *Service) OnAnswer(ctx *th.Context, update telego.Update) error {
 	}
 	p, claimed := v.claimPendingNonce(gid, owner, nonce)
 	if claimed && v.executeApprove(c, bot, gid, owner, p) == approveConfirmed {
-		text := result.Approved.For(ul)
+		text := v.voice(v.pendingGate(gid, owner)).Passed.For(ul)
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(text))
 		_, _ = bot.SendMessage(c, tu.Message(tu.ID(owner), text))
 	} else {
@@ -1424,17 +1855,29 @@ func (v *Service) OnAdminAction(ctx *th.Context, update telego.Update) error {
 	}
 	bot := ctx.Bot()
 	c := ctx.Context()
-	parts := strings.SplitN(strings.TrimPrefix(cq.Data, AdminCallbackPrefix), ":", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(strings.TrimPrefix(cq.Data, AdminCallbackPrefix), ":", 4)
+	if len(parts) < 3 {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID))
 		return nil
 	}
 	action := parts[0]
 	gid, _ := strconv.ParseInt(parts[1], 10, 64)
 	target, _ := strconv.ParseInt(parts[2], 10, 64)
+	// The nonce ties the button to the verification it was posted for. A button left behind by a
+	// failed deletion would otherwise settle whatever verification is running now — one the
+	// administrator never looked at. Buttons posted before this existed carry no nonce and keep
+	// the old behaviour; they disappear with the verification they belong to.
+	nonce := ""
+	if len(parts) == 4 {
+		nonce = parts[3]
+	}
 
 	l := v.groupLanguage(gid)
 	admin := &v.messages.Verification.Admin
+	if nonce != "" && !v.pendingHasNonce(gid, target, nonce) {
+		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.AlreadyHandled.For(l)).WithShowAlert())
+		return nil
+	}
 	if !v.isGroupAdmin(c, bot, gid, cq.From.ID) {
 		_ = bot.AnswerCallbackQuery(c, tu.CallbackQuery(cq.ID).WithText(admin.OnlyGroupAdmin.For(l)).WithShowAlert())
 		return nil
@@ -1741,12 +2184,16 @@ const (
 
 // Failed approval reopens the claimed pending instead of stranding the applicant.
 func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, p *pending) approveOutcome {
+	if p.gate == gateMute {
+		return v.executeRelease(c, bot, gid, uid, p)
+	}
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("approve %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.stopRetrying(bot, gid, uid, p, "approve-retry", err)
+			v.markPassing(gid, uid, p)
+			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
 		}
 		// An administrator settled this request in Telegram's own interface. The same error
@@ -1754,6 +2201,9 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 		// group rather than announcing an outcome the bot did not produce.
 		log.Printf("approve %d in %d: join request is already gone: %v", uid, gid, err)
 		member, known := v.chatMemberState(c, bot, gid, uid)
+		if known && member {
+			v.notePassed(gid, uid) // before the terminal marker goes, as in the confirmed path
+		}
 		v.finishTerminal(gid, uid, p)
 		v.deleteChallenges(c, bot, gid, uid, p.messages())
 		if known && member {
@@ -1765,6 +2215,11 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 		v.save()
 		return approveGone
 	}
+	// Record the pass before the terminal marker is released. Approving produces a membership
+	// update of its own, and it can be handled while the calls below are still in flight; until
+	// the marker goes the terminal claim blocks a second verification, and from then on this
+	// record does. Leaving a gap between them re-challenges the person just admitted.
+	v.notePassed(gid, uid)
 	v.mu.Lock()
 	key := pkey{gid, uid}
 	if cur, ok := v.pend[key]; ok && cur == p {
@@ -1791,19 +2246,52 @@ func giveUpSettling(err error) bool { return tg.GroupUnreachable(err) }
 
 // stopRetrying reopens a failed settlement for another attempt, unless the error proves no
 // attempt can succeed — then the budget is spent immediately rather than a minute at a time.
-func (v *Service) stopRetrying(bot modBot, gid, uid int64, p *pending, reason string, err error) {
+func (v *Service) stopRetrying(c context.Context, bot modBot, gid, uid int64, p *pending, reason string, err error) {
 	if giveUpSettling(err) {
-		v.abandonSettlement(gid, uid, p, reason, err)
+		v.abandonSettlement(c, bot, gid, uid, p, reason, err)
 		return
 	}
-	v.reopenPending(bot, gid, uid, p, reason)
+	if !v.reopenPending(bot, gid, uid, p, reason) {
+		v.releaseAbandonedHold(c, bot, gid, uid, p)
+	}
+}
+
+// releaseAbandonedHold lifts a verification mute the bot has stopped trying to settle. Dropping
+// the verification must not leave somebody silenced with nothing left to lift it; the restriction
+// carries its own expiry, so a failure here only delays them.
+func (v *Service) releaseAbandonedHold(c context.Context, bot modBot, gid, uid int64, p *pending) {
+	if p.gate != gateMute || !p.held {
+		return
+	}
+	if err := v.releaseMember(c, bot, gid, uid, p); err != nil {
+		log.Printf("post-join verify: gave up on %d in %d and could not lift the hold: %v", uid, gid, err)
+	}
+}
+
+// adoptAsHeld moves a verification that began outside the group onto the gate that can settle it
+// now that the applicant is inside. Their progress is untouched: same question, same attempts,
+// same deadline.
+func (v *Service) adoptAsHeld(gid, uid int64, p *pending) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p && p.gate != gateMute {
+		log.Printf("post-join verify: %d in %d entered the group mid-verification; settling as a member from here", uid, gid)
+		p.gate = gateMute
+	}
 }
 
 // abandonSettlement drops a pending the bot can never settle. The join request stays with
 // Telegram for an administrator, so abandoning it admits nobody.
-func (v *Service) abandonSettlement(gid, uid int64, p *pending, reason string, err error) {
+func (v *Service) abandonSettlement(c context.Context, bot modBot, gid, uid int64, p *pending, reason string, err error) {
 	log.Printf("WARNING: cannot settle verification for %d in %d (%s): %v; "+
 		"the join request stays with Telegram for an administrator", uid, gid, reason, err)
+	if p.gate == gateMute && p.held {
+		// Dropping the verification must not leave somebody silenced with nothing left to lift
+		// it. The restriction carries its own expiry, so a failure here only delays them.
+		if releaseErr := v.releaseMember(c, bot, gid, uid, p); releaseErr != nil {
+			log.Printf("post-join verify: giving up on %d in %d but could not lift the hold: %v", uid, gid, releaseErr)
+		}
+	}
 	v.discardPending(gid, uid, p)
 	v.save()
 }
@@ -1840,31 +2328,99 @@ func (v *Service) reopenPending(bot modBot, gid, uid int64, p *pending, reason s
 }
 
 // Wrong-answer feedback distinguishes automatic ban from cooldown retry.
-func (v *Service) wrongAnswerText(groupID int64, l i18n.Lang, banned bool) string {
-	result := &v.messages.Verification.Result
-	if banned {
-		return v.bannedResultText(groupID, l)
-	}
-	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
-		return result.WrongRetry.Render(l, seconds)
-	}
-	return result.WrongNoWait.For(l)
+// outcomeVoice is the applicant-facing wording for one gate. Passing a join request and lifting a
+// hold are different events, and saying "your join request was declined" to somebody who is
+// standing in the group is simply false.
+type outcomeVoice struct {
+	Passed          i18n.Text
+	AlreadyHandled  i18n.Text
+	SettlePending   i18n.Text
+	DeferralExpired i18n.Text
+	Undelivered     i18n.Text
+	WrongNoWait     i18n.Text
+	WrongRetry      i18n.Format
+	WrongBanned     i18n.Format
+	TimeoutNoWait   i18n.Text
+	TimeoutRetry    i18n.Format
+	TimeoutBanned   i18n.Format
+	AICaught        i18n.Format
+	AICaughtNoWait  i18n.Text
 }
 
-func (v *Service) agentCaughtText(groupID int64, l i18n.Lang, banned bool) string {
-	result := &v.messages.Verification.Result
-	if banned {
-		return v.bannedResultText(groupID, l)
+// markPassing records that the applicant already earned admission, so a settlement retry
+// completes the approval instead of falling into the generic timeout path, which declines.
+func (v *Service) markPassing(gid, uid int64, p *pending) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.pend[pkey{gid, uid}]; ok && cur == p {
+		p.passing = true
 	}
-	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
-		return result.AICaught.Render(l, seconds)
-	}
-	return result.AICaughtNoWait.For(l)
 }
 
-func (v *Service) bannedResultText(groupID int64, l i18n.Lang) string {
+// pendingHasNonce reports that the live verification is the one a button was posted for.
+func (v *Service) pendingHasNonce(gid, uid int64, nonce string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.pend[pkey{gid, uid}]
+	return ok && !p.done && p.nonce == nonce
+}
+
+// pendingGate reads the gate of a live pending; a missing one reads as the join-request gate.
+func (v *Service) pendingGate(gid, uid int64) string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if p, ok := v.pend[pkey{gid, uid}]; ok {
+		return p.gate
+	}
+	return gateRequest
+}
+
+func (v *Service) voice(gate string) outcomeVoice {
+	if gate == gateMute {
+		held := &v.messages.Verification.Held
+		return outcomeVoice{
+			Passed: held.Passed, AlreadyHandled: held.AlreadyHandled, SettlePending: held.SettlePending,
+			DeferralExpired: held.DeferralExpired, Undelivered: held.Undelivered,
+			WrongNoWait: held.WrongNoWait, WrongRetry: held.WrongRetry, WrongBanned: held.WrongBanned,
+			TimeoutNoWait: held.TimeoutNoWait, TimeoutRetry: held.TimeoutRetry, TimeoutBanned: held.TimeoutBanned,
+			AICaught: held.AICaught, AICaughtNoWait: held.AICaughtNoWait,
+		}
+	}
+	result := &v.messages.Verification.Result
+	return outcomeVoice{
+		Passed: result.Approved, AlreadyHandled: result.AlreadyHandled, SettlePending: result.DeclinePending,
+		DeferralExpired: result.DeferralExpired, Undelivered: result.Undelivered,
+		WrongNoWait: result.WrongNoWait, WrongRetry: result.WrongRetry, WrongBanned: result.WrongBanned,
+		TimeoutNoWait: result.TimeoutNoWait, TimeoutRetry: result.TimeoutRetry, TimeoutBanned: result.TimeoutBanned,
+		AICaught: result.AICaught, AICaughtNoWait: result.AICaughtNoWait,
+	}
+}
+
+func (v *Service) wrongAnswerText(groupID int64, l i18n.Lang, gate string, banned bool) string {
+	voice := v.voice(gate)
+	if banned {
+		return v.bannedResultText(groupID, l, gate)
+	}
+	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
+		return voice.WrongRetry.Render(l, seconds)
+	}
+	return voice.WrongNoWait.For(l)
+}
+
+func (v *Service) agentCaughtText(groupID int64, l i18n.Lang, gate string, banned bool) string {
+	voice := v.voice(gate)
+	if banned {
+		return v.bannedResultText(groupID, l, gate)
+	}
+	if seconds := v.verifyRetrySeconds(groupID); seconds > 0 {
+		return voice.AICaught.Render(l, seconds)
+	}
+	return voice.AICaughtNoWait.For(l)
+}
+
+func (v *Service) bannedResultText(groupID int64, l i18n.Lang, gate string) string {
 	duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(groupID))
-	return v.messages.Verification.Result.WrongBanned.Render(l, duration)
+	return v.voice(gate).WrongBanned.Render(l, duration)
 }
 
 func durationSecondsCeil(wait time.Duration) int {
@@ -1874,16 +2430,16 @@ func durationSecondsCeil(wait time.Duration) int {
 	return int((wait + time.Second - 1) / time.Second)
 }
 
-func (v *Service) timeoutResultText(groupID, userID int64, l i18n.Lang, banned bool) string {
-	result := &v.messages.Verification.Result
+func (v *Service) timeoutResultText(groupID, userID int64, l i18n.Lang, gate string, banned bool) string {
+	voice := v.voice(gate)
 	if banned {
 		duration := verificationBanDurationText(v.messages, l, v.verificationBanDuration(groupID))
-		return result.TimeoutBanned.Render(l, duration)
+		return voice.TimeoutBanned.Render(l, duration)
 	}
 	if seconds := durationSecondsCeil(v.verifyCooldownRemaining(groupID, userID)); seconds > 0 {
-		return result.TimeoutRetry.Render(l, seconds)
+		return voice.TimeoutRetry.Render(l, seconds)
 	}
-	return result.TimeoutNoWait.For(l)
+	return voice.TimeoutNoWait.For(l)
 }
 
 // Bot-caused failures receive a meaningful strike-free retry window.
@@ -1893,17 +2449,20 @@ const noFaultGrace = 60 * time.Second
 // declineResultText keeps every applicant-facing decline message inside what the bot knows:
 // a definite result only when the request was actually settled, and a neutral "already handled"
 // when it vanished and the applicant's fate could not be read.
-func (v *Service) declineResultText(outcome declineOutcome, l i18n.Lang, settledText func() string) string {
-	result := &v.messages.Verification.Result
+func (v *Service) declineResultText(outcome declineOutcome, l i18n.Lang, gate string, settledText func() string) string {
+	voice := v.voice(gate)
 	switch outcome {
 	case declineUnsettled:
-		return result.DeclinePending.For(l)
+		return voice.SettlePending.For(l)
 	case declineGoneUnknown:
-		return result.AlreadyHandled.For(l)
+		return voice.AlreadyHandled.For(l)
 	default:
 		return settledText()
 	}
 }
+
+// errRemovalLeftBanned names the state a failed unban leaves behind, for the operator alert.
+var errRemovalLeftBanned = errors.New("removed but the ban could not be lifted; unban them manually")
 
 // wrongAnswerReason marks a decline the applicant caused by failing the challenge.
 const wrongAnswerReason = "wrong answer"
@@ -1926,6 +2485,30 @@ func strikesUser(reason string) bool {
 	default:
 		return true
 	}
+}
+
+// executeRelease settles a held member by lifting the verification mute. There is no join request
+// to lose here, so the only outcomes are success and a failure worth retrying.
+func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, p *pending) approveOutcome {
+	// A basic group could never be held, so there is nothing to lift and nothing to retry.
+	if p.held {
+		if err := v.releaseMember(c, bot, gid, uid, p); err != nil {
+			log.Printf("post-join verify: cannot lift the hold on %d in %d: %v", uid, gid, err)
+			admin := &v.messages.Verification.Admin
+			v.failAlert(c, bot, gid, admin.ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.markPassing(gid, uid, p)
+			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
+			return approveFailed
+		}
+	}
+	v.notePassed(gid, uid)
+	v.finishTerminal(gid, uid, p)
+	v.clearVerifyFails(gid, uid)
+	v.deleteChallenges(c, bot, gid, uid, p.messages())
+	v.recordDecision(true)
+	v.save()
+	log.Printf("post-join verify: released user=%d group=%d", uid, gid)
+	return approveConfirmed
 }
 
 // declineOutcome tells a caller how much the bot actually knows, so no message states an
@@ -1957,12 +2540,23 @@ func (o declineOutcome) settled() bool {
 // Settle an already-claimed decline, striking at claim time only after Telegram confirms rejection.
 func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p *pending, reason string) (outcome declineOutcome, banned bool) {
 	outcome = declineConfirmed
-	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
-		if !tg.JoinRequestGone(err) {
+	leftBanned := false
+	settle := func() error {
+		if p.gate == gateMute {
+			stranded, err := v.removeMember(c, bot, gid, uid)
+			leftBanned = stranded
+			return err
+		}
+		return bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid})
+	}
+	if err := settle(); err != nil {
+		// A vanished join request has no counterpart when the applicant is already a member:
+		// removal either worked or is worth retrying.
+		if p.gate == gateMute || !tg.JoinRequestGone(err) {
 			log.Printf("decline %d in %d failed: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.stopRetrying(bot, gid, uid, p, "decline-retry", err)
+			v.stopRetrying(c, bot, gid, uid, p, "decline-retry", err)
 			v.save()
 			return declineUnsettled, false
 		}
@@ -2020,6 +2614,13 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 			v.clearVerifyFails(gid, uid)
 		}
 	}
+	if leftBanned {
+		// The removal could not be undone, so they really are banned. Say that instead of
+		// inviting them back, and tell operators, because only they can lift it.
+		banned = true
+		admin := &v.messages.Verification.Admin
+		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, errRemovalLeftBanned))
+	}
 	v.save()
 	log.Printf("decline user=%d group=%d (%s) fails=%d banned=%v", uid, gid, reason, count, banned)
 	return outcome, banned
@@ -2050,16 +2651,25 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
 		admin := &v.messages.Verification.Admin
 		v.failAlert(c, bot, gid, admin.BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
-		v.stopRetrying(bot, gid, uid, p, "ban-retry", err)
+		v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 		v.save()
 		return false
+	}
+	if p.gate == gateMute {
+		// The ban already removed them; there is no join request left to decline.
+		v.deleteChallenges(c, bot, gid, uid, p.messages())
+		v.recordDecision(false)
+		v.finishTerminal(gid, uid, p)
+		v.save()
+		log.Printf("banApplicant user=%d group=%d banned=true (admin report, held member)", uid, gid)
+		return true
 	}
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("decline after ban %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
 			v.failAlert(c, bot, gid, admin.DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
-			v.stopRetrying(bot, gid, uid, p, "ban-retry", err)
+			v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 			v.save()
 			return false
 		}

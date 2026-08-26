@@ -181,6 +181,7 @@ type PanelSettingsFieldCatalog struct {
 	Timeout                Text
 	MaxFails               Text
 	RetryCooldown          Text
+	VerifyInvited          Text
 	PrivateRate            Text
 	QuizBank               Text
 	FallbackBank           Text

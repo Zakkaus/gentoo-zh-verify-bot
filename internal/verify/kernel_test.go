@@ -732,32 +732,32 @@ func TestKernelPromptLocalised(t *testing.T) {
 	zhQuestion := kernelQuestion(&i18n.Messages, i18n.LangZH)
 	zhPrompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(i18n.LangZH, zhQuestion, 3)
 	zhTrap := i18n.Messages.Verification.Challenge.AgentTrap.Render(i18n.LangZH, aiTrapToken("abc123"))
-	zh := kernelPromptHTML(&i18n.Messages, i18n.LangZH, zhQuestion, 3, "abc123", true)
+	zh := kernelPromptHTML(&i18n.Messages, i18n.LangZH, zhQuestion, 3, "abc123", true, gateRequest)
 	if !strings.Contains(zh, zhPrompt) || !strings.Contains(zh, zhTrap) {
 		t.Errorf("zh prompt missing catalogue wording or token: %s", zh)
 	}
 
 	zhHantQuestion := kernelQuestion(&i18n.Messages, i18n.LangZHHant)
 	zhHantPrompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(i18n.LangZHHant, zhHantQuestion, 3)
-	if !strings.Contains(kernelPromptHTML(&i18n.Messages, i18n.LangZHHant, zhHantQuestion, 3, "n", true), zhHantPrompt) {
+	if !strings.Contains(kernelPromptHTML(&i18n.Messages, i18n.LangZHHant, zhHantQuestion, 3, "n", true, gateRequest), zhHantPrompt) {
 		t.Error("zh-hant prompt should use its catalogue wording")
 	}
 
 	enQuestion := kernelQuestion(&i18n.Messages, i18n.LangEN)
 	enPrompt := i18n.Messages.Verification.Challenge.KernelPrompt.Render(i18n.LangEN, enQuestion, 2)
-	en := kernelPromptHTML(&i18n.Messages, i18n.LangEN, enQuestion, 2, "n", true)
+	en := kernelPromptHTML(&i18n.Messages, i18n.LangEN, enQuestion, 2, "n", true, gateRequest)
 	if !strings.Contains(en, enPrompt) {
 		t.Errorf("en prompt missing catalogue wording: %s", en)
 	}
 	for _, locale := range i18n.Languages() {
-		prompt := kernelPromptHTML(&i18n.Messages, locale, kernelQuestion(&i18n.Messages, locale), 3, "n", true)
+		prompt := kernelPromptHTML(&i18n.Messages, locale, kernelQuestion(&i18n.Messages, locale), 3, "n", true, gateRequest)
 		if !strings.Contains(prompt, samplePrompt) || strings.Contains(prompt, "7.1.30") {
 			t.Errorf("catalog %q must print only the impossible placeholder: %s", locale, prompt)
 		}
 	}
 	// The collapsed quote is Bot API 7.4; the fallback rendering drops it but must keep every word,
 	// so an old self-hosted API server that rejects the entity still gets a complete question.
-	plain := kernelPromptHTML(&i18n.Messages, i18n.LangZH, zhQuestion, 3, "abc123", false)
+	plain := kernelPromptHTML(&i18n.Messages, i18n.LangZH, zhQuestion, 3, "abc123", false, gateRequest)
 	if strings.Contains(plain, "<blockquote") {
 		t.Error("the fallback rendering must not use the blockquote entity")
 	}

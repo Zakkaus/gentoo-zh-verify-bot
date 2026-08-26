@@ -28,41 +28,28 @@ A group can exempt confirmed members of trusted groups or require applicants to 
 
 ## Installation
 
-`BOT_TOKEN` is the only required startup configuration. Installing a prebuilt release does not require Go. Building from source requires Go 1.26.7 or later.
-
-### Use a release binary
-
-[Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) contain the `amd64` and `arm64` binaries and `SHA256SUMS`, but not the systemd unit. Change `arch` to the target architecture and fetch the binary and unit from the same tag:
+`BOT_TOKEN` is the only thing you have to supply. The install script downloads the release binary for this machine, checks it against the published `SHA256SUMS`, installs the systemd unit, and enables the service. Running it again upgrades in place and never overwrites `bot.env`.
 
 ```sh
-version=v3.12.0
-arch=amd64
-release_url="https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/download/${version}"
-curl --fail --location --remote-name "${release_url}/gentoo-zh-verify-bot-linux-${arch}"
-curl --fail --location --remote-name "${release_url}/SHA256SUMS"
-sha256sum --ignore-missing --strict --check SHA256SUMS
-mv "gentoo-zh-verify-bot-linux-${arch}" gentoo-zh-verify-bot
-curl --fail --location \
-  "https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/${version}/deploy/gentoo-zh-verify-bot.service" \
-  --output gentoo-zh-verify-bot.service
+curl --fail --location --remote-name \
+  https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/main/deploy/install.sh
+sh install.sh                       # or: sh install.sh v4.3.0
+sudoedit /etc/gentoo-zh-verify-bot/bot.env   # add BOT_TOKEN=<token from @BotFather>
+sudo systemctl start gentoo-zh-verify-bot
 ```
 
-### Build from source
+Read the script before running it; it is short and does nothing but the steps above.
+
+### Building from source instead
+
+Requires Go 1.26.7 or later. The unit and paths are the same as above.
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
-cp deploy/gentoo-zh-verify-bot.service .
-```
-
-### Install and start the systemd service
-
-Install the binary and unit. Create an empty environment file with mode `0600`, then use an editor to add `BOT_TOKEN=<your-token>`:
-
-```sh
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
+sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
 sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
 sudoedit /etc/gentoo-zh-verify-bot/bot.env
-sudo install -Dm644 gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now gentoo-zh-verify-bot
 ```
@@ -83,26 +70,11 @@ The owner can send `/unregister <group-id>` in a private chat. This command acce
 
 ## Configuration
 
-`config.json` is optional. If it is absent, the bot starts with no preconfigured groups and waits for runtime registration. [`config.example.json`](config.example.json) provides a configuration example. File values form the startup baseline; sparse runtime overrides in `settings.json` take precedence over the file, and file values take precedence over built-in defaults. Changes to `config.json` require a service restart.
+`config.json` is optional and most deployments never need one: groups are added at runtime and almost every setting is reachable from `/settings` without a restart. [`config.example.json`](config.example.json) is a two-line starting point, and the [configuration reference](docs/configuration.md) lists every field with its default and says which ones the settings panel already covers.
 
-Administrators normally need only these application environment variables:
+Values resolve in one order: a runtime override in `settings.json` wins, then `config.json`, then the built-in default. Editing `config.json` needs a restart; the panel does not.
 
-| Variable | Purpose |
-| --- | --- |
-| `BOT_TOKEN` | Required Telegram bot token; no default. |
-| `GITHUB_TOKEN` | Optional; uses an authenticated API allowance for GitHub overlay lookups. |
-| `TELEGRAM_API_URL` | Optional; selects a self-hosted Telegram Bot API server. |
-
-A group administrator runs `/settings` in the group and then uses the private settings panel to change:
-
-- verification enablement, `group`, `dm`, or `both` challenge delivery, `kernel`, `quiz`, or `mixed` mode, applicant-name hiding, ban duration, lookup cleanup policy, and `lang`;
-- sender-channel whitelist, trusted groups, and known chats;
-- verification timeout, maximum failures, and retry cooldown;
-- the `questions` quiz bank, a custom `fallback_questions` short-answer bank, the built-in short questions, and the required channel and invite link.
-
-The panel can add, edit, and delete quiz questions and custom short questions. Built-in short questions can only be selected or restored, not edited directly. `lang` accepts `zh`, `zh-Hant`, and `en`. Bot-wide settings are rich output controlled by `/rich` and the panel's `private_query_per_min`; only administrators of the effective control group can change them. Set `control_group_id` to select that group explicitly. When it is unset, the settings store uses the first effective group.
-
-Feed destinations, overlays, the news source, `stats_timezone`, and `user_agent` remain `config.json`-only settings. See the [Simplified Chinese documentation index](docs/zh-CN/README.md) and [English documentation index](docs/README.md) for detailed flows.
+Three environment variables exist. `BOT_TOKEN` is required; `GITHUB_TOKEN` raises the GitHub API allowance used by overlay lookups; `TELEGRAM_API_URL` points at a self-hosted Bot API server.
 
 ## Commands
 

@@ -30,6 +30,7 @@ func testSettingsBaseline() SettingsBaseline {
 		TimeoutSeconds:          BaselineValue[int]{Value: 240, Source: SourceConfig},
 		VerifyMaxFails:          BaselineValue[int]{Value: 3, Source: SourceDefault},
 		VerifyRetrySeconds:      BaselineValue[int]{Value: 180, Source: SourceDefault},
+		VerifyInvited:           BaselineValue[bool]{Value: true, Source: SourceDefault},
 		AntispamEnabled:         BaselineValue[bool]{Value: false, Source: SourceConfig},
 		ChannelWhitelist:        BaselineValue[[]int64]{Value: []int64{-1007000000001}, Source: SourceConfig},
 		TrustedMemberGroupIDs:   BaselineValue[[]int64]{Value: []int64{-1006000000001}, Source: SourceConfig},

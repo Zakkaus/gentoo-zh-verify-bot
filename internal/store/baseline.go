@@ -104,6 +104,7 @@ func settingsBaselineFromConfig(cfg *config.Config, presence configPresence) Set
 		VerifyMaxFails:          BaselineValue[int]{Value: verifyMaxFails, Source: baselineSource(topHas("verify_max_fails"))},
 		VerifyRetrySeconds:      BaselineValue[int]{Value: verifyRetrySeconds, Source: baselineSource(topHas("verify_retry_seconds"))},
 		MuteSeconds:             BaselineValue[int]{Value: cfg.MuteSeconds, Source: baselineSource(topHas("mute_seconds"))},
+		VerifyInvited:           BaselineValue[bool]{Value: cfg.VerifyInvitedMembers(), Source: baselineSource(topHas("verify_invited"))},
 		WarnLimit:               BaselineValue[int]{Value: cfg.WarnLimit, Source: baselineSource(topHas("warn_limit"))},
 		AntispamEnabled:         BaselineValue[bool]{Value: cfg.BlockChannelSenders, Source: baselineSource(topHas("block_channel_senders"))},
 		ChannelWhitelist:        BaselineValue[[]int64]{Value: cfg.ChannelWhitelist, Source: baselineSource(topHas("channel_whitelist"))},

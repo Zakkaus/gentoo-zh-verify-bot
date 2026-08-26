@@ -72,6 +72,7 @@ type GroupBaseline struct {
 	VerifyMaxFails          BaselineValue[int]
 	VerifyRetrySeconds      BaselineValue[int]
 	MuteSeconds             BaselineValue[int]
+	VerifyInvited           BaselineValue[bool]
 	WarnLimit               BaselineValue[int]
 	AntispamEnabled         BaselineValue[bool]
 	ChannelWhitelist        BaselineValue[[]int64]
@@ -114,6 +115,7 @@ type GroupOverrides struct {
 	VerifyMaxFails          *int                    `json:"verify_max_fails,omitempty"`
 	VerifyRetrySeconds      *int                    `json:"verify_retry_seconds,omitempty"`
 	MuteSeconds             *int                    `json:"mute_seconds,omitempty"`
+	VerifyInvited           *bool                   `json:"verify_invited,omitempty"`
 	WarnLimit               *int                    `json:"warn_limit,omitempty"`
 	AntispamEnabled         *bool                   `json:"antispam_enabled,omitempty"`
 	ChannelWhitelist        *[]int64                `json:"channel_whitelist,omitempty"`
@@ -278,6 +280,7 @@ type effectiveGroup struct {
 	verifyMaxFails          Setting[int]
 	verifyRetrySeconds      Setting[int]
 	muteSeconds             Setting[int]
+	verifyInvited           Setting[bool]
 	warnLimit               Setting[int]
 	antispamEnabled         Setting[bool]
 	channelWhitelist        Setting[[]int64]
@@ -794,6 +797,7 @@ func (v GroupView) TimeoutSeconds() Setting[int]      { return v.group.timeoutSe
 func (v GroupView) VerifyMaxFails() Setting[int]      { return v.group.verifyMaxFails }
 func (v GroupView) VerifyRetrySeconds() Setting[int]  { return v.group.verifyRetrySeconds }
 func (v GroupView) MuteSeconds() Setting[int]         { return v.group.muteSeconds }
+func (v GroupView) VerifyInvited() Setting[bool]      { return v.group.verifyInvited }
 func (v GroupView) WarnLimit() Setting[int]           { return v.group.warnLimit }
 func (v GroupView) AntispamEnabled() Setting[bool]    { return v.group.antispamEnabled }
 func (v GroupView) ChannelDisplay() Setting[string]   { return v.group.channelDisplay }
@@ -1032,6 +1036,7 @@ func buildEffectiveGroup(baseline GroupBaseline, record groupRecord, registered 
 		verifyMaxFails:        resolve(record.VerifyMaxFails, baseline.VerifyMaxFails),
 		verifyRetrySeconds:    resolve(record.VerifyRetrySeconds, baseline.VerifyRetrySeconds),
 		muteSeconds:           resolve(record.MuteSeconds, baseline.MuteSeconds),
+		verifyInvited:         resolve(record.VerifyInvited, baseline.VerifyInvited),
 		warnLimit:             resolve(record.WarnLimit, baseline.WarnLimit),
 		antispamEnabled:       resolve(record.AntispamEnabled, baseline.AntispamEnabled),
 		channelWhitelist:      resolveSlice(record.ChannelWhitelist, baseline.ChannelWhitelist, cloneInt64s),
@@ -1109,7 +1114,7 @@ func validateBaselineSources(group GroupBaseline) error {
 		group.Enabled.Source, group.DeliveryMode.Source, group.VerifyMode.Source, group.NameSpoiler.Source,
 		group.BanSeconds.Source, group.LookupTTLSeconds.Source, group.LookupAutoDeleteEnabled.Source,
 		group.TimeoutSeconds.Source, group.VerifyMaxFails.Source, group.VerifyRetrySeconds.Source,
-		group.MuteSeconds.Source, group.WarnLimit.Source,
+		group.MuteSeconds.Source, group.WarnLimit.Source, group.VerifyInvited.Source,
 		group.AntispamEnabled.Source, group.ChannelWhitelist.Source,
 		group.TrustedMemberGroupIDs.Source, group.KnownChatIDs.Source, group.RequiredChannelID.Source,
 		group.ChannelDisplay.Source, group.ChannelInviteURL.Source, group.Questions.Source,
@@ -1450,6 +1455,7 @@ func cloneGroupOverrides(value GroupOverrides) GroupOverrides {
 	out.NameSpoiler = clonePtr(value.NameSpoiler)
 	out.BanSeconds = clonePtr(value.BanSeconds)
 	out.MuteSeconds = clonePtr(value.MuteSeconds)
+	out.VerifyInvited = clonePtr(value.VerifyInvited)
 	out.WarnLimit = clonePtr(value.WarnLimit)
 	out.LookupTTLSeconds = clonePtr(value.LookupTTLSeconds)
 	out.LookupAutoDeleteEnabled = clonePtr(value.LookupAutoDeleteEnabled)
@@ -1485,6 +1491,7 @@ func compactGroupOverrides(value GroupOverrides, baseline GroupBaseline) GroupOv
 	value.NameSpoiler = omitBaseline(value.NameSpoiler, baseline.NameSpoiler.Value)
 	value.BanSeconds = omitBaseline(value.BanSeconds, baseline.BanSeconds.Value)
 	value.MuteSeconds = omitBaseline(value.MuteSeconds, baseline.MuteSeconds.Value)
+	value.VerifyInvited = omitBaseline(value.VerifyInvited, baseline.VerifyInvited.Value)
 	value.WarnLimit = omitBaseline(value.WarnLimit, baseline.WarnLimit.Value)
 	value.LookupTTLSeconds = omitBaseline(value.LookupTTLSeconds, baseline.LookupTTLSeconds.Value)
 	value.LookupAutoDeleteEnabled = omitBaseline(value.LookupAutoDeleteEnabled, baseline.LookupAutoDeleteEnabled.Value)

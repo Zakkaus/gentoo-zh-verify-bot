@@ -65,7 +65,7 @@ The panel exposes source provenance—runtime override, `config.json`, or built-
 
 - runtime: verification enabled, challenge delivery (`group`, `dm`, or the default `both`), mode, name spoiler, ban duration, lookup auto-delete and TTL, and group language;
 - lists: sender-channel whitelist, trusted-member groups, and known/support chats;
-- verification parameters: timeout (30–1,800 seconds), maximum failures or off, cooldown or off, and the bot-wide private-DM query rate;
+- verification parameters: timeout (30–1,800 seconds), maximum failures or off, cooldown or off, whether a member somebody else invited still has to verify, and the bot-wide private-DM query rate;
 - moderation: sender-channel blocking, `/mute` duration, `/warn` limit, and the two bot-wide switches — rich text and the alert chat;
 - required channel: select a channel, set or clear a private invite, or disable the gate.
 

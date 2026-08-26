@@ -12,6 +12,22 @@ An untrusted applicant with an active cooldown is declined immediately, receives
 
 A new request for the same group and user replaces the old pending request, deletes the old group and private challenges when possible, and receives a fresh deadline. It does not restore used kernel attempts or one-shot hints. A request arriving while an approval or ban is in flight is deferred without replacing that terminal action.
 
+## Verifying someone who is already a member
+
+**Implementation:** package `internal/verify`, `(*Service).OnMemberJoined`, `joinedNow`, `(*Service).holdMember`, `(*Service).executeRelease`, and `(*Service).removeMember` in `internal/verify/service.go`.
+
+A group that does not ask people to apply never produces a join request, and an administrator adding someone directly bypasses approval even in a group that does. `OnMemberJoined` covers both: it acts on a `chat_member` update where someone outside the group becomes an ordinary member. Promotions, demotions, departures, and a lifted hold are not arrivals. Bots, the bot itself, group administrators, and confirmed members of a trusted group are not challenged. Neither is anyone the bot let in during the last five minutes, so its own approval of a join request does not read as a fresh arrival.
+
+The group notice distinguishes a member who walked in from one somebody else added: an invited member still has to verify, and the notice says so and points administrators at the button that lets them in without the challenge. Nothing about the verification itself changes — an administrator who does not press it leaves the member verifying like anyone else. A group that would rather trust its own invitations can switch this off in the settings panel; it is on by default, because being vouched for is not verification.
+
+`timeout_seconds` describes how long an applicant waits outside, so a held member gets a longer default window of ten minutes: they are not watching for a challenge the way an applicant is, and the hold keeps them harmless meanwhile. Setting the timeout in the settings panel is a deliberate choice and applies to both gates.
+
+The pending record carries which gate it belongs to, and every settlement follows it. Passing a held verification lifts the restriction by restoring the group's own default permissions; passing a join request still calls `approveChatJoinRequest`. Failing a held verification bans and immediately unbans, which removes the member while leaving the invite link usable; the automatic-ban threshold still applies on top, and reaching it bans for the configured duration. Applicant-facing wording follows the gate throughout: a member standing in the group is never told their join request was declined.
+
+A member an administrator added is never removed for an earlier failure — that would be the bot overruling the person who added them — though they still verify. Anyone else inside the failure cooldown is removed again rather than questioned again: the removal notice tells them how many seconds to wait, and rejoining before that expires is refused with one throttled explanation. A member who is already being verified keeps the challenge they have — the hold is re-applied, since leaving the group clears it, and the deadline does not move, so walking in and out buys no extra time.
+
+Telegram only restricts members of supergroups. In a basic group the challenge still runs and failing it still removes the member, but there is no hold, so they can speak during the window. The hold otherwise lasts the verification timeout plus one minute, so it cannot expire between the deadline and the settlement acting on it.
+
 ## Challenge delivery modes
 
 **Implementation:** package `internal/verify`, `(*Service).deliverPendingChallenge`, `(*Service).attemptPrivateChallenge`, `(*Service).postGroupChallenge`, `(*Service).SendDMChallenge`, and `(*Service).sendQuizzes` in `internal/verify/state.go` and `internal/verify/service.go`; package `internal/panel`, `(*Panel).OnStart` in `internal/panel/panel.go`.

@@ -43,11 +43,13 @@ The completion message names the registered group and tells the administrator to
 Startup asynchronously checks every effective guarded group. It verifies readable group access and bot administrator/owner status with these rights:
 
 - Invite users, used to approve join requests;
-- Ban users/Restrict members, used by bans, mutes, warning kicks, and sender-channel bans;
+- Ban users/Restrict members, used by bans, mutes, warning kicks, sender-channel bans, and the hold placed on a member verified after joining;
 - Delete messages, used by cleanup and moderation evidence removal;
 - administrator/owner status in every configured required channel.
 
 A ready group is logged but not messaged. A missing-rights report is logged and sent to the runtime registrant first, then the admin-log chat, then the group, stopping at the first successful delivery. Lookup or delivery errors are included in/logged around the report. The check is diagnostic and nonfatal; it does not disable handlers. There is no settings-panel action that reruns it. Restart reruns all group checks; completing runtime registration checks that one group immediately.
+
+Verification receives `chat_member` updates so it can also challenge someone who is already a member — a group without join approval, or anyone an administrator adds directly. That update type is requested explicitly in `AllowedUpdates`; removing it disables post-join verification while leaving join-request verification intact.
 
 Feed destinations have a separate nonfatal startup probe. A channel requires administrator status and `can_post_messages`; a group/supergroup must not have the bot left, banned, or unable to send. Probe failure only warns, and the feed loop still runs.
 

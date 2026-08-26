@@ -55,6 +55,7 @@ func expectedVerificationScreen(panel *Panel, settings *store.Settings, group st
 	return i18n.Messages.Panel.Settings.Screen.Verification.Render(language, group.ID(),
 		panel.sourcedSeconds(language, group.TimeoutSeconds(), false), panel.sourcedLimit(language, group.VerifyMaxFails()),
 		panel.sourcedLimit(language, group.VerifyRetrySeconds()),
+		panel.sourcedBool(language, group.VerifyInvited()),
 		i18n.Messages.Panel.Settings.Value.Sourced.Render(language, strconv.Itoa(global.PrivateQueryPerMin().Value),
 			panel.sourceText(language, global.PrivateQueryPerMin().Source)))
 }
@@ -253,7 +254,8 @@ func testSettingsScreenContracts(t *testing.T) {
 			screen: "vp", wantText: expectedVerificationScreen(panel, settings, group, language),
 			actions: []string{
 				action(panelTestGroupA, "to", "_"), action(panelTestGroupA, "mf", "_"),
-				action(panelTestGroupA, "rc", "_"), action(panelTestGroupA, "pr", "_"), action(panelTestGroupA, "go", "gh"),
+				action(panelTestGroupA, "rc", "_"), action(panelTestGroupA, "vi", "_"),
+				action(panelTestGroupA, "pr", "_"), action(panelTestGroupA, "go", "gh"),
 			},
 		},
 		{

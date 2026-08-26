@@ -28,41 +28,28 @@
 
 ## 安装
 
-`BOT_TOKEN` 是唯一必填的启动配置。从预构建发布文件安装不需要 Go；从源代码构建需要 Go 1.26.7 或更高版本。
-
-### 使用发布文件
-
-[Releases](https://github.com/Zakkaus/gentoo-zh-verify-bot/releases) 提供 `amd64`、`arm64` 二进制文件和 `SHA256SUMS`，不包含 systemd unit。将 `arch` 改为目标架构，并从同一 tag 获取二进制文件和 unit：
+需要你自己提供的只有 `BOT_TOKEN`。安装脚本会按本机架构下载发布二进制、对照官方 `SHA256SUMS` 校验、安装 systemd 单元并启用服务。再次运行即为原地升级，不会覆盖 `bot.env`。
 
 ```sh
-version=v3.12.0
-arch=amd64
-release_url="https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/download/${version}"
-curl --fail --location --remote-name "${release_url}/gentoo-zh-verify-bot-linux-${arch}"
-curl --fail --location --remote-name "${release_url}/SHA256SUMS"
-sha256sum --ignore-missing --strict --check SHA256SUMS
-mv "gentoo-zh-verify-bot-linux-${arch}" gentoo-zh-verify-bot
-curl --fail --location \
-  "https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/${version}/deploy/gentoo-zh-verify-bot.service" \
-  --output gentoo-zh-verify-bot.service
+curl --fail --location --remote-name \
+  https://raw.githubusercontent.com/Zakkaus/gentoo-zh-verify-bot/main/deploy/install.sh
+sh install.sh                       # 或指定版本：sh install.sh v4.3.0
+sudoedit /etc/gentoo-zh-verify-bot/bot.env   # 填入 BOT_TOKEN=<@BotFather 给的令牌>
+sudo systemctl start gentoo-zh-verify-bot
 ```
 
-### 从源代码构建
+运行前请先读一遍脚本，它很短，做的就是上面这几件事。
+
+### 改为从源代码构建
+
+需要 Go 1.26.7 或更高版本，单元文件与路径与上面相同。
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
-cp deploy/gentoo-zh-verify-bot.service .
-```
-
-### 安装并启动 systemd 服务
-
-安装二进制文件和 unit。先创建权限模式为 `0600` 的空环境文件，再通过编辑器写入 `BOT_TOKEN=<your-token>`：
-
-```sh
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
+sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
 sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
 sudoedit /etc/gentoo-zh-verify-bot/bot.env
-sudo install -Dm644 gentoo-zh-verify-bot.service /etc/systemd/system/gentoo-zh-verify-bot.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now gentoo-zh-verify-bot
 ```
@@ -83,26 +70,11 @@ Owner 可以在私聊中执行 `/unregister <group-id>`。该命令只接受运�
 
 ## 配置
 
-`config.json` 可以省略；文件不存在时，机器人以零个预配置群组启动，并等待运行时登记。[`config.example.json`](config.example.json) 给出一份配置示例。文件值构成启动基线，`settings.json` 中的稀疏运行时覆盖值优先于文件，文件值优先于内置默认值。修改 `config.json` 后需要重启服务。
+`config.json` 是可选的，多数部署根本不需要：群组在运行时添加，几乎所有设置都能在 `/settings` 中修改且无需重启。[`config.example.json`](config.example.json) 只是一个两行的起点，[配置参考](docs/zh-CN/configuration.md)列出了每个字段的默认值，并注明哪些已经由设置面板覆盖。
 
-管理员通常只需设置以下应用环境变量：
+取值顺序只有一种：`settings.json` 中的运行时覆盖优先，其次是 `config.json`，最后是内置默认值。修改 `config.json` 需要重启，面板不需要。
 
-| 变量 | 作用 |
-| --- | --- |
-| `BOT_TOKEN` | 必填；Telegram bot token，没有默认值。 |
-| `GITHUB_TOKEN` | 可选；为 GitHub overlay 查询使用经过认证的 API 限额。 |
-| `TELEGRAM_API_URL` | 可选；改用自建 Telegram Bot API server。 |
-
-群组管理员从群内执行 `/settings`，再通过私聊面板修改以下有效设置：
-
-- 验证开关、`group`、`dm` 或 `both` 验证题发送方式、`kernel`、`quiz` 或 `mixed` 模式、申请人姓名遮盖、封禁时长、查询结果清理策略和 `lang`；
-- 频道身份白名单、可信群组和已知聊天；
-- 验证时限、最多失败次数和重试冷却时间；
-- `questions` 选择题库、自定义 `fallback_questions` 简答题库、内置简答题，以及必需频道和加入链接。
-
-面板可以新增、编辑和删除选择题及自定义简答题；内置简答题只能选择或恢复，不能直接编辑。`lang` 接受 `zh`、`zh-Hant` 和 `en`。机器人级设置包括 `/rich` 控制的富文本输出，以及面板中的 `private_query_per_min`；只有有效控制群组的管理员可以修改。`control_group_id` 可以显式选择控制群组；未设置时，设置存储使用第一个有效群组。
-
-Feed 目标、overlay、新闻源、`stats_timezone` 和 `user_agent` 只能在 `config.json` 中修改。详细流程见[中文文档索引](docs/zh-CN/README.md)和[英文文档索引](docs/README.md)。
+环境变量共三个。`BOT_TOKEN` 必填；`GITHUB_TOKEN` 提高 overlay 查询使用的 GitHub API 配额；`TELEGRAM_API_URL` 指向自建的 Bot API 服务器。
 
 ## 命令
 

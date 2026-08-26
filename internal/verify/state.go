@@ -462,7 +462,7 @@ func (v *Service) save() {
 				NoLinuxReminded: p.noLinuxReminded, OSClarified: p.osClarified,
 				QText: p.qText, QOpts: p.qOpts, CorrectIdx: p.correctIdx, Nonce: p.nonce, Name: p.name,
 				Deadline: p.deadline.Unix(), DeferredSince: deferredSince, DeferralCapReached: p.deferralCapReached,
-				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid})
+				SettleFailures: p.settleFailures, SettlePendingSaid: p.settlePendingSaid, Gate: p.gate, Invited: p.invited, Held: p.held, HoldUntil: p.holdUntil, Passing: p.passing})
 		}
 		return recs
 	})
@@ -521,7 +521,7 @@ func (v *Service) load(bot modBot) {
 			noLinuxReminded: r.NoLinuxReminded, osClarified: r.OSClarified,
 			qText: r.QText, qOpts: r.QOpts, correctIdx: r.CorrectIdx,
 			nonce: r.Nonce, name: r.Name, deadline: time.Unix(r.Deadline, 0),
-			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures,
+			deferredSince: deferredSince, deferralCapReached: r.DeferralCapReached, settleFailures: r.SettleFailures, gate: r.Gate, invited: r.Invited, held: r.Held, holdUntil: r.HoldUntil, passing: r.Passing,
 			settlePendingSaid: r.SettlePendingSaid,
 		}
 		delay := p.deadline.Sub(now)
@@ -542,7 +542,7 @@ func (v *Service) load(bot modBot) {
 			}
 		case longOutage:
 			// The outage consumed the window, so refresh and do not strike on this lapse.
-			delay = v.timeout(gid)
+			delay = v.gateTimeout(gid, p.gate)
 			p.deadline = now.Add(delay)
 			p.lastRenotify = now // mark re-notified so a runtime recovery right after doesn't re-message
 			reason = "recovered"
@@ -673,19 +673,29 @@ func (v *Service) onExpiry(c context.Context, bot modBot, gid, uid int64, nonce 
 	if !ok {
 		return
 	}
+	if p.passing {
+		// This applicant answered correctly; the only thing left is an admission the bot could
+		// not complete. Retrying that is right. Declining them would be a lie and, for a held
+		// member, would remove somebody who passed.
+		if v.executeApprove(c, bot, gid, uid, p) == approveConfirmed {
+			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.voice(p.gate).Passed.For(p.lang)))
+		}
+		return
+	}
 	outcome, banned := v.finishDecline(c, bot, gid, uid, p, reason)
 	if outcome == declineUnsettled && !v.claimSettlePendingNotice(gid, uid, p) {
 		return // one notice per applicant: a settlement the bot keeps retrying must not DM them each round
 	}
-	text := v.declineResultText(outcome, p.lang, func() string {
+	voice := v.voice(p.gate)
+	text := v.declineResultText(outcome, p.lang, p.gate, func() string {
 		switch {
 		case capped:
-			return v.messages.Verification.Result.DeferralExpired.For(p.lang)
+			return voice.DeferralExpired.For(p.lang)
 		case reason == challengeExpiryReason(false):
 			// The applicant never saw a question; telling them they ran out of time is not true.
-			return v.messages.Verification.Result.Undelivered.For(p.lang)
+			return voice.Undelivered.For(p.lang)
 		default:
-			return v.timeoutResultText(gid, uid, p.lang, banned)
+			return v.timeoutResultText(gid, uid, p.lang, p.gate, banned)
 		}
 	})
 	_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), text))
@@ -741,7 +751,7 @@ func (v *Service) deferExpiry(bot modBot, gid, uid int64, nonce string, epoch ui
 	if p.deferredSince.IsZero() {
 		p.deferredSince = now
 	}
-	delay := v.expiryDelay(gid, reason)
+	delay := v.expiryDelay(gid, p.gate, reason)
 	remaining := p.deferredSince.Add(maxVerificationDeferral).Sub(now)
 	if p.deferralCapReached || remaining <= 0 {
 		if !p.deferralCapReached {
@@ -763,7 +773,7 @@ func (v *Service) deferExpiry(bot modBot, gid, uid int64, nonce string, epoch ui
 }
 
 // Shared challenge rendering returns zero and alerts admins on delivery failure.
-func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, l i18n.Lang) int {
+func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid int64, name string, l i18n.Lang, voice challengeVoice) int {
 	gidStr, uidStr := strconv.FormatInt(gid, 10), strconv.FormatInt(uid, 10)
 	mention := joinerLabel(uid, name, v.NameSpoilerOn(gid))
 	link := ""
@@ -781,15 +791,23 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	if link != "" {
 		linkText = group.LinkText.Render(l, link)
 	}
-	body := group.Body.Render(l, mention, linkText, int(v.timeout(gid)/time.Second), channelHint)
+	template := group.Body
+	switch {
+	case voice.gate != gateMute:
+	case voice.invited:
+		template = group.BodyInvited
+	default:
+		template = group.BodyJoined
+	}
+	body := template.Render(l, mention, linkText, int(v.gateTimeout(gid, voice.gate)/time.Second), channelHint)
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
 		rows = append(rows, tu.InlineKeyboardRow(telego.InlineKeyboardButton{Text: group.VerifyButton.For(l), URL: link}))
 	}
 	rows = append(rows, tu.InlineKeyboardRow(
-		telego.InlineKeyboardButton{Text: admin.ApproveButton.For(l), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr},
-		telego.InlineKeyboardButton{Text: admin.BanButton.For(l), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr},
+		telego.InlineKeyboardButton{Text: adminPassLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "pass:" + gidStr + ":" + uidStr + ":" + voice.nonce},
+		telego.InlineKeyboardButton{Text: adminRejectLabel(admin, l, voice.gate), CallbackData: AdminCallbackPrefix + "ban:" + gidStr + ":" + uidStr + ":" + voice.nonce},
 	))
 	sent, err := bot.SendMessage(c, htmlMessage(gid, body).WithReplyMarkup(tu.InlineKeyboard(rows...)))
 	if err != nil {
@@ -798,6 +816,21 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 		return 0
 	}
 	return msgID(sent)
+}
+
+// The administrator buttons do different things on the two gates, so they say different things.
+func adminPassLabel(admin *i18n.VerificationAdminCatalog, l i18n.Lang, gate string) string {
+	if gate == gateMute {
+		return admin.ReleaseButton.For(l)
+	}
+	return admin.ApproveButton.For(l)
+}
+
+func adminRejectLabel(admin *i18n.VerificationAdminCatalog, l i18n.Lang, gate string) string {
+	if gate == gateMute {
+		return admin.RemoveButton.For(l)
+	}
+	return admin.BanButton.For(l)
 }
 
 type heartbeatRec struct {
@@ -901,7 +934,7 @@ func (v *Service) onRecovery(c context.Context, bot modBot, outage time.Duration
 		if p.timer != nil {
 			p.timer.Stop()
 		}
-		delay := v.timeout(k.gid)
+		delay := v.gateTimeout(k.gid, p.gate)
 		reason := "recovered"
 		if p.deferralCapReached || !p.deferredSince.IsZero() &&
 			!now.Before(p.deferredSince.Add(maxVerificationDeferral)) {
@@ -951,6 +984,12 @@ func (v *Service) onRecovery(c context.Context, bot modBot, outage time.Duration
 // that matters: the applicant is already in, so no challenge can apply to them. A failed
 // lookup keeps the pending, because verification must never be skipped on uncertainty.
 func (v *Service) dropIfAlreadyJoined(c context.Context, bot modBot, gid, uid int64, p *pending, messages challengeMessages) bool {
+	if p.gate == gateMute {
+		// A held member is a member by definition, so membership proves nothing here. What ends
+		// this verification is them leaving, and Telegram reports that as a departure the bot
+		// acts on separately; recovery must keep the pending and re-notify.
+		return false
+	}
 	if !v.isChatMember(c, bot, gid, uid) {
 		return false
 	}

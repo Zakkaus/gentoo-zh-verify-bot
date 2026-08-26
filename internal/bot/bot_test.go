@@ -33,6 +33,7 @@ func TestHandlerOrder(t *testing.T) {
 		"verify.channel_recheck",
 		"panel.settings_callback",
 		"verify.join_request",
+		"verify.member_joined",
 		"panel.chat_shared",
 		"panel.input",
 		"verify.kernel_answer",
