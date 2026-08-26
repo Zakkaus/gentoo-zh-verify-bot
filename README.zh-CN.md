@@ -59,10 +59,10 @@ sudo systemctl start gentoo-zh-verify-bot
 
 ### 改为从源代码构建
 
-需要 Go 1.26.7 或更高版本，单元文件与路径与上面相同。
+需要 Go 1.26.7 或更高版本。加 `-tags gentoo` 构建 Gentoo 版；不加标签构建出的是 `gentoo-zhbot`，此时下面每处路径都要换成该名称。
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -trimpath -tags gentoo -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
 sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
 sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
@@ -112,7 +112,7 @@ Owner 可以在私聊中执行 `/unregister <group-id>`。该命令只接受运�
 
 ## 状态、重启与中断
 
-随附的 unit 通过 `StateDirectory=gentoo-zh-verify-bot` 创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot`。未设置 `$STATE_DIRECTORY` 时，普通运行状态只存在于内存，owner 认领和运行时群组登记会失败。
+随附的 unit 的 `StateDirectory=` 取本构建自己的名称，创建权限模式为 `0700` 的 `/var/lib/gentoo-zh-verify-bot` 或 `/var/lib/gentoo-zhbot`。未设置 `$STATE_DIRECTORY` 时，普通运行状态只存在于内存，owner 认领和运行时群组登记会失败。
 
 | 文件 | 跨重启保留的内容 |
 | --- | --- |

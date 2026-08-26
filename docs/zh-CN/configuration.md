@@ -105,3 +105,18 @@
 | `owner_claim_lifetime_seconds` | `600` | 首次启动时写入日志的一次性认领链接的有效期。 |
 | `owner_claim_user_id` | 无 | 将该认领限制给指定的 Telegram 用户。日志可被他人读取时值得设置。 |
 | `feeds` | 无 | Bugzilla 与新闻推送目标。参见 [`examples/feeds.json`](../../examples/feeds.json) 和[自动推送](feed.md)。 |
+
+## 通用版部署需要确认的值
+
+以下默认值是为 Gentoo 中文社区选的。装 `gentoo-zhbot` 的社区应当逐项确认，文档不假设它们适用。
+
+| 项 | 默认 | 说明 |
+| --- | --- | --- |
+| `lang` | `zh` | 群组与管理消息的默认语言。不设置即简体中文。 |
+| `stats_timezone` | UTC+8 | `/stats` 的日界时区。 |
+| `overlays` | `gentoo-zh/overlay`、`gentoo/guru` | 只影响 `/gpkg`。不查 Gentoo 就无需理会。 |
+| `news_url` | gentoo.org 新闻 | 解析器只认 Gentoo 的 `/support/news-items/YYYY-MM-DD-*.html` 页面结构，指向其它站点不会有结果。 |
+| feed 的 `bugs` | 开启 | Bug 数据固定取自 Gentoo Bugzilla，没有配置项可以换源。不需要就设为 `false`。 |
+| `examples/` 下的题库 | Gentoo 题目 | 这些是 Gentoo 中文社区的示例。直接抄会用 Gentoo 题目覆盖通用版按构建选出的中性内置题。 |
+
+除此之外的默认值与社区无关，可以直接使用。

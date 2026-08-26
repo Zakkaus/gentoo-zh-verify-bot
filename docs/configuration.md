@@ -107,3 +107,19 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | `owner_claim_lifetime_seconds` | `600` | Lifetime of the one-use owner claim written to the journal at first start. |
 | `owner_claim_user_id` | none | Restricts that claim to one Telegram user. Worth setting when others can read the journal. |
 | `feeds` | none | Bugzilla and news destinations. See [`examples/feeds.json`](../examples/feeds.json) and [Feed](feed.md). |
+
+## What a general deployment should review
+
+These defaults were chosen for the Gentoo-zh Community. A community running `gentoo-zhbot`
+should decide each one; the documentation does not assume they fit.
+
+| Field | Default | Why |
+| --- | --- | --- |
+| `lang` | `zh` | Default language for group and administrator messages. |
+| `stats_timezone` | UTC+8 | The daily boundary for `/stats`. |
+| `overlays` | `gentoo-zh/overlay`, `gentoo/guru` | Affects `/gpkg` only; irrelevant if the group never asks about Gentoo. |
+| `news_url` | gentoo.org news | The parser only understands Gentoo's `/support/news-items/YYYY-MM-DD-*.html` index; another site yields nothing. |
+| Feed `bugs` | enabled | Bug data comes from Gentoo Bugzilla, with no setting to change the source. Set it to `false` if that is not wanted. |
+| The banks under `examples/` | Gentoo questions | They are this community's examples. Copying one replaces the neutral built-in bank the build selected. |
+
+Every other default is community-independent and can be used as it is.

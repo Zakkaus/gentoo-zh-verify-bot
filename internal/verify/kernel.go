@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/config"
+	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/edition"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/i18n"
 	"github.com/Zakkaus/gentoo-zh-verify-bot/internal/store"
 	"github.com/mymmrac/telego"
@@ -331,7 +332,9 @@ func aiTrapped(text, nonce string) bool {
 }
 
 // The impossible placeholder cannot collide with a real release.
-const samplePrompt = "X.Y.Z-gentoo"
+// samplePrompt is the placeholder the prompt shows and the answer check rejects. Both come
+// from one constant so that a build cannot display one shape and detect another.
+const samplePrompt = "X.Y.Z" + edition.KernelExampleSuffix
 
 func copiedSample(text string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), samplePrompt)

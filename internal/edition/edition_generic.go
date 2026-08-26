@@ -11,6 +11,9 @@ const (
 	// still answers them, but /pkg belongs to whichever distribution the group actually runs,
 	// so the Gentoo lookups become /gpkg, /gnews and so on.
 	CommandPrefix = "g"
+	// KernelExampleSuffix is the release suffix shown in the verification prompt's format
+	// example. Naming a distribution only makes sense where the group runs it.
+	KernelExampleSuffix = ""
 	// IsGentoo reports whether this build serves the Gentoo-zh Community and may say so.
 	IsGentoo = false
 )

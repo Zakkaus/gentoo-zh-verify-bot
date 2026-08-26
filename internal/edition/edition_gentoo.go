@@ -10,6 +10,9 @@ const (
 	// CommandPrefix qualifies the Gentoo lookups. This build serves the community those
 	// commands were written for, so they keep the unqualified names.
 	CommandPrefix = ""
+	// KernelExampleSuffix is the release suffix shown in the verification prompt's format
+	// example. Naming a distribution only makes sense where the group runs it.
+	KernelExampleSuffix = "-gentoo"
 	// IsGentoo reports whether this build serves the Gentoo-zh Community and may say so.
 	IsGentoo = true
 )

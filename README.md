@@ -59,10 +59,11 @@ Read the script before running it; it is short and does nothing but the steps ab
 
 ### Building from source instead
 
-Requires Go 1.26.7 or later. The unit and paths are the same as above.
+Requires Go 1.26.7 or later. `-tags gentoo` selects the Gentoo edition; leaving the tag out
+builds `gentoo-zhbot`, in which case substitute that name in every path below.
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
+CGO_ENABLED=0 go build -trimpath -tags gentoo -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
 sudo install -Dm755 gentoo-zh-verify-bot /usr/local/bin/gentoo-zh-verify-bot
 sudo install -Dm644 deploy/gentoo-zh-verify-bot.service /etc/systemd/system/
 sudo install -Dm600 /dev/null /etc/gentoo-zh-verify-bot/bot.env
@@ -112,7 +113,7 @@ External lookups in private chats are limited per user to `private_query_per_min
 
 ## State, restarts, and outages
 
-The supplied unit uses `StateDirectory=gentoo-zh-verify-bot` to create `/var/lib/gentoo-zh-verify-bot` with mode `0700`. Without `$STATE_DIRECTORY`, ordinary runtime state is memory-only, and owner claims and runtime group registration fail.
+The supplied unit uses `StateDirectory=` with the build's own name, creating `/var/lib/gentoo-zh-verify-bot` or `/var/lib/gentoo-zhbot` with mode `0700`. Without `$STATE_DIRECTORY`, ordinary runtime state is memory-only, and owner claims and runtime group registration fail.
 
 | File | State preserved across restarts |
 | --- | --- |

@@ -695,15 +695,18 @@ func TestFallbackAnswerMatching(t *testing.T) {
 }
 
 func TestCopiedSampleBounced(t *testing.T) {
+	// The placeholder follows the build: the Gentoo prompt shows X.Y.Z-gentoo, the generic one
+	// X.Y.Z. Each build must bounce its own, and neither may bounce a real-looking release.
 	tests := []struct {
 		text string
 		want bool
 	}{
-		{text: "X.Y.Z-gentoo", want: true},
-		{text: " x.y.z-GENTOO ", want: true},
-		{text: "X.Y.Z"},
+		{text: samplePrompt, want: true},
+		{text: " " + strings.ToUpper(samplePrompt) + " ", want: true},
+		{text: strings.ToLower(samplePrompt), want: true},
 		{text: "7.1.30"},
 		{text: "7.1.30-gentoo"},
+		{text: "6.12.4-gentoo"},
 	}
 	for _, tt := range tests {
 		if got := copiedSample(tt.text); got != tt.want {
