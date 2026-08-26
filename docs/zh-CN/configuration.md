@@ -81,7 +81,7 @@
 | `private_query_per_min` | `3` | 每个用户的私聊查询频率。 |
 | `rich_messages` | `false` | 使用富文本输出，并保留 HTML 回退。 |
 | `private_reply` | 内置 | 对非命令私聊消息的回复。 |
-| `overlays` | `gentoo-zh/overlay`、`gentoo/guru` | `/pkg` 搜索的 overlay。 |
+| `overlays` | `gentoo-zh/overlay`、`gentoo/guru` | `/pkg` 搜索的 overlay（通用版为 `/gpkg`）。 |
 | `news_url` | gentoo.org 新闻条目 | `/news` 的数据源（通用版为 `/gnews`）。 |
 | `user_agent` | `gentoo-zh-verify-bot` | 出站 HTTP User-Agent。 |
 | `stats_timezone` | `Asia/Shanghai` | `/stats` 的日界时区。 |

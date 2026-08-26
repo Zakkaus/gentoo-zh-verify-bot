@@ -97,10 +97,12 @@ Owner 可以在私聊中执行 `/unregister <group-id>`。该命令只接受运�
 | 已登记群组或私聊 | `/pkg`、`/use`、`/arm` | 查询 Gentoo 软件包、USE flag 和 `arm64` keyword。 |
 | 已登记群组或私聊 | `/bug`、`/news`、`/wiki`、`/bbs` | 查询 Gentoo Bugzilla、Gentoo 新闻、Gentoo Wiki、ArchWiki 和 Arch Linux CN。 |
 | 已登记群组或私聊 | `/pkgs`、`/distro`、`/armpkgs` | 比较发行版软件包版本或 `arm64` 支持；`/distro` 是 `/pkgs` 的别名。 |
+| 已登记群组或私聊 | `/kernel`、`/man`、`/cve`、`/repology` | 查询 kernel.org 发布的内核版本、Linux 手册页、CVE 漏洞编号，以及软件包在各发行版仓库中的版本。 |
 | 已登记群组的管理员 | `/mute [duration]`、`/unmute`、`/ban`、`/sb`、`/warn`、`/clearwarn` | 回复目标消息后执行禁言、封禁、清理或警告。 |
 | 已登记群组的管理员 | `/start`、`/stop`、`/settings`、`/bantime`、`/bc`、`/spoiler`、`/vmode`、`/autodel` | 修改当前群组的验证、管理和消息策略；运行时值写入 `settings.json`。 |
 | 控制群组的管理员 | `/rich` | 修改机器人级 `/pkg` 和 `/use` 富文本输出。 |
 | Owner 私聊 | `/enroll`、`/unregister <group-id>` | 签发群组登记链接，或移除运行时登记的群组。 |
+上表用的是 Gentoo 版的命令名。通用版 `gentoo-zhbot` 把六条 Gentoo 查询改为 `/gpkg`、`/guse`、`/gbug`、`/gnews`、`/gbbs`、`/garm`，其余命令名称相同，`/rich` 在通用版控制的是 `/gpkg` 和 `/guse`。
 
 私聊中的外部查询按用户限制为每分钟 `private_query_per_min` 次，已登记群组内不限次。`/start` 还承载 owner 认领、群组登记、验证和设置面板 deep link；每类链接只能在对应的私聊或群组范围内使用。
 
