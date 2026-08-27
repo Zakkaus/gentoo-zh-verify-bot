@@ -959,9 +959,16 @@ func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessa
 			old.timer.Stop()
 		}
 		oldMessages = old.messages()
-		// Re-applying must not replenish attempts or one-shot guards.
-		p.tries, p.hinted, p.sampleBounced = old.tries, old.hinted, old.sampleBounced
+		// Re-applying must not replenish attempts or one-shot reminders. An active fallback is
+		// challenge progress, not a spent reminder: keep its question so an applicant without
+		// Linux is not returned to a kernel-only prompt they cannot answer.
+		p.tries, p.sampleBounced = old.tries, old.sampleBounced
 		p.noLinuxReminded, p.osClarified = old.noLinuxReminded, old.osClarified
+		if p.mode == config.ModeKernel && old.mode == config.ModeKernel && len(old.fbAnswers) > 0 {
+			p.qText = old.qText
+			p.fbAnswers = append([]string(nil), old.fbAnswers...)
+			p.hinted = true
+		}
 	}
 	delay := pendingDeliveryTimeout
 	p.deadline = v.wallNow().Add(delay)

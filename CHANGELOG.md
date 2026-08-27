@@ -57,6 +57,11 @@ All notable changes to this project are documented here. The format is based on
   govulncheck v1.7.0, and gosec v2.28.0.
 
 ### Fixed
+- Traditional Chinese kernel-verification prompts now render line breaks instead of exposing literal
+  `\n` escape sequences in Telegram.
+- Re-applying while a no-Linux fallback is active now carries the selected short-answer question
+  forward. The replacement previously retained the "fallback already offered" flag but discarded
+  the fallback itself, returning applicants without Linux to a kernel-only prompt.
 - **Claimed owners now receive a private command menu immediately.** A successful owner claim
   refreshes Telegram command scopes without a restart and adds `/enroll` and `/unregister` beside
   the member commands.
