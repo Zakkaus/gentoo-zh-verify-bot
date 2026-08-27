@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mymmrac/telego"
@@ -63,6 +64,65 @@ func TestPostJoinJourneyPasses(t *testing.T) {
 		&telego.ChatMemberRestricted{Status: telego.MemberStatusRestricted, IsMember: true}))
 	if fb.sends != before || fb.mutes != 1 {
 		t.Errorf("the release produced another challenge: sends %d → %d, mutes = %d", before, fb.sends, fb.mutes)
+	}
+}
+
+// A no-Linux fallback is one continuous join-request challenge. Passing it records the
+// admission before Telegram reports the resulting membership update, so the fallback is
+// neither re-posted nor replaced by another kernel prompt.
+func TestJoinRequestFallbackPassIsNotRepeatedAfterAdmission(t *testing.T) {
+	const gid, uid = int64(-100), int64(7)
+	v := newTestService(&config.Config{
+		GroupIDs:     []int64{gid},
+		VerifyMode:   config.ModeKernel,
+		DeliveryMode: config.DeliveryDM,
+	})
+	v.botUsername = "bot"
+	fb := newFakeVerifyBot()
+	bot := newAPITestBot(t, fb)
+	t.Cleanup(v.stopForShutdown)
+
+	runFakeHandler(t, bot, v.OnJoinRequest, telego.Update{ChatJoinRequest: &telego.ChatJoinRequest{
+		Chat: telego.Chat{ID: gid, Type: telego.ChatTypeSupergroup},
+		From: telego.User{ID: uid, FirstName: "Applicant", LanguageCode: "zh-Hant"},
+	}})
+	runFakeHandler(t, bot, v.OnKernelAnswer, memberDM(uid, noLinuxNow("无 Linux 设备")))
+
+	v.mu.Lock()
+	p, live := v.pend[pkey{gid, uid}]
+	var question, answer string
+	if live && len(p.fbAnswers) > 0 {
+		question, answer = p.qText, p.fbAnswers[0]
+	}
+	v.mu.Unlock()
+	if question == "" || answer == "" {
+		t.Fatalf("no-Linux reply did not activate a fallback: pending=%+v", p)
+	}
+	countQuestion := func() int {
+		count := 0
+		for _, text := range fb.sendTexts {
+			if strings.Contains(text, question) {
+				count++
+			}
+		}
+		return count
+	}
+	if got := countQuestion(); got != 1 {
+		t.Fatalf("fallback prompt count = %d, want 1", got)
+	}
+
+	runFakeHandler(t, bot, v.OnKernelAnswer, memberDM(uid, answer))
+	if fb.approves != 1 || !v.recentlyPassed(gid, uid) {
+		t.Fatalf("fallback pass = approvals %d, recently passed %v", fb.approves, v.recentlyPassed(gid, uid))
+	}
+	before := fb.sends
+	runFakeHandler(t, bot, v.OnMemberJoined, joinUpdate(gid, uid, telego.ChatTypeSupergroup, nil))
+	v.mu.Lock()
+	_, stillPending := v.pend[pkey{gid, uid}]
+	v.mu.Unlock()
+	if stillPending || fb.sends != before || countQuestion() != 1 {
+		t.Errorf("admission update repeated verification: pending=%v sends=%d→%d fallback prompts=%d",
+			stillPending, before, fb.sends, countQuestion())
 	}
 }
 
