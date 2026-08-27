@@ -4,7 +4,170 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [4.5.3] - 2026-08-26
+
+### Fixed
+- **Traditional Chinese verification prompts printed their own escape sequences.** `kernel_prompt`
+  and `kernel_prompt_held` carried literal `\n` rather than line breaks, so an applicant received
+  one long line. `/bantime` usage in Traditional Chinese had the same defect. A test now compares
+  the raw catalogue bytes, which is what the earlier tests missed: the text was complete, just
+  unbroken.
+- **Re-applying locked out an applicant who had no Linux machine.** The replacement request kept
+  the "fallback already offered" guard but dropped the fallback question itself, returning the
+  applicant to a kernel-only prompt they had already said they could not answer. The guard now
+  carries over only while a fallback is in progress, and the question carries with it. Attempts,
+  the sample-bounce guard and the no-Linux reminder still carry, so nothing is replenished.
+
+## [4.5.2] - 2026-08-26
+
+### Added
+- **`internal/edition` holds everything the build tag decides**: binary name, command prefix, and
+  the release suffix shown in the verification prompt's format example.
+- **A systemd unit and installer path for the general edition.** `deploy/gentoo-zhbot.service`
+  matches the Gentoo unit word for word apart from the names, and `install.sh --generic` installs
+  it. The two editions share no binary, configuration directory, unit, or state directory, so both
+  can run on one machine.
+
+### Changed
+- **The general edition no longer presents itself as this community's bot.** The direct-message
+  identity sentence and the built-in fallback questions are selected by build; the general edition
+  names no community and asks about kernel.org and gnu.org, because an applicant elsewhere cannot
+  name the Gentoo-zh Community's domain.
+- The default configuration path and outbound `User-Agent` follow the build's own name.
+- The verification prompt's format example carries a distribution suffix only where one is meant.
+  `samplePrompt`, which the answer check uses to detect a pasted placeholder, comes from the same
+  constant, so a build cannot display one shape and detect another.
+- Configuration documentation lists every difference the build decides, and a new section names the
+  defaults a general deployment should review. Two limits are stated plainly: the `news_url` parser
+  only understands Gentoo's index layout, and feed bug data comes from Gentoo Bugzilla with no
+  setting to change the source.
+
+### Fixed
+- The Traditional Chinese administrator menu told administrators that `/rich` governs `/pkg` and
+  `/use`, which the general edition does not answer.
+- The source-build instructions omitted `-tags gentoo`, so following them produced the general
+  edition installed under the Gentoo edition's names.
+- The rich package summary's homepage link was the English word regardless of language.
+
+## [4.5.1] - 2026-08-26
+
+### Fixed
+- **`/kernel`, `/man`, `/cve` and `/repology` did not work in direct messages.** They reached the
+  Telegram command menu but not the direct-message allow-list, so they fell through to the generic
+  auto-reply. In the general edition the same list held unprefixed names, so none of the six Gentoo
+  lookups worked in direct messages either. The allow-list is now derived from the registered menu.
+- **Command names in message text did not follow the build.** Usage hints, error messages, and help
+  text named commands the general edition does not answer, forty places per language. The catalogue
+  now writes `/{g}pkg` and the rendering layer substitutes the prefix once.
+
+### Changed
+- `/help` and both README command tables list the four shared lookups. The direct-message reply
+  points at `/help` instead of repeating a list that had already gone stale.
+- Chinese message text was revised for register and terminology consistency, Simplified and
+  Traditional each on its own terms.
+- The English auto-reply and fallback question say `Gentoo-zh Community`.
+
+## [4.5.0] - 2026-08-26
+
+### Added
+- **A second edition for Linux communities in general**, built from the same source with a build
+  tag. `gentoo-zhbot` keeps every Gentoo lookup behind a `g` prefix, leaving the short names to
+  whichever distribution the group actually runs.
+- **`/kernel`, `/man`, `/cve` and `/repology`**: kernel.org releases, Linux manual pages, CVE
+  records from NVD, and package versions across distribution repositories. Both editions answer
+  them without a prefix.
+
+## [4.4.3] - 2026-08-26
+
+### Fixed
+- A settlement retry no longer moves the recorded time of a real failure.
+
+## [4.4.2] - 2026-08-26
+
+### Fixed
+- Operator messages name the action actually being settled rather than a generic failure.
+
+## [4.4.1] - 2026-08-26
+
+### Fixed
+- A gate the bot cannot read is never counted as the applicant's failure.
+
+## [4.4.0] - 2026-08-26
+
+### Added
+- **Verification for groups that do not use join approval.** A new member is restricted on arrival
+  and released when they pass, with a ten-minute window. Members brought in by an invitation still
+  verify, and the challenge tells administrators they can approve directly.
+- Administrator approve and remove buttons on both challenge messages.
+- A full test walk of the post-join path from arrival to settlement.
+
+### Changed
+- Challenge and outcome text says what failing actually costs a member who is already in the group.
+- An administrator's decision outranks an in-flight settlement, and an administrator adding somebody
+  outranks an earlier cooldown.
+- Trusting a group means not challenging its members.
+
+### Fixed
+- A member who answered correctly is never removed by a late timeout.
+- One arrival produces one challenge, and the bot honours the wait it promised.
+
+## [4.3.3] - 2026-08-26
+
+### Fixed
+- Who built the kernel is not part of the answer.
+
+## [4.3.2] - 2026-08-26
+
+### Fixed
+- The terminal prompt around a pasted answer is not part of the answer. The build also fails on
+  leftover scratch test files.
+
+## [4.3.1] - 2026-08-26
+
+### Fixed
+- The kernel verdict judges the same output the same way every time.
+
+## [4.3.0] - 2026-08-26
+
+### Added
+- A moderation screen in the settings panel for the settings that previously had no way in,
+  including `admin_log_chat_id`.
+
+### Changed
+- Settings are reconciled with `config.json` instead of being discarded.
+- Settlement retries are bounded, and audit records stay out of the alert throttle.
+- Private-chat messages are never deleted on a timer.
+
+### Fixed
+- Applicants are not charged for the bot's own blind spots, and no outcome is stated that Telegram
+  did not confirm.
+- A channel the bot cannot rule out as the group's own is never banned.
+
+## [4.2.0] - 2026-08-26
+
+### Fixed
+- Outage recovery checks whether the applicant already got in before challenging them again.
+
+## [4.1.1] - 2026-08-26
+
+### Fixed
+- An administrator settling a join request by hand is not treated as a failure.
+
+## [4.1.0] - 2026-08-26
+
+### Added
+- **`challenge_delivery`**: post the challenge in the group, send it by direct message, or both.
+
+### Changed
+- Operator notices are no longer left in the group as permanent records; they carry a lifetime and
+  a repeat throttle.
+- Deferred verification gives up after 48 hours, and recovery restores both challenge messages.
+
+### Fixed
+- **A join request Telegram no longer holds is not retried.** An administrator settling a request by
+  hand used to produce an endless retry that flooded the group.
+
+## [4.0.0] - 2026-08-26
 
 ### Added
 - **Optional `control_group_id` for multi-group deployments.** It selects the group whose
@@ -57,11 +220,6 @@ All notable changes to this project are documented here. The format is based on
   govulncheck v1.7.0, and gosec v2.28.0.
 
 ### Fixed
-- Traditional Chinese kernel-verification prompts now render line breaks instead of exposing literal
-  `\n` escape sequences in Telegram.
-- Re-applying while a no-Linux fallback is active now carries the selected short-answer question
-  forward. The replacement previously retained the "fallback already offered" flag but discarded
-  the fallback itself, returning applicants without Linux to a kernel-only prompt.
 - **Claimed owners now receive a private command menu immediately.** A successful owner claim
   refreshes Telegram command scopes without a restart and adds `/enroll` and `/unregister` beside
   the member commands.
@@ -1251,9 +1409,27 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[4.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.3
+[4.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.2
+[4.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.1
+[4.5.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.0
+[4.4.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.4.3
+[4.4.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.4.2
+[4.4.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.4.1
+[4.4.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.4.0
+[4.3.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.3.3
+[4.3.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.3.2
+[4.3.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.3.1
+[4.3.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.3.0
+[4.2.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.2.0
+[4.1.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.1.1
+[4.1.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.1.0
+[4.0.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.0.0
 [3.12.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.12.0
 [3.11.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.11.1
 [3.11.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.11.0
+[3.10.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.10.2
+[3.10.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.10.1
 [3.10.0]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.10.0
 [3.9.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.9.3
 [3.9.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v3.9.2
