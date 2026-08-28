@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [4.5.4] - 2026-08-28
+
+### Fixed
+- **A failed delete said nothing and tried nothing.** `Delete` discarded the API error, so a
+  message that could not be removed stayed in the group with no trace in the journal. A message
+  that is already gone now counts as success, rate limiting and transient failures are retried
+  twice on a timer, and anything else is logged. Retrying on a timer rather than in place keeps
+  settlement from waiting out a rate limit before telling the applicant the outcome.
+- **A redelivered join request posted a second challenge.** Telegram delivered eight requests
+  twice in one day, about five seconds apart each time. The repeat replaced the challenge and left
+  the first to be deleted; when that delete failed the group kept an orphan challenge nobody could
+  answer. Within thirty seconds, with a challenge on screen and no reply yet, the repeat is now
+  treated as the same arrival.
+- **A deactivated applicant was retried ten times over ten minutes.** `declineChatJoinRequest`
+  can never succeed for an account that no longer exists, and no administrator can settle the
+  request by hand either. It is now settled at once, and the group is not told about a failure
+  nobody can act on.
+
 ## [4.5.3] - 2026-08-26
 
 ### Fixed
@@ -1409,6 +1427,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[4.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.4
 [4.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.3
 [4.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.2
 [4.5.1]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.1
