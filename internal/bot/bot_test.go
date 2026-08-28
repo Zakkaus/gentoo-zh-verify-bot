@@ -679,7 +679,7 @@ func newDispatchFixture(t *testing.T, requiredChannel int64) *dispatchFixture {
 		GroupIDs:            []int64{groupID},
 		Lang:                "en",
 		VerifyMode:          config.ModeKernel,
-		BlockChannelSenders: true,
+		BlockChannelSenders: boolPtr(true),
 		PrivateQueryPerMin:  4,
 	}
 	cfg.PrivateReply = i18n.Messages.Bot.DirectMessage.AutoReply.Render(i18n.LangEN, cfg.PrivateQueryPerMin)
@@ -1017,3 +1017,5 @@ func TestVerificationPublicHandlerBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func boolPtr(v bool) *bool { return &v }

@@ -81,7 +81,7 @@ Only `group_ids` is worth setting by hand in a fresh deployment, and only if you
 | --- | --- | --- |
 | `warn_limit` | `3` | Warnings before an automatic kick. |
 | `mute_seconds` | `3600` | Default `/mute` duration. Always finite. |
-| `block_channel_senders` | `false` | Delete and ban posts sent under a channel identity. |
+| `block_channel_senders` | `true` | Delete and ban posts sent under a channel identity. Set `false` to turn it off. While privacy mode is enabled in @BotFather the bot never receives these posts and the setting cannot act; startup says so. |
 | `channel_whitelist` | none | Sender chats exempt from that. |
 | `admin_log_chat_id` | `0` | Where operator alerts go. Zero posts them in the affected group. |
 

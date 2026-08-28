@@ -146,7 +146,7 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 	timeoutSeconds := 600
 	maxFails := 1
 	retrySeconds := 30
-	antispam := true
+	antispam := false // the group-B default is on, so isolation is proved by overriding to off
 	requiredChannel := requiredID
 	display := "@required"
 	invite := "https://t.me/required"
@@ -206,7 +206,7 @@ func TestPerGroupRuntimeSettingsIsolation(t *testing.T) {
 		t.Fatalf("group B failure threshold = (%d, %v)", count, ban)
 	}
 	if v.verifyRetrySeconds(groupA) != 30 || v.verifyRetrySeconds(groupB) != 180 ||
-		!groupAView.AntispamEnabled().Value || groupBView.AntispamEnabled().Value ||
+		groupAView.AntispamEnabled().Value || !groupBView.AntispamEnabled().Value ||
 		len(groupAView.ChannelWhitelist().Value) != 1 || groupAView.ChannelWhitelist().Value[0] != senderID ||
 		len(groupBView.ChannelWhitelist().Value) != 0 {
 		t.Fatal("failure cooldown or antispam state leaked between groups")

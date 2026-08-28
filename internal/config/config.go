@@ -290,8 +290,10 @@ type Config struct {
 	UserAgent string `json:"user_agent"`
 	// PrivateReply handles non-command DMs outside verification.
 	PrivateReply string `json:"private_reply"`
-	// BlockChannelSenders rejects sender-chat posts when privacy mode is disabled.
-	BlockChannelSenders bool `json:"block_channel_senders"`
+	// BlockChannelSenders rejects sender-chat posts. Unset means enabled: posting as a channel is
+	// how this spam arrives, and the ban does nothing at all while Telegram's privacy mode keeps
+	// those messages from the bot, so leaving it on costs a group that never sees them nothing.
+	BlockChannelSenders *bool `json:"block_channel_senders"`
 	// ChannelWhitelist lists sender chats allowed to post in guarded groups.
 	ChannelWhitelist []int64 `json:"channel_whitelist"`
 	// Feeds lists Bugzilla and news destinations.
@@ -634,6 +636,11 @@ func (c *Config) TrustedGroups(id int64) []int64 {
 // Being vouched for is not verification, so this defaults on.
 func (c *Config) VerifyInvitedMembers() bool {
 	return c.VerifyInvited == nil || *c.VerifyInvited
+}
+
+// BlockChannelSendersEnabled reports whether sender-chat posts are rejected, defaulting to on.
+func (c *Config) BlockChannelSendersEnabled() bool {
+	return c.BlockChannelSenders == nil || *c.BlockChannelSenders
 }
 
 // FailOpenChannel reports whether unreadable required-channel membership admits users.
