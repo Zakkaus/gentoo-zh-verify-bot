@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [4.5.5] - 2026-08-28
+
+### Changed
+- **The channel-sender ban is on by default.** Of seven registered groups only one had it
+  enabled, not by decision but because the default was off and every group had to be switched on
+  by hand. `block_channel_senders` is now a pointer that means enabled when unset, matching
+  `verify_invited` and `required_channel_fail_open`; setting it to `false` still turns it off.
+  The justification for the old default — that the ban needs privacy mode disabled in @BotFather —
+  does not hold: while privacy mode is on the bot never receives those posts, so an enabled
+  setting costs such a group nothing.
+
+### Added
+- Startup reports when privacy mode is still enabled, so an operator is not left wondering why an
+  enabled channel-sender ban never fires. `getMe` already answers this and was already called.
+
 ## [4.5.4] - 2026-08-28
 
 ### Fixed
@@ -1427,6 +1442,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[4.5.5]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.5
 [4.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.4
 [4.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.3
 [4.5.2]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.2
