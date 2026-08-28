@@ -244,7 +244,7 @@ func testSettings(t *testing.T, cfg *config.Config) *store.Settings {
 		MuteSeconds:             store.BaselineValue[int]{Value: cfg.MuteSeconds},
 		VerifyInvited:           store.BaselineValue[bool]{Value: cfg.VerifyInvitedMembers()},
 		WarnLimit:               store.BaselineValue[int]{Value: cfg.WarnLimit},
-		AntispamEnabled:         store.BaselineValue[bool]{Value: cfg.BlockChannelSenders},
+		AntispamEnabled:         store.BaselineValue[bool]{Value: cfg.BlockChannelSendersEnabled()},
 		Lang:                    store.BaselineValue[string]{Value: cfg.Lang},
 		ChannelWhitelist:        store.BaselineValue[[]int64]{Value: append([]int64(nil), cfg.ChannelWhitelist...)},
 		TrustedMemberGroupIDs:   store.BaselineValue[[]int64]{Value: append([]int64(nil), cfg.TrustedMemberGroupIDs...)},
@@ -950,7 +950,7 @@ func TestChannelSenderFilterSparesTheLinkedChannel(t *testing.T) {
 			telegram := newFakeMod()
 			telegram.linkedChat = tc.linkedChat
 			telegram.linkedUnknown = tc.linkedUnknown
-			cfg := &config.Config{GroupIDs: []int64{groupID}, BlockChannelSenders: true, NotifyTTLSeconds: -1}
+			cfg := &config.Config{GroupIDs: []int64{groupID}, BlockChannelSenders: boolPtr(true), NotifyTTLSeconds: -1}
 			service := newTestService(t, cfg, telegram, "")
 			update := telego.Update{Message: &telego.Message{
 				MessageID:  9,

@@ -151,7 +151,7 @@ func TestFilterChannelSendersUsesTelegramTransport(t *testing.T) {
 	cfg := &config.Config{
 		GroupIDs:            []int64{groupID},
 		Groups:              []config.GroupConfig{{ID: groupID}},
-		BlockChannelSenders: true,
+		BlockChannelSenders: boolPtr(true),
 		AdminLogChatID:      -200,
 		Lang:                "zh",
 	}
@@ -173,3 +173,5 @@ func TestFilterChannelSendersUsesTelegramTransport(t *testing.T) {
 		t.Fatalf("operator alert = chat %d text %q, want chat %d text %q", telegram.lastSendChat, telegram.lastSendText, cfg.AdminLogChatID, wantAlert)
 	}
 }
+
+func boolPtr(v bool) *bool { return &v }

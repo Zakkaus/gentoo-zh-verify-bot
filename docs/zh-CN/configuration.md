@@ -79,7 +79,7 @@
 | --- | --- | --- |
 | `warn_limit` | `3` | 触发自动移出群组的警告次数。 |
 | `mute_seconds` | `3600` | `/mute` 的默认时长，始终有限。 |
-| `block_channel_senders` | `false` | 删除并封禁以频道身份发出的消息。 |
+| `block_channel_senders` | `true` | 删除并封禁以频道身份发出的消息。设为 `false` 关闭。BotFather 的隐私模式开启时，机器人收不到这类消息，此项不会生效；启动日志会说明这一点。 |
 | `channel_whitelist` | 无 | 不受上一项限制的发送方聊天。 |
 | `admin_log_chat_id` | `0` | 运维告警的去向。为 0 时发到出问题的群。 |
 

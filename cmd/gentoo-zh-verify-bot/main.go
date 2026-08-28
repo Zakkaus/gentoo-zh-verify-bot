@@ -310,6 +310,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("GetMe failed (required for the verification deep link): %v", err)
 	}
+	// The channel-sender ban is on by default, but Telegram's privacy mode keeps those posts from
+	// the bot entirely. getMe already answers this, so say it plainly at startup instead of
+	// leaving an operator to wonder why an enabled setting never fires.
+	if !me.CanReadAllGroupMessages {
+		log.Printf("NOTE: privacy mode is enabled for this bot, so it does not receive posts sent as a channel; the channel-sender ban (/bc) cannot act until privacy mode is turned off in @BotFather")
+	}
 	identity := verify.Identity{ID: me.ID, Username: me.Username}
 	verification := verify.New(runtimeSettings, telegram, cfg, &i18n.Messages, bot, identity, sd)
 	if sd == "" {
