@@ -46,6 +46,7 @@ const (
 	pendingStarted pendingStartStatus = iota
 	pendingBlockedCapacity
 	pendingBlockedTerminal
+	pendingDuplicateArrival
 )
 
 type pkey struct{ gid, uid int64 }
@@ -130,6 +131,8 @@ type pending struct {
 	deferredSince      time.Time // first unreachable expiry; retained across recovery and restart
 	timer              *time.Timer
 	epoch              uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
+	startedAt          time.Time // when this challenge was put on screen; in-memory only, so a restart
+	// simply loses the duplicate-arrival window and replaces as before
 	lastRenotify       time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
 	failedAt           time.Time // claim time for rolling-window strike accounting
 	deferralCapReached bool      // persisted so the operator warning and short settlement retries survive restart
@@ -560,7 +563,7 @@ func (v *Service) livePending(gid, uid int64) (*pending, bool) {
 func (v *Service) removeDuringCooldown(c context.Context, bot modBot, gid, uid int64, l i18n.Lang, wait time.Duration) {
 	if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 		log.Printf("post-join verify: cannot remove %d from %d during cooldown: %v", uid, gid, err)
-		v.failAlert(c, bot, gid, v.adminSays(gateMute).BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		v.settlementAlert(c, bot, gid, err, v.adminSays(gateMute).BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
 		return
 	}
 	log.Printf("post-join verify: %d rejoined %d during the failure cooldown (%s left); removed again", uid, gid, wait.Round(time.Second))
@@ -893,7 +896,7 @@ func (v *Service) joinGate(c context.Context, bot modBot, gid, uid int64, applic
 				return true
 			}
 			log.Printf("verify cooldown: decline %d in %d failed: %v", uid, gid, err)
-			v.failAlert(c, bot, gid, v.adminSays(gateRequest).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.settlementAlert(c, bot, gid, err, v.adminSays(gateRequest).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			_, _ = bot.SendMessage(c, tu.Message(tu.ID(uid), v.messages.Verification.Result.DeclinePending.For(applicantLang)))
 			return true
 		}
@@ -953,6 +956,14 @@ func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessa
 	if !replacing && !v.pendingCapacityOKLocked(gid) {
 		return challengeMessages{}, pendingBlockedCapacity
 	}
+	// Telegram redelivers a join request seconds after the first. Replacing the challenge then
+	// posts a second one and leaves the first to be cleaned up, which is one more thing that can
+	// fail — and when it does, the group keeps an orphan challenge nobody can answer. Within this
+	// window, with a challenge already on screen and no reply yet, the repeat is the same arrival.
+	if replacing && !old.done && old.hasChallengeOnScreen() && old.tries == 0 &&
+		!old.startedAt.IsZero() && v.wallNow().Sub(old.startedAt) < duplicateArrivalWindow {
+		return challengeMessages{}, pendingDuplicateArrival
+	}
 	if replacing {
 		old.done = true
 		if old.timer != nil {
@@ -972,9 +983,18 @@ func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessa
 	}
 	delay := pendingDeliveryTimeout
 	p.deadline = v.wallNow().Add(delay)
+	p.startedAt = v.wallNow()
 	v.pend[key] = p
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(false))
 	return oldMessages, pendingStarted
+}
+
+// A redelivered update arrives within seconds; a genuine re-application takes an applicant far
+// longer than this to cancel and request again.
+const duplicateArrivalWindow = 30 * time.Second
+
+func (p *pending) hasChallengeOnScreen() bool {
+	return p.groupMsgID != 0 || p.privateMsgID != 0
 }
 
 // Start a full window after delivery while preserving no-fault status on send failure.
@@ -1124,6 +1144,9 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 		log.Printf("join %d in group %d: pending cap reached; left for manual review", uid, gid)
 		v.alertPendingCap(c, bot, gid, gateRequest)
 		return nil
+	case pendingDuplicateArrival:
+		log.Printf("join %d in group %d: repeat of an arrival already challenged; keeping the challenge on screen", uid, gid)
+		return nil
 	case pendingBlockedTerminal:
 		log.Printf("join %d in group %d: terminal action still in flight; deferred re-application", uid, gid)
 		return nil
@@ -1252,6 +1275,9 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 			log.Printf("post-join verify: cannot remove %d from %d at capacity: %v", uid, gid, err)
 		}
+		return nil
+	case pendingDuplicateArrival:
+		log.Printf("join %d in group %d: repeat of an arrival already challenged; keeping the challenge on screen", uid, gid)
 		return nil
 	case pendingBlockedTerminal:
 		log.Printf("post-join verify: %d in %d skipped, terminal action still in flight", uid, gid)
@@ -2105,6 +2131,15 @@ func (v *Service) adminRecord(c context.Context, bot verifyBot, text string) {
 	v.verificationTransport(bot).AuditLog(c, v.adminLogChatID(), text)
 }
 
+// A failure nobody can act on is not worth an operator notice. A deactivated applicant cannot be
+// approved, declined, or settled by an administrator either, so the group hears nothing.
+func (v *Service) settlementAlert(c context.Context, bot verifyBot, gid int64, err error, text string) {
+	if tg.ApplicantGone(err) {
+		return
+	}
+	v.failAlert(c, bot, gid, text)
+}
+
 // Failure notices fall back to the acting group when no admin-log chat is configured.
 // This keeps optimistic callback acknowledgements from hiding rare network failures.
 func (v *Service) failAlert(c context.Context, bot verifyBot, gid int64, text string) {
@@ -2202,7 +2237,7 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 	if err := bot.ApproveChatJoinRequest(c, &telego.ApproveChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("approve %d in %d: %v", uid, gid, err)
-			v.failAlert(c, bot, gid, v.adminSays(p.gate).ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.settlementAlert(c, bot, gid, err, v.adminSays(p.gate).ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.markPassing(gid, uid, p)
 			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
@@ -2253,7 +2288,9 @@ func (v *Service) executeApprove(c context.Context, bot modBot, gid, uid int64, 
 const maxSettleFailures = 10
 
 // giveUpSettling reports a failure no retry can repair, so the attempt budget is spent at once.
-func giveUpSettling(err error) bool { return tg.GroupUnreachable(err) }
+func giveUpSettling(err error) bool {
+	return tg.GroupUnreachable(err) || tg.ApplicantGone(err)
+}
 
 // stopRetrying reopens a failed settlement for another attempt, unless the error proves no
 // attempt can succeed — then the budget is spent immediately rather than a minute at a time.
@@ -2541,7 +2578,7 @@ func (v *Service) executeRelease(c context.Context, bot modBot, gid, uid int64, 
 	if p.held {
 		if err := v.releaseMember(c, bot, gid, uid, p); err != nil {
 			log.Printf("post-join verify: cannot lift the hold on %d in %d: %v", uid, gid, err)
-			v.failAlert(c, bot, gid, v.adminSays(p.gate).ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.settlementAlert(c, bot, gid, err, v.adminSays(p.gate).ApproveFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.markPassing(gid, uid, p)
 			v.stopRetrying(c, bot, gid, uid, p, "approve-retry", err)
 			return approveFailed
@@ -2600,7 +2637,7 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 		// removal either worked or is worth retrying.
 		if p.gate == gateMute || !tg.JoinRequestGone(err) {
 			log.Printf("decline %d in %d failed: %v", uid, gid, err)
-			v.failAlert(c, bot, gid, v.adminSays(p.gate).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.settlementAlert(c, bot, gid, err, v.adminSays(p.gate).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.stopRetrying(c, bot, gid, uid, p, "decline-retry", err)
 			v.save()
 			return declineUnsettled, false
@@ -2648,7 +2685,7 @@ func (v *Service) finishDecline(c context.Context, bot modBot, gid, uid int64, p
 		if err := v.applyVerificationBan(c, bot, gid, uid, secs, false); err != nil {
 			log.Printf("verify auto-ban %d in %d: %v", uid, gid, err)
 			admin := &v.messages.Verification.Admin
-			v.failAlert(c, bot, gid, admin.AutoBanFailed.Render(v.groupLanguage(gid), uid, gid, count, err))
+			v.settlementAlert(c, bot, gid, err, admin.AutoBanFailed.Render(v.groupLanguage(gid), uid, gid, count, err))
 		} else {
 			l := v.groupLanguage(gid)
 			duration := verificationBanDurationText(v.messages, l, secs)
@@ -2694,7 +2731,7 @@ func (v *Service) banApplicant(c context.Context, bot modBot, gid, uid int64) (h
 func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *pending) bool {
 	if err := v.applyVerificationBan(c, bot, gid, uid, v.verificationBanDuration(gid), true); err != nil {
 		log.Printf("banApplicant %d in %d: %v", uid, gid, err)
-		v.failAlert(c, bot, gid, v.adminSays(p.gate).BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
+		v.settlementAlert(c, bot, gid, err, v.adminSays(p.gate).BanFailed.Render(v.groupLanguage(gid), uid, gid, err))
 		v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 		v.save()
 		return false
@@ -2711,7 +2748,7 @@ func (v *Service) executeBan(c context.Context, bot modBot, gid, uid int64, p *p
 	if err := bot.DeclineChatJoinRequest(c, &telego.DeclineChatJoinRequestParams{ChatID: tu.ID(gid), UserID: uid}); err != nil {
 		if !tg.JoinRequestGone(err) {
 			log.Printf("decline after ban %d in %d: %v", uid, gid, err)
-			v.failAlert(c, bot, gid, v.adminSays(p.gate).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
+			v.settlementAlert(c, bot, gid, err, v.adminSays(p.gate).DeclineFailed.Render(v.groupLanguage(gid), uid, gid, err))
 			v.stopRetrying(c, bot, gid, uid, p, "ban-retry", err)
 			v.save()
 			return false
