@@ -116,3 +116,22 @@ func TestDestinationFailuresAreNotPermanentPerMessage(t *testing.T) {
 		t.Error("an unclassified 400 is a problem with the message itself and must still count")
 	}
 }
+
+func TestApplicantGone(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "deactivated account", err: errors.New(`telego: declineChatJoinRequest: api: 403 "Forbidden: user is deactivated"`), want: true},
+		{name: "raw api constant", err: errors.New("USER_DEACTIVATED"), want: true},
+		{name: "blocked is not gone", err: errors.New(`api: 403 "Forbidden: bot was blocked by the user"`), want: false},
+		{name: "unrelated", err: errors.New("unexpected EOF"), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tt := range tests {
+		if got := ApplicantGone(tt.err); got != tt.want {
+			t.Errorf("%s: ApplicantGone = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

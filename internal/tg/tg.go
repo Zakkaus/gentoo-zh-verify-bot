@@ -161,9 +161,56 @@ func (c *Client) ScheduleCleanup(chatID int64, commandMessageID, responseMessage
 
 // Delete removes one message and treats a zero message ID as a no-op.
 func (c *Client) Delete(ctx context.Context, chatID int64, messageID int) {
-	if messageID != 0 {
-		_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID})
+	c.deleteMessage(ctx, chatID, messageID)
+}
+
+// A delete that quietly fails leaves the chat exactly as cluttered as no cleanup at all, and
+// leaves nothing in the journal to explain why. Retry what a retry can fix — rate limiting is the
+// one failure that is both common and recoverable — but retry on a timer, because settlement
+// must not wait out a rate limit before telling the applicant what happened.
+const (
+	deleteRetries  = 2
+	deleteRetryCap = 30 * time.Second
+)
+
+// A variable so a test can retry without waiting out the real delay.
+var deleteRetryDelay = 2 * time.Second
+
+func (c *Client) deleteMessage(ctx context.Context, chatID int64, messageID int) {
+	if messageID == 0 {
+		return
 	}
+	err := c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID})
+	c.afterDelete(chatID, messageID, err, deleteRetries)
+}
+
+// afterDelete decides what a failed delete deserves: nothing when the message is already gone,
+// a scheduled retry when waiting could help, and a log line when nothing can.
+func (c *Client) afterDelete(chatID int64, messageID int, err error, remaining int) {
+	if err == nil || MessageAlreadyGone(err) {
+		return
+	}
+	if GroupUnreachable(err) || remaining <= 0 {
+		log.Printf("delete message %d in chat %d failed: %v", messageID, chatID, err)
+		return
+	}
+	wait := RetryAfter(err)
+	if wait <= 0 {
+		wait = deleteRetryDelay
+	}
+	if wait > deleteRetryCap {
+		log.Printf("delete message %d in chat %d: Telegram asked for %s, longer than cleanup waits: %v", messageID, chatID, wait, err)
+		return
+	}
+	if !c.reserveCleanupTimer() {
+		log.Printf("delete retry for message %d in chat %d dropped: %d timers already pending: %v", messageID, chatID, cleanupTimerMax, err)
+		return
+	}
+	time.AfterFunc(wait, func() {
+		defer c.cleanupTimers.Add(-1)
+		retryErr := c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: messageID})
+		c.afterDelete(chatID, messageID, retryErr, remaining-1)
+	})
 }
 
 // Notify sends a transient plain-text notice and bounds outstanding deletion timers.
@@ -462,14 +509,14 @@ func (c *Client) scheduleDelete(chatID int64, firstMessageID, secondMessageID in
 		return
 	}
 	if !c.reserveCleanupTimer() {
+		// Silently dropping the timer is what makes cleanup look unreliable rather than busy.
+		log.Printf("cleanup timer for message %d in chat %d dropped: %d timers already pending", firstMessageID, chatID, cleanupTimerMax)
 		return
 	}
 	time.AfterFunc(after, func() {
 		defer c.cleanupTimers.Add(-1)
-		_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: firstMessageID})
-		if secondMessageID != 0 {
-			_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{ChatID: tu.ID(chatID), MessageID: secondMessageID})
-		}
+		c.deleteMessage(context.Background(), chatID, firstMessageID)
+		c.deleteMessage(context.Background(), chatID, secondMessageID)
 	})
 }
 

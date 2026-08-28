@@ -71,6 +71,21 @@ func JoinRequestGone(err error) bool {
 		strings.Contains(message, "participant_id_invalid")
 }
 
+// ApplicantGone reports a target whose Telegram account no longer exists. Neither approving nor
+// declining their join request can ever succeed, and no administrator can settle it by hand
+// either, so the attempt is spent at once and nobody is asked to look at it.
+func ApplicantGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "user is deactivated") && !strings.Contains(message, "user_deactivated") {
+		return false
+	}
+	code := ErrorCode(err)
+	return code == 0 || code == 403
+}
+
 // GroupUnreachable reports a chat the bot can no longer act in at all: it was removed, or the
 // chat is gone. Unlike missing rights, this cannot be repaired by retrying — only by an
 // administrator putting the bot back.
@@ -125,6 +140,20 @@ func RetryAfter(err error) time.Duration {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// MessageAlreadyGone reports a delete Telegram refused because there is nothing left to remove,
+// or because the message is past the age a bot may delete. Either way the chat is already in the
+// state the caller wanted, so this is not a failure worth reporting or retrying.
+func MessageAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "message to delete not found") ||
+		strings.Contains(message, "message can't be deleted") ||
+		strings.Contains(message, "message identifier is not specified") ||
+		strings.Contains(message, "message_id_invalid")
 }
 
 // IsNotModified reports an edit that already has the requested text.
