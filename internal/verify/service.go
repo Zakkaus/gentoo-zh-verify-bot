@@ -46,6 +46,7 @@ const (
 	pendingStarted pendingStartStatus = iota
 	pendingBlockedCapacity
 	pendingBlockedTerminal
+	pendingDuplicateArrival
 )
 
 type pkey struct{ gid, uid int64 }
@@ -130,6 +131,8 @@ type pending struct {
 	deferredSince      time.Time // first unreachable expiry; retained across recovery and restart
 	timer              *time.Timer
 	epoch              uint64    // bumped on every (re-)arm; a timer callback carries the epoch it was armed with and no-ops if it no longer matches, so a re-arm (defer / recovery) can't be acted on by the timer it replaced
+	startedAt          time.Time // when this challenge was put on screen; in-memory only, so a restart
+	// simply loses the duplicate-arrival window and replaces as before
 	lastRenotify       time.Time // last post-outage re-notify, so repeated recoveries don't re-message the same applicant every cycle
 	failedAt           time.Time // claim time for rolling-window strike accounting
 	deferralCapReached bool      // persisted so the operator warning and short settlement retries survive restart
@@ -953,6 +956,14 @@ func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessa
 	if !replacing && !v.pendingCapacityOKLocked(gid) {
 		return challengeMessages{}, pendingBlockedCapacity
 	}
+	// Telegram redelivers a join request seconds after the first. Replacing the challenge then
+	// posts a second one and leaves the first to be cleaned up, which is one more thing that can
+	// fail — and when it does, the group keeps an orphan challenge nobody can answer. Within this
+	// window, with a challenge already on screen and no reply yet, the repeat is the same arrival.
+	if replacing && !old.done && old.hasChallengeOnScreen() && old.tries == 0 &&
+		!old.startedAt.IsZero() && v.wallNow().Sub(old.startedAt) < duplicateArrivalWindow {
+		return challengeMessages{}, pendingDuplicateArrival
+	}
 	if replacing {
 		old.done = true
 		if old.timer != nil {
@@ -972,9 +983,18 @@ func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessa
 	}
 	delay := pendingDeliveryTimeout
 	p.deadline = v.wallNow().Add(delay)
+	p.startedAt = v.wallNow()
 	v.pend[key] = p
 	v.armExpiry(bot, p, gid, uid, delay, challengeExpiryReason(false))
 	return oldMessages, pendingStarted
+}
+
+// A redelivered update arrives within seconds; a genuine re-application takes an applicant far
+// longer than this to cancel and request again.
+const duplicateArrivalWindow = 30 * time.Second
+
+func (p *pending) hasChallengeOnScreen() bool {
+	return p.groupMsgID != 0 || p.privateMsgID != 0
 }
 
 // Start a full window after delivery while preserving no-fault status on send failure.
@@ -1124,6 +1144,9 @@ func (v *Service) OnJoinRequest(ctx *th.Context, update telego.Update) error {
 		log.Printf("join %d in group %d: pending cap reached; left for manual review", uid, gid)
 		v.alertPendingCap(c, bot, gid, gateRequest)
 		return nil
+	case pendingDuplicateArrival:
+		log.Printf("join %d in group %d: repeat of an arrival already challenged; keeping the challenge on screen", uid, gid)
+		return nil
 	case pendingBlockedTerminal:
 		log.Printf("join %d in group %d: terminal action still in flight; deferred re-application", uid, gid)
 		return nil
@@ -1252,6 +1275,9 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		if _, err := v.removeMember(c, bot, gid, uid); err != nil {
 			log.Printf("post-join verify: cannot remove %d from %d at capacity: %v", uid, gid, err)
 		}
+		return nil
+	case pendingDuplicateArrival:
+		log.Printf("join %d in group %d: repeat of an arrival already challenged; keeping the challenge on screen", uid, gid)
 		return nil
 	case pendingBlockedTerminal:
 		log.Printf("post-join verify: %d in %d skipped, terminal action still in flight", uid, gid)
