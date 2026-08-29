@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [4.5.6] - 2026-08-29
+
+### Fixed
+- **Outage recovery crashed the process.** `verificationTransport` and `adminTransport` asserted
+  `bot.(*telego.Bot)`. A handler passes exactly that, but the heartbeat passes an outage-observing
+  wrapper, so re-notifying pending applicants panicked — the worst possible place, because every
+  applicant then lost their re-notification and was declined on the original clock. A wrapper can
+  now hand over the client it wraps, and an unrecognised caller falls back to the client built at
+  startup instead of asserting.
+- **Recovery gave applicants the ordinary four-minute window.** Somebody who applied hours before
+  an outage would have had to be holding their phone at the moment the bot came back. The window
+  after a long outage is now 24 hours, or the group's own timeout if that is longer.
+- **The re-posted challenge was the ordinary one.** It said "240 seconds" and gave no hint that
+  anything had gone wrong. `group.body_recovered` states that the bot was offline, that
+  verification has restarted, and how long the applicant now has, rendered in hours rather than
+  seconds. Whether a pending is a recovered one is derived from its deadline, so a restart between
+  recovery and delivery cannot lose it.
+- **Bot tokens no longer reach the log.** A Telegram client error carries the API URL, and the URL
+  carries the token, so every `log.Printf("...: %v", err)` printed it: one outage left 101 such
+  lines in the journal. Filtering at the log writer covers all 108 call sites and any added later.
+
 ## [4.5.5] - 2026-08-28
 
 ### Changed
@@ -1442,6 +1463,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[4.5.6]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.6
 [4.5.5]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.5
 [4.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.4
 [4.5.3]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.3
