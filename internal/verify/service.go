@@ -320,18 +320,51 @@ func (v *Service) telegram(bot *telego.Bot) *tg.Client {
 	return v.telegramClient
 }
 
+// A caller may hand over the Bot API client wrapped — the heartbeat passes an outage-observing
+// wrapper — and a wrapper is not a *telego.Bot. Unwrapping keeps such a caller on the same
+// client instead of asserting and taking the process down.
+type botUnwrapper interface{ Unwrap() *telego.Bot }
+
+// botClient resolves the underlying client, or reports that this caller carries none.
+func botClient(bot any) (*telego.Bot, bool) {
+	switch typed := bot.(type) {
+	case *telego.Bot:
+		return typed, true
+	case botUnwrapper:
+		if raw := typed.Unwrap(); raw != nil {
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+// existingTransport is the last resort. Asserting instead used to panic, and the one caller that
+// hands over a wrapper is outage recovery: a panic there takes the process down mid-recovery and
+// leaves every pending applicant to time out on a challenge nobody re-sent.
+func (v *Service) existingTransport() *tg.Client {
+	v.tgMu.Lock()
+	defer v.tgMu.Unlock()
+	return v.telegramClient
+}
+
 func (v *Service) verificationTransport(bot verifyBot) verifyTransport {
 	if transport, ok := bot.(verifyTransport); ok {
 		return transport
 	}
-	return v.telegram(bot.(*telego.Bot))
+	if raw, ok := botClient(bot); ok {
+		return v.telegram(raw)
+	}
+	return v.existingTransport()
 }
 
 func (v *Service) adminTransport(bot modBot) adminTransport {
 	if transport, ok := bot.(adminTransport); ok {
 		return transport
 	}
-	return v.telegram(bot.(*telego.Bot))
+	if raw, ok := botClient(bot); ok {
+		return v.telegram(raw)
+	}
+	return v.existingTransport()
 }
 func (v *Service) groupSettings(groupID int64) (store.GroupView, bool) {
 	return v.settings.Group(groupID)
@@ -1053,13 +1086,38 @@ func gateOf(owner *pending) challengeVoice {
 	return challengeVoice{gate: owner.gate, invited: owner.invited, nonce: owner.nonce}
 }
 
+// voiceFor is gateOf plus the one thing only the service can answer: whether this pending is
+// carrying an extended window from outage recovery. Deriving that from the deadline rather than a
+// flag means a restart between recovery and delivery cannot lose it.
+func (v *Service) voiceFor(gid int64, owner *pending) challengeVoice {
+	voice := gateOf(owner)
+	if owner == nil {
+		return voice
+	}
+	remaining := owner.deadline.Sub(v.wallNow())
+	if remaining > v.gateTimeout(gid, owner.gate) {
+		voice.recovered = true
+		voice.window = remaining.Round(time.Minute)
+	}
+	return voice
+}
+
 // challengeVoice selects the public challenge wording: applying, arriving on their own, or
 // being brought in by somebody who can vouch for them.
 type challengeVoice struct {
 	gate    string
 	invited bool
 	nonce   string
+	// recovered marks a challenge re-posted after an outage. The applicant could not have
+	// answered while the bot was down, so both the wording and the window differ.
+	recovered bool
+	window    time.Duration
 }
+
+// An applicant whose challenge was interrupted by an outage applied hours ago; a four-minute
+// window asks them to be holding their phone at the moment the bot happens to come back. The
+// failure was the bot's, so the second chance is a real one.
+const recoveryWindow = 24 * time.Hour
 
 func (v *Service) deliverPendingChallenge(
 	c context.Context,
@@ -1072,10 +1130,10 @@ func (v *Service) deliverPendingChallenge(
 	groupLang := v.groupLanguage(gid)
 	switch result.modeLabel {
 	case config.DeliveryGroup:
-		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, gateOf(owner))
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, v.voiceFor(gid, owner))
 		result.delivered = result.messages.groupMsgID != 0
 	case config.DeliveryBoth:
-		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, gateOf(owner))
+		result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, v.voiceFor(gid, owner))
 		result.delivered = result.messages.groupMsgID != 0
 		outcome := v.attemptPrivateChallenge(c, bot, gid, uid, owner)
 		result.messages.privateMsgID = outcome.privateMsgID
@@ -1102,7 +1160,7 @@ func (v *Service) deliverPendingChallenge(
 			result.modeLabel = "private"
 		case privateRejected:
 			result.modeLabel = "group-fallback"
-			result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, gateOf(owner))
+			result.messages.groupMsgID = v.postGroupChallenge(c, bot, gid, uid, name, groupLang, v.voiceFor(gid, owner))
 			result.delivered = result.messages.groupMsgID != 0
 		case privateUncertain:
 			result.modeLabel = "private-uncertain"

@@ -77,6 +77,9 @@ type VerificationCatalog struct {
 type VerificationGroupCatalog struct {
 	// Body formats the public challenge body.
 	Body Format
+	// BodyRecovered formats the group challenge re-posted after an outage: the applicant could
+	// not have answered while the bot was down, so the wording and the window both differ.
+	BodyRecovered Format
 	// BodyJoined formats the public challenge for someone who is already a member.
 	BodyJoined Format
 	// BodyInvited formats the public challenge for a member somebody else added.

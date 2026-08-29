@@ -99,6 +99,10 @@ type outageAwareBot struct {
 	observer *retentionOutageObserver
 }
 
+// Unwrap hands the embedded client to code that needs the concrete type; without it a type
+// assertion on this wrapper panics.
+func (b *outageAwareBot) Unwrap() *telego.Bot { return b.Bot }
+
 func (b *outageAwareBot) GetMe(ctx context.Context) (*telego.User, error) {
 	me, err := b.Bot.GetMe(ctx)
 	if err == nil {
