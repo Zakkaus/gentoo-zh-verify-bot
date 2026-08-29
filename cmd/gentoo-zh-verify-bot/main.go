@@ -246,6 +246,9 @@ func main() {
 	configPath := flag.String("config", "/etc/"+edition.Name+"/config.json", "path to config.json")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	// A Telegram client error carries the API URL, and the URL carries the token. Strip it once
+	// here so no log call site has to remember.
+	log.SetOutput(tg.RedactingWriter(os.Stderr))
 	if *showVersion {
 		fmt.Println(version)
 		return
