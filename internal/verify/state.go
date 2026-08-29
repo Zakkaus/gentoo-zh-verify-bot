@@ -542,8 +542,10 @@ func (v *Service) load(bot modBot) {
 				stateAdjusted = true
 			}
 		case longOutage:
-			// The outage consumed the window, so refresh and do not strike on this lapse.
-			delay = v.gateTimeout(gid, p.gate)
+			// The outage consumed the window, so refresh and do not strike on this lapse. The
+			// normal window assumes the applicant just clicked join; after an outage they applied
+			// long ago, so give them a window they can realistically notice.
+			delay = max(v.gateTimeout(gid, p.gate), recoveryWindow)
 			p.deadline = now.Add(delay)
 			p.lastRenotify = now // mark re-notified so a runtime recovery right after doesn't re-message
 			reason = "recovered"
@@ -806,7 +808,12 @@ func (v *Service) postGroupChallenge(c context.Context, bot verifyBot, gid, uid 
 	default:
 		template = group.BodyJoined
 	}
-	body := template.Render(l, mention, linkText, int(v.gateTimeout(gid, voice.gate)/time.Second), channelHint)
+	var body string
+	if voice.recovered {
+		body = group.BodyRecovered.Render(l, mention, linkText, windowText(v.messages, l, voice.window), channelHint)
+	} else {
+		body = template.Render(l, mention, linkText, int(v.gateTimeout(gid, voice.gate)/time.Second), channelHint)
+	}
 
 	var rows [][]telego.InlineKeyboardButton
 	if link != "" {
@@ -1061,6 +1068,20 @@ func (v *Service) renotifyPending(
 		oldMessages.privateMsgID = delivery.replacedPrivateMsgID
 	}
 	v.deleteChallenges(c, bot, gid, uid, oldMessages)
+}
+
+// windowText renders how long the applicant now has, reusing the outage wording so a duration
+// reads the same everywhere. Seconds are never the right unit for a recovery window.
+func windowText(messages *i18n.Catalog, l i18n.Lang, d time.Duration) string {
+	recovery := &messages.Verification.Recovery
+	switch {
+	case d >= time.Hour:
+		return recovery.OutageHours.Render(l, int(d.Hours()))
+	case d >= time.Minute:
+		return recovery.OutageMinutes.Render(l, int(d.Minutes()))
+	default:
+		return recovery.OutageSeconds.Render(l, int(d.Seconds()))
+	}
 }
 
 // Render whole seconds, minutes, or hours in the applicant's locale.

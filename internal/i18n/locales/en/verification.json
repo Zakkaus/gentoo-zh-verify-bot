@@ -106,7 +106,8 @@
     "link_text": " (or use <a href=\"%[1]s\">this link</a>)",
     "verify_button": "✅ Start verification",
     "body_joined": "👋 %[1]s joined and needs to verify. Tap “✅ Start verification” below%[2]s to open a direct message with the bot and finish. Not finishing within %[3]d seconds removes them from the group.%[4]s",
-    "body_invited": "👋 %[1]s was invited in and still needs to verify. Tap “✅ Start verification” below%[2]s to open a direct message with the bot and finish. An administrator who vouches for them can tap “👮 Let in (administrator)” instead; without that they still have to verify, and not finishing within %[3]d seconds removes them from the group.%[4]s"
+    "body_invited": "👋 %[1]s was invited in and still needs to verify. Tap “✅ Start verification” below%[2]s to open a direct message with the bot and finish. An administrator who vouches for them can tap “👮 Let in (administrator)” instead; without that they still have to verify, and not finishing within %[3]d seconds removes them from the group.%[4]s",
+    "body_recovered": "🔄 The bot was offline, so verification for %[1]s has restarted. Select “✅ Start verification” below%[2]s, then finish verification in the bot's direct chat. This time you have %[3]s.%[4]s"
   },
   "input": {
     "no_linux_phrases": [

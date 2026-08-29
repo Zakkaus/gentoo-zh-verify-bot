@@ -274,8 +274,10 @@ func TestDeferredExpiryAccumulatorSurvivesLongOutageRestart(t *testing.T) {
 	if got == nil {
 		t.Fatal("long-outage restart did not restore the deferred pending")
 	}
-	if want := now.Add(restored.timeout(gid)); !got.deadline.Equal(want) {
-		t.Errorf("long-outage restart deadline = %v, want fresh window ending %v", got.deadline, want)
+	// The applicant applied before the outage; a normal window would ask them to be holding their
+	// phone at the moment the bot happens to come back.
+	if want := now.Add(max(restored.timeout(gid), recoveryWindow)); !got.deadline.Equal(want) {
+		t.Errorf("long-outage restart deadline = %v, want the recovery window ending %v", got.deadline, want)
 	}
 	restored.save()
 	if after := pendingStateUnix(t, restored.statePath, "deferred_since"); after != deferredSince {
