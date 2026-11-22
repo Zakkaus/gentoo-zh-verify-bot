@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+- **The pinned toolchain carried ten reachable standard-library vulnerabilities.** `go.mod` asked
+  for Go 1.26.7 and both workflows build from `go-version-file: go.mod`, so every CI run and every
+  published binary inherited them: seven in `net/http`, one each in `crypto/tls`,
+  `mime/multipart` and `crypto/x509` (GO-2026-6603, 6605, 6607, 6608, 6610, 6611, 6612, 6613,
+  6617, 6809). The toolchain is now Go 1.27.4, under which `govulncheck` is clean.
+
+### Changed
+- **telego v1.11.2 to v1.12.1.** v1.11.2 does not know the `expandable_blockquote` rich block
+  type, so a single update carrying one made the whole `getUpdates` batch fail to unmarshal. The
+  offset never advanced, every later update was unreachable, and the bot answered nothing until it
+  was restarted on a build that knows the type.
+- Indirect dependencies raised to current: fasthttp v1.73.0 to v1.78.0 (upstream swapped
+  `andybalholm/brotli` for `molecule-man/go-brrr`, so the brotli module leaves the build list),
+  klauspost/compress v1.19.1 to v1.20.4, klauspost/cpuid v2.2.9 to v2.4.2, bytedance/sonic
+  v1.15.3 to v1.15.5, cloudwego/base64x v0.1.6 to v0.1.7, golang.org/x/sys v0.47.0 to v0.50.0,
+  golang.org/x/arch to v0.33.0.
+- Gate pins: staticcheck v0.8.1 to v0.8.2, required because v0.8.1 cannot read Go 1.27 export
+  data; govulncheck v1.7.0 to v1.9.0; gosec v2.28.0 to v2.30.0; softprops/action-gh-release
+  v3.0.2 to v3.0.4.
+
 ## [4.5.6] - 2026-08-29
 
 ### Fixed

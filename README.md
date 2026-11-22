@@ -65,7 +65,7 @@ Read the script before running it; it is short and does nothing but the steps ab
 
 ### Building from source instead
 
-Requires Go 1.26.7 or later. `-tags gentoo` selects the Gentoo edition; leaving the tag out
+Requires Go 1.27.4 or later. `-tags gentoo` selects the Gentoo edition; leaving the tag out
 builds `gentoo-zhbot`, in which case substitute that name in every path below.
 
 ```sh

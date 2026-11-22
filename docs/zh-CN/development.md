@@ -1,6 +1,6 @@
 # 开发、CI 和发布
 
-仓库要求 Go 1.26.7，使用 telego v1.11.2。生产代码位于 `cmd/gentoo-zh-verify-bot` 和 `internal/*`，不是根目录中的单一 package。
+仓库要求 Go 1.27.4，使用 telego v1.12.1。生产代码位于 `cmd/gentoo-zh-verify-bot` 和 `internal/*`，不是根目录中的单一 package。
 
 ## 构建和本地运行
 

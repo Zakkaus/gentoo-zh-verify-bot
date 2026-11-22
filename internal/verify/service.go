@@ -47,6 +47,7 @@ const (
 	pendingBlockedCapacity
 	pendingBlockedTerminal
 	pendingDuplicateArrival
+	pendingRecentlyPassed
 )
 
 type pkey struct{ gid, uid int64 }
@@ -986,6 +987,16 @@ func (v *Service) startPending(bot modBot, gid, uid int64, p *pending) (oldMessa
 	if inFlight := v.terminal[key]; inFlight != nil || replacing && old.done {
 		return challengeMessages{}, pendingBlockedTerminal
 	}
+	// OnMemberJoined checks recentlyPassed before it asks Telegram about trust and admin status,
+	// and those two calls take about a second. The bot's own approval finishes inside that gap:
+	// it records the pass and releases the terminal claim, so the first guard sees nothing yet and
+	// the second sees a claim already gone. Checking again here, under the lock that reads the
+	// terminal claim, leaves no instant when neither guard is closed. Only the post-join gate needs
+	// this: a fresh join request from somebody who passed minutes ago is a real application, and
+	// swallowing it would leave the request unsettled forever.
+	if p.gate == gateMute && v.recentlyPassedLocked(gid, uid) {
+		return challengeMessages{}, pendingRecentlyPassed
+	}
 	if !replacing && !v.pendingCapacityOKLocked(gid) {
 		return challengeMessages{}, pendingBlockedCapacity
 	}
@@ -1251,6 +1262,11 @@ func (v *Service) notePassed(gid, uid int64) {
 func (v *Service) recentlyPassed(gid, uid int64) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.recentlyPassedLocked(gid, uid)
+}
+
+// Caller holds v.mu.
+func (v *Service) recentlyPassedLocked(gid, uid int64) bool {
 	at, ok := v.passed[pkey{gid, uid}]
 	return ok && v.wallNow().Sub(at) <= recentPassWindow
 }
@@ -1340,6 +1356,9 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 	case pendingBlockedTerminal:
 		log.Printf("post-join verify: %d in %d skipped, terminal action still in flight", uid, gid)
 		return nil
+	case pendingRecentlyPassed:
+		log.Printf("post-join verify: %d in %d skipped, the bot admitted them moments ago", uid, gid)
+		return nil
 	}
 	v.deleteChallenges(c, bot, gid, uid, oldMessages)
 	// Persist before restricting anyone. A crash between the two would otherwise leave a member
@@ -1359,8 +1378,14 @@ func (v *Service) OnMemberJoined(ctx *th.Context, update telego.Update) error {
 		return nil
 	}
 	v.save()
+	// held reports whether the mute actually went on, not whether the chat could take one:
+	// holdMember records it only after Telegram accepts the restriction. Logging the chat type
+	// here made every supergroup look successfully held even when the mute had failed.
+	v.mu.Lock()
+	held := p.held
+	v.mu.Unlock()
 	log.Printf("post-join verify: %d (@%s) joined %d: pending (%s challenge), held=%v, delivery=%s",
-		uid, user.Username, gid, mode, supergroup, delivery.modeLabel)
+		uid, user.Username, gid, mode, held, delivery.modeLabel)
 	return nil
 }
 

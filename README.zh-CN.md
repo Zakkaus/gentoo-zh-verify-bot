@@ -65,7 +65,7 @@ sudo systemctl start gentoo-zhbot
 
 ### 改为从源代码构建
 
-需要 Go 1.26.7 或更高版本。加 `-tags gentoo` 构建 Gentoo 版；不加标签构建出的是 `gentoo-zhbot`，此时下面每处路径都要换成该名称。
+需要 Go 1.27.4 或更高版本。加 `-tags gentoo` 构建 Gentoo 版；不加标签构建出的是 `gentoo-zhbot`，此时下面每处路径都要换成该名称。
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -tags gentoo -o gentoo-zh-verify-bot ./cmd/gentoo-zh-verify-bot
