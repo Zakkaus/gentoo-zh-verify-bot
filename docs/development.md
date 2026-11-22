@@ -1,6 +1,6 @@
 # Development, CI, and release
 
-The repository requires Go 1.26.7 and telego v1.11.2. Production code is under `cmd/gentoo-zh-verify-bot` and `internal/*`; it is not a root-level single-package program.
+The repository requires Go 1.27.4 and telego v1.12.1. Production code is under `cmd/gentoo-zh-verify-bot` and `internal/*`; it is not a root-level single-package program.
 
 ## Build and local execution
 
