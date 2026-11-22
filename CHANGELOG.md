@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.5.7] - 2026-11-22
+
+### Fixed
+- **An applicant who had just passed was challenged again right after joining.** `OnMemberJoined`
+  checked `recentlyPassed` before two Telegram calls (`getChatMember` for trust and admin status,
+  about a second in total) and checked the terminal claim only afterwards in `startPending`. The
+  bot's own approval recorded the pass and released the claim inside that second, so neither guard
+  was closed at the same instant: the applicant was told they had passed, then muted and given a
+  second question, and was removed on timeout when they did not answer it. The recent-pass check
+  now runs in `startPending` under the same lock as the terminal check, for the post-join gate only.
+- The post-join log line's `held=` field reported whether the chat was a supergroup rather than
+  whether the mute actually went on.
+
 ### Security
 - **The pinned toolchain carried ten reachable standard-library vulnerabilities.** `go.mod` asked
   for Go 1.26.7 and both workflows build from `go-version-file: go.mod`, so every CI run and every
@@ -14,13 +27,13 @@ All notable changes to this project are documented here. The format is based on
   6617, 6809). The toolchain is now Go 1.27.4, under which `govulncheck` is clean.
 
 ### Changed
-- **telego v1.11.2 to v1.12.1.** v1.11.2 does not know the `expandable_blockquote` rich block
+- **telego v1.11.2 to v1.13.0.** v1.11.2 does not know the `expandable_blockquote` rich block
   type, so a single update carrying one made the whole `getUpdates` batch fail to unmarshal. The
   offset never advanced, every later update was unreachable, and the bot answered nothing until it
   was restarted on a build that knows the type.
-- Indirect dependencies raised to current: fasthttp v1.73.0 to v1.78.0 (upstream swapped
+- Indirect dependencies raised to current: fasthttp v1.73.0 to v1.79.0 (upstream swapped
   `andybalholm/brotli` for `molecule-man/go-brrr`, so the brotli module leaves the build list),
-  klauspost/compress v1.19.1 to v1.20.4, klauspost/cpuid v2.2.9 to v2.4.2, bytedance/sonic
+  klauspost/compress v1.19.1 to v1.20.5, klauspost/cpuid v2.2.9 to v2.4.2, bytedance/sonic
   v1.15.3 to v1.15.5, cloudwego/base64x v0.1.6 to v0.1.7, golang.org/x/sys v0.47.0 to v0.50.0,
   golang.org/x/arch to v0.33.0.
 - Gate pins: staticcheck v0.8.1 to v0.8.2, required because v0.8.1 cannot read Go 1.27 export
@@ -1486,6 +1499,7 @@ First stable release.
   long polling, no inbound port; ships a hardened `systemd` unit (`DynamicUser` +
   sandboxing) and reads its token from the environment.
 
+[4.5.7]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.7
 [4.5.6]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.6
 [4.5.5]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.5
 [4.5.4]: https://github.com/Zakkaus/gentoo-zh-verify-bot/releases/tag/v4.5.4
