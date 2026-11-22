@@ -2,14 +2,14 @@ module github.com/Zakkaus/gentoo-zh-verify-bot
 
 go 1.27.4
 
-require github.com/mymmrac/telego v1.12.1
+require github.com/mymmrac/telego v1.13.0
 
 require (
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.5 // indirect
 	github.com/bytedance/sonic/loader v0.5.3 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
-	github.com/grbit/go-json v0.11.0 // indirect
+	github.com/goccy/go-json v0.12.0 // indirect
 	github.com/klauspost/compress v1.20.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
 	github.com/molecule-man/go-brrr v1.3.1 // indirect
